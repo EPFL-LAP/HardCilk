@@ -1,9 +1,14 @@
-package axi4.full
+package hardcilk.util
 
 import chisel3._
 import chisel3.util._
-import axi4._
 import os.truncate
+
+import chext.axi4
+
+import axi4._
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
 
 class readValidMemIO(taskWidth: Int, addrWidth: Int, readFlag: Boolean, writeFlag: Boolean, varBurst: Boolean) extends Bundle {
   
@@ -50,7 +55,7 @@ class readyValidMem(taskWidth: Int, addrWidth: Int, read:Boolean=true, write:Boo
 
 
   val axi = IO(axi4.Master(axiFullCfg))
-  private val axiData = axi.fullRW
+  private val axiData = axi.asFull
 
   private def connectZeros[T <: Data](bits: T) = {
     bits := 0.U(bits.getWidth.W).asTypeOf(bits)

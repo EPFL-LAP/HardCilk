@@ -4,13 +4,22 @@ import chisel3._
 import chisel3.util._
 import chisel3.experimental.prefix
 import scala.math._
-import axis4._
 import stealSide._
 import continuationSide._
 import argRouting._
 import commonInterfaces._
-import axi4.full.readyValidMem
-//import axi4.full.readyValidMemVSS
+
+import hardcilk.util.readyValidMem
+
+import chext.axi4
+import chext.axis4
+
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
+
+import axis4.Casts._
+
+//import util.readyValidMemVSS
 
 class stealSideIO(
     val addrWidth: Int,
@@ -23,7 +32,7 @@ class stealSideIO(
     
     ) extends Bundle{
 
-    implicit val axisCfgTask    = Config(wData = taskWidth, onlyRV = true)
+    implicit val axisCfgTask: axis4.Config    = axis4.Config(wData = taskWidth, onlyRV = true)
     val vssAxiFullCfg = axi4.Config(
             wAddr = addrWidth,
             wData = taskWidth,
@@ -78,7 +87,7 @@ class stealSide(
                                  vssCount = virtualAddressServersNumber,
                                  spawnsItself = spawnsItself,
                                  peCountGlobalTaskIn = peCountGlobalTaskIn,
-                                 axiMgmtCfg = virtualStealServers(0).regBlock.axiConfig)
+                                 axiMgmtCfg = virtualStealServers(0).regBlock.cfgAxi)
     )
     
     val connSyncSide = IO(Vec(argRouteServersNumber, new stNwStSrvConn(taskWidth)))

@@ -3,16 +3,18 @@ package stealSide
 import chisel3._
 import chisel3.util._
 import commonInterfaces._
-import axi4.full
-import chisel3.experimental.ChiselEnum
+import chisel3.ChiselEnum
 import os.stat
-import axi4.lite.RegisterBlock
 import scala.annotation.tailrec
 
+import chext.axi4
+import axi4._
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
 
 class virtualStealServerIO(taskWidth: Int, regBlock:RegisterBlock, sysAddressWidth: Int) extends Bundle {
     val connNetwork   = Flipped(new stNwStSrvConn(taskWidth))
-    val axi_mgmt      = axi4.Slave(regBlock.axiConfig)
+    val axi_mgmt      = axi4.Slave(regBlock.cfgAxi)
     val read_address  = DecoupledIO(UInt(sysAddressWidth.W)) 
     val read_data     = Flipped(DecoupledIO(UInt(taskWidth.W)))
     val read_burst_len = Output(UInt(4.W))
@@ -59,7 +61,7 @@ class virtualStealServer(taskWidth: Int,
 
     io.axi_mgmt.suggestName("S_AXI_MGMT")
     // regBlock.saxil <> io.axi_mgmt
-    regBlock.saxil <> io.axi_mgmt.liteRW
+    regBlock.s_axil <> io.axi_mgmt.asLite
 
 
     private val rAddr             = RegInit(0.U(64.W))

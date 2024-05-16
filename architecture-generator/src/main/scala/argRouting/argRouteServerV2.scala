@@ -2,10 +2,17 @@ package argRouting
 
 import chisel3._
 import chisel3.util._
-import chisel3.experimental.ChiselEnum
-import axi4.lite.RegisterBlock
+import chisel3.ChiselEnum
 import commonInterfaces._
 import os.stat
+
+import chext.axi4
+import chext.axis4
+
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
+
+import axis4.Casts._
 
 class argRouteVirtServerV2IO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int) extends Bundle {
     val connNetwork   = Flipped(DecoupledIO(UInt(sysAddressWidth.W)))

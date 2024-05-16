@@ -3,14 +3,22 @@ package fullSysGen
 import chisel3._
 import chisel3.util._
 
-import axis4._
 import stealSide._
 import continuationSide._
 import argRouting._
 import commonInterfaces._
-import axi4.full.readyValidMem
 import play.api.libs.json._
 import scala.collection.mutable.ArrayBuffer
+
+import chext.axi4
+import chext.axis4
+
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
+
+import axis4.Casts._
+
+import hardcilk.util.readyValidMem
 
 // task width includes a n bit counter at its start
 

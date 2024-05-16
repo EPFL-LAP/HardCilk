@@ -1,10 +1,9 @@
-
 import chisel3._
 import chisel3.util._
 import argRouting._
 import org.scalatest.flatspec.AnyFlatSpec
 import chiseltest._
-import axi4.full.readyValidMem
+import util.readyValidMem
 
 
 class argVirtSrvrTesterHDL(addrWidth: Int, taskWidth: Int) extends Module {

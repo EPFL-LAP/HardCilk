@@ -4,7 +4,7 @@ import chisel3.util._
 import continuationSide._
 import org.scalatest.flatspec.AnyFlatSpec
 import chiseltest._
-import axi4.full.readyValidMem
+import util.readyValidMem
 
 
 class contNetworkTesterHDL(addrWidth: Int, peNum : Int) extends Module {

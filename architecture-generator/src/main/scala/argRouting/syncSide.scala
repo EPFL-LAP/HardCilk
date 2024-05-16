@@ -6,13 +6,20 @@ import chisel3._
 import chisel3.util._
 import chisel3.experimental.prefix
 
-import axis4._
 import stealSide._
 import continuationSide._
 import argRouting._
 import commonInterfaces._
-import axi4.full.readyValidMem
 
+import chext.axi4
+import chext.axis4
+
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
+
+import axis4.Casts._
+
+import hardcilk.util.readyValidMem
 
 class syncSideIO(
     val addrWidth: Int,
@@ -22,7 +29,7 @@ class syncSideIO(
     
     ) extends Bundle{
     
-    implicit val axisCfgAddress = Config(wData = addrWidth, onlyRV = true)
+    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = addrWidth, onlyRV = true)
     
     val argRouteAxiFullCfg = axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false)
     val addrIn = Vec(peCount, axis4.Slave(axisCfgAddress))

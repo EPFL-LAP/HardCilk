@@ -8,7 +8,7 @@ import stealSide._
 import continuationSide._
 import argRouting._
 import commonInterfaces._
-import axi4.full.readyValidMem
+import util.readyValidMem
 
 
 

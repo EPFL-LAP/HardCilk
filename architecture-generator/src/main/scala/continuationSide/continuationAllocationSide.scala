@@ -4,12 +4,20 @@ import chisel3._
 import chisel3.util._
 import chisel3.experimental.prefix
 
-import axis4._
 import stealSide._
 import continuationSide._
 import argRouting._
 import commonInterfaces._
-import axi4.full.readyValidMem
+
+import chext.axi4
+import chext.axis4
+
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
+
+import axis4.Casts._
+
+import hardcilk.util.readyValidMem
 
 
 class continuationAllocationSideIO(
@@ -19,7 +27,7 @@ class continuationAllocationSideIO(
     val vcasAxiFullCfg: axi4.Config,
     val vcasCount : Int
 ) extends Bundle {
-    implicit val axisCfgAddress = Config(wData = addrWidth, onlyRV = true)
+    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = addrWidth, onlyRV = true)
     val contOut    = Vec(peCount, axis4.Master(axisCfgAddress))
     val axi_mgmt_vcas = Vec(vcasCount, axi4.Slave(axiMgmtCfg))
     val vcas_axi_full = Vec(vcasCount, axi4.Master(vcasAxiFullCfg))
@@ -66,7 +74,7 @@ class continuationAllocationSide(
         lite = false
     )
 
-    val io = IO(new continuationAllocationSideIO(addrWidth, peCount, vcas(0).regBlock.axiConfig, vcasAxiFullCfg, vcasCount))
+    val io = IO(new continuationAllocationSideIO(addrWidth, peCount, vcas(0).regBlock.cfgAxi, vcasAxiFullCfg, vcasCount))
     
     val vcasRvmRO = Seq.fill(vcasCount)(Module(new readyValidMem(addrWidth, addrWidth, write=false, burstLength=15)))
 

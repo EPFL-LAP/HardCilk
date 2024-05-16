@@ -3,7 +3,7 @@ package stealSide
 import chisel3._
 import chisel3.util._
 import commonInterfaces._
-import chisel3.experimental.ChiselEnum
+import chisel3.ChiselEnum
 
 
 class globalTaskBufferIO(taskWidth : Int) extends Bundle{

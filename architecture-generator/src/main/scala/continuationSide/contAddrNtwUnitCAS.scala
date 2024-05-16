@@ -3,7 +3,7 @@ package continuationSide
 
 import chisel3._
 import chisel3.util._
-import chisel3.experimental.ChiselEnum
+import chisel3.ChiselEnum
 
 class contAddrNtwUnitCASIO(addrWidth: Int) extends Bundle {
     val addressIn0    = Flipped(DecoupledIO(UInt(addrWidth.W)))

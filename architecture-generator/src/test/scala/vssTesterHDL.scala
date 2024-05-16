@@ -4,7 +4,7 @@ import chisel3.util._
 import stealSide._
 import axi4._
 import axi4.lite.RegisterBlock
-import axi4.full.readyValidMem
+import util.readyValidMem
 import org.scalatest.flatspec.AnyFlatSpec
 import chiseltest._
 
