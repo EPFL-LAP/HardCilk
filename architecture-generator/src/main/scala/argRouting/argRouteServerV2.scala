@@ -82,12 +82,13 @@ class argRouteVirtServerV2(taskWidth: Int,
 */
 
     // Counter related registers
-    private val counterStateReg     = RegInit(state.readNetwork)
-    private val counterReg          = RegInit(0.U(64.W))
-    private val currReadAddr        = RegInit(0.U(64.W))
-    private val counterAddr         = RegInit(0.U(64.W))
-    private val addrMask            = RegInit(0.U(64.W))
-    addrMask                        := ((~(0.U(64.W))) << tagBitsShift.U)
+    private val counterStateReg      = RegInit(state.readNetwork)
+    private val counterReg           = RegInit(0.U(64.W))
+    private val currReadAddr         = RegInit(0.U(64.W))
+    private val counterAddr          = RegInit(0.U(64.W))
+    private val addrMask             = RegInit(0.U(64.W))
+    private val helpGarbageCollector = RegInit(0.U)
+    addrMask                         := ((~(0.U(64.W))) << tagBitsShift.U)
 
     // Init the io of the queue that takes addresses from the network and feeds them to the counter checker state machine
     addrNtwInQueue.io.deq.ready  := false.B
@@ -98,13 +99,17 @@ class argRouteVirtServerV2(taskWidth: Int,
     // Init the io realated to reading and writing the counter
     io.read_address.bits  := counterAddr
     io.write_address.bits := counterAddr
-    io.write_data.bits    := counterReg
+
+    when(helpGarbageCollector === 1.U){
+        io.write_data.bits    := 0x1000000.U
+    }.otherwise{
+        io.write_data.bits    := counterReg
+    }
+
     io.read_address.valid := false.B
     io.write_address.valid:= false.B
     io.write_data.valid   := false.B
     io.read_data.ready    := false.B
-    
-
 
     // Transitions
     when(counterStateReg === state.readNetwork){
@@ -133,12 +138,15 @@ class argRouteVirtServerV2(taskWidth: Int,
     }.elsewhen(counterStateReg === state.writeCounterWData){
         when(io.write_data.ready){
             counterStateReg := state.readNetwork
+            helpGarbageCollector := 0.U
         }
     }.elsewhen(counterStateReg === state.pushTaskAddress){
         when(addressesOfReadyTasks.io.enq.ready){
-            counterStateReg := state.readNetwork
+            counterStateReg := state.writeCounterWAddr
+            helpGarbageCollector := 1.U
         }
     }
+
     // Output
     when(counterStateReg === state.readNetwork){
         addrNtwInQueue.io.deq.ready := true.B
