@@ -9,6 +9,8 @@ import chext.axi4
 import axi4._
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
+import chisel3.stage.ChiselStage
+
 
 class readValidMemIO(taskWidth: Int, addrWidth: Int, readFlag: Boolean, writeFlag: Boolean, varBurst: Boolean) extends Bundle {
   
@@ -54,8 +56,8 @@ class readyValidMem(taskWidth: Int, addrWidth: Int, read:Boolean=true, write:Boo
   val writeHandshakeDetector = RegInit(false.B)
 
 
-  val axi = IO(axi4.Master(axiFullCfg))
-  private val axiData = axi.asFull
+  val axi = IO(axi4.full.Master(axiFullCfg))
+  private val axiData = axi
 
   private def connectZeros[T <: Data](bits: T) = {
     bits := 0.U(bits.getWidth.W).asTypeOf(bits)
@@ -179,4 +181,13 @@ class readyValidMem(taskWidth: Int, addrWidth: Int, read:Boolean=true, write:Boo
     axiData.ar.valid      := false.B
     axiData.r.ready       := false.B
   } 
+}
+
+object readyValidMem extends App {
+    import _root_.circt.stage.ChiselStage
+    ChiselStage.emitSystemVerilogFile(
+      new readyValidMem(256, 64, true, true, false, 8, true),
+      Array("--target-dir", "output/"),
+      Array("--disable-all-randomization")
+    )
 }

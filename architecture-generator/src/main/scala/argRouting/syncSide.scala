@@ -1,7 +1,5 @@
 package argRouting
 
-
-
 import chisel3._
 import chisel3.util._
 import chisel3.experimental.prefix
@@ -16,25 +14,23 @@ import chext.axis4
 
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
+import chext.axi4.full.components._
 
 import axis4.Casts._
 
 import hardcilk.util.readyValidMem
+import AXIHelpers.axisDwConverter
 
 class syncSideIO(
-    val addrWidth: Int,
-    val peCount: Int,
-    val argRouteServersNumber: Int,
-    val contCounterWidth: Int,
-    
+    val pePortWidth: Int,
+    val peCount: Int,  
     ) extends Bundle{
     
-    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = addrWidth, onlyRV = true)
+    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = pePortWidth, onlyRV = true)
     
-    val argRouteAxiFullCfg = axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false)
-    val addrIn = Vec(peCount, axis4.Slave(axisCfgAddress))
-    val axi_full_argRoute = Vec(2*argRouteServersNumber, axi4.Master(argRouteAxiFullCfg))
-}
+    val argIn = Vec(peCount, axis4.Slave(axisCfgAddress))
+    
+}    
 
 
 class syncSide(
@@ -44,11 +40,12 @@ class syncSide(
     val peCount: Int,
     val argRouteServersNumber: Int,
     val contCounterWidth: Int,
+    val pePortWidth: Int
 ) extends Module {
 
-    val io = IO(new syncSideIO(addrWidth, peCount, argRouteServersNumber, contCounterWidth))
+    val io = IO(new syncSideIO(pePortWidth=pePortWidth, peCount=peCount))
     val connStealNtw = IO(Vec(argRouteServersNumber, Flipped(new stNwStSrvConn(taskWidth))))
-        
+    
 
     val argSide = Module(new argRouteNetwork( addrWidth = addrWidth,
                                               taskWidth = taskWidth, 
@@ -72,8 +69,18 @@ class syncSide(
     val argRouteRvm       = Seq.fill(argRouteServersNumber)(Module(new readyValidMem(contCounterWidth, addrWidth)))
     val argRouteRvmReadOnly = Seq.fill(argRouteServersNumber)(Module(new readyValidMem(contCounterWidth, addrWidth, write = false, burstLength = (taskWidth/contCounterWidth)-2)))
     
+    val argRouteAxiFullCfg = axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false, wId = log2Ceil(2*argRouteServersNumber))
+    
+    val axi_full_argRoute = IO(axi4.full.Master(argRouteAxiFullCfg)).suggestName("axi_full_argRoute") 
+
+    val axiCfgSlave = axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false, wId = 0)
+    
+    val mux = Module(new Mux(axiCfgSlave = axiCfgSlave, numSlaves=2*argRouteServersNumber, muxCfg = MuxConfig(slaveBuffers = axi4.BufferConfig.all(1))))
+    mux.m_axi :=> axi_full_argRoute
+        
+
     for(i <- 0 until argRouteServersNumber){
-        io.axi_full_argRoute(i)             <> argRouteRvm(i).axi
+        argRouteRvm(i).axi                  :=> mux.s_axi(i)
         argRouteRvm(i).io.read.get.address  <> argRouteServers(i).io.read_address
         argRouteRvm(i).io.read.get.data     <> argRouteServers(i).io.read_data
         argRouteRvm(i).io.write.get.address <> argRouteServers(i).io.write_address
@@ -81,13 +88,16 @@ class syncSide(
         argRouteServers(i).io.connNetwork   <> argSide.io.connVAS(i)
         argRouteServers(i).io.connStealNtw  <> connStealNtw(i)
 
-        io.axi_full_argRoute(i+argRouteServersNumber) <> argRouteRvmReadOnly(i).axi
+        argRouteRvmReadOnly(i).axi :=> mux.s_axi(i+argRouteServersNumber)  
         argRouteRvmReadOnly(i).io.read.get.address  <> argRouteServers(i).io.read_address_task
         argRouteRvmReadOnly(i).io.read.get.data     <> argRouteServers(i).io.read_data_task
     }       
 
+
+    val axis_stream_converters_in = Seq.fill(peCount)(Module(new axisDwConverter(dataWidthIn = pePortWidth, dataWidthOut = taskWidth)))
     for(i <- 0 until peCount){
-        argSide.io.connPE(i) <> io.addrIn(i).lite
+        axis_stream_converters_in(i).io.dataOut.lite <> argSide.io.connPE(i)
+        io.argIn(i).lite <> axis_stream_converters_in(i).io.dataIn.lite
     }
 }
 

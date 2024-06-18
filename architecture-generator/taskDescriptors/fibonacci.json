@@ -1,35 +1,56 @@
 {
-    "fullSysGenName": "fibonacci",
-    "taskList": [
+    "name": "fibonacci",
+    "taskDescriptors": [
         {
-            "isRoot": true,
             "name": "fib",
-            "type": "complete",
-            "argBitSize": 128,
-            "peCount": 5,
-            "virtualStealServersNumber": 1,
-            "stealQueueSize": 32,
-            "virtualStealQueueSize": 16384,
-            "continuationServersNumber": 0,
-            "continuationQueueSize": 0,
-            "virtualContinuationQueueSize": 0,
-            "argRouteServersNumber": 0, 
-            "argRouteServersQueueSize": 0
+
+            "isRoot": true,
+            "isCont": false,
+            "dynamicMemAlloc": false,
+
+            "numProcessingElements": 5,
+            "widthTask": 128,
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 1,  
+                    "capacityVirtualQueue": 128,
+                    "capacityPhysicalQueue": 32
+                }
+            ]
+            
         },
         {
-            "isRoot": false,
             "name": "sum",
-            "type": "continuation",
-            "argBitSize": 256,
-            "peCount": 5,
-            "virtualStealServersNumber": 1,
-            "stealQueueSize": 32,
-            "virtualStealQueueSize": 16384,
-            "continuationServersNumber": 1,
-            "continuationQueueSize": 8,
-            "virtualContinuationQueueSize": 16384,
-            "argRouteServersNumber": 4, 
-            "argRouteServersQueueSize": 32
+
+            "isRoot": false,
+            "isCont": true,
+            "dynamicMemAlloc": false,
+
+            "numProcessingElements": 5,
+            "widthTask": 256,
+
+
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 1,   
+                    "capacityVirtualQueue": 128,
+                    "capacityPhysicalQueue": 32
+                },
+                {
+                    "sideType": "allocator",
+                    "numVirtualServers": 1,  
+                    "capacityVirtualQueue": 128,
+                    "capacityPhysicalQueue": 32
+                },
+                {
+                    "sideType": "argumentNotifier",
+                    "numVirtualServers": 1,  
+                    "capacityVirtualQueue": 128,
+                    "capacityPhysicalQueue": 32
+                }
+            ]
         }
     ],
     "spawnList": {
@@ -42,6 +63,6 @@
         "fib": ["sum"],
         "sum": ["sum"]
     },
-    "systemAddressWidth":64,
-    "continuationCounterWidth":32
+    "widthAddress":64,
+    "widthContCounter":32
 }

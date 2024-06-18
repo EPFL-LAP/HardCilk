@@ -3,3 +3,5 @@
 .vscode*
 architecture-generator/project/*
 architecture-generator/target/*
+architecture-generator/.bsp
+architecture-generator/output/*

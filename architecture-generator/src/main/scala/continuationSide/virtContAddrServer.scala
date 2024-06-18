@@ -15,7 +15,7 @@ import axis4.Casts._
 
 class virtContAddrServerIO(dataWidth: Int, regBlock:RegisterBlock, sysAddressWidth: Int) extends Bundle {
     val dataOut       = DecoupledIO(UInt(dataWidth.W))
-    val axi_mgmt      = axi4.Slave(regBlock.cfgAxi)
+    val axi_mgmt      = axi4.lite.Slave(regBlock.cfgAxi)
     val read_address  = DecoupledIO(UInt(sysAddressWidth.W))
     val read_data     = Flipped(DecoupledIO(UInt(dataWidth.W)))
 }
@@ -38,7 +38,7 @@ class virtContAddrServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int)
     val io = IO(new virtContAddrServerIO(dataWidth, regBlock, sysAddressWidth))
 
     io.axi_mgmt.suggestName("0_S_AXI_MGMT")
-    regBlock.s_axil <> io.axi_mgmt.asLite
+    regBlock.s_axil <> io.axi_mgmt
 
 
     private val rAddr                  = RegInit(0.U(64.W))

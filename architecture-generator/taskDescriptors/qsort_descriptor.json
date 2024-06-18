@@ -1,32 +1,68 @@
 {
-    "taskList": [
+    "name": "quickSort",
+    "taskDescriptors": [
         {
             "name": "qsort",
-            "type": "complete",
-            "argBitSize": 256,
-            "peCount": 24,
-            "stealQueueSize": 32,
-            "continuationQueueSize": 0
+
+            "isRoot": true,
+            "isCont": false,
+            "dynamicMemAlloc": false,
+
+            "numProcessingElements": 32,
+            "widthTask": 256,
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 1,  
+                    "capacityVirtualQueue": 2048,
+                    "capacityPhysicalQueue": 32
+                }
+            ]
+            
         },
         {
-            "name": "sync",
-            "type": "continuation",
-            "argBitSize": 128,
-            "peCount": 2,
-            "stealQueueSize": 16,
-            "continuationQueueSize": 2
+            "name": "qsortSync",
+
+            "isRoot": false,
+            "isCont": true,
+            "dynamicMemAlloc": false,
+
+            "numProcessingElements": 16,
+            "widthTask": 128,
+
+
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 1,   
+                    "capacityVirtualQueue": 2048,
+                    "capacityPhysicalQueue": 32
+                },
+                {
+                    "sideType": "allocator",
+                    "numVirtualServers": 1,  
+                    "capacityVirtualQueue": 4096,
+                    "capacityPhysicalQueue": 32
+                },
+                {
+                    "sideType": "argumentNotifier",
+                    "numVirtualServers": 1,  
+                    "capacityVirtualQueue": 4096,
+                    "capacityPhysicalQueue": 32
+                }
+            ]
         }
     ],
     "spawnList": {
         "qsort": ["qsort"]
     },
     "spawnNextList": {
-        "qsort": ["sync"]
+        "qsort": ["qsortSync"]
     },
     "sendArgumentList": {
-        "qsort": ["sync"],
-        "sync": ["sync"]
+        "qsort": ["qsortSync"],
+        "qsortSync": ["qsortSync"]
     },
-    "systemAddressWidth":64,
-    "continuationCounterWidth":32
+    "widthAddress":64,
+    "widthContCounter":32
 }

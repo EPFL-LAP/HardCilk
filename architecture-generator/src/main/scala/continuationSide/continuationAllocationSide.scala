@@ -16,21 +16,27 @@ import axi4.Ops._
 import axi4.lite.components.RegisterBlock
 
 import axis4.Casts._
-
+import chext.axi4.full.components._
 import hardcilk.util.readyValidMem
 
+import AXIHelpers.axisDwConverter
 
-class continuationAllocationSideIO(
-    val addrWidth: Int,
-    val peCount: Int,
-    val axiMgmtCfg: axi4.Config,
-    val vcasAxiFullCfg: axi4.Config,
-    val vcasCount : Int
+class continuationAllocationSideIO_export(
+    val pePortWidth: Int,
+    val peCount: Int,    
 ) extends Bundle {
-    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = addrWidth, onlyRV = true)
-    val contOut    = Vec(peCount, axis4.Master(axisCfgAddress))
-    val axi_mgmt_vcas = Vec(vcasCount, axi4.Slave(axiMgmtCfg))
-    val vcas_axi_full = Vec(vcasCount, axi4.Master(vcasAxiFullCfg))
+    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = pePortWidth, onlyRV = true)
+    val closureOut    = Vec(peCount, axis4.Master(axisCfgAddress))
+    
+}
+
+class continuationAllocationSideIO_internal(
+    val axiMgmtCfg: axi4.Config,
+    val vcasCount : Int,
+    val vcasAxiFullCfg: axi4.Config,
+) extends Bundle {
+    val axi_mgmt_vcas = Vec(vcasCount, axi4.lite.Slave(axiMgmtCfg))
+    val vcas_axi_full = axi4.full.Master(vcasAxiFullCfg)
 }
 
 /***
@@ -54,6 +60,7 @@ class continuationAllocationSide(
     val peCount: Int,
     val vcasCount: Int,
     val queueDepth: Int,
+    val pePortWidth: Int
 ) extends Module {
 
     
@@ -74,23 +81,28 @@ class continuationAllocationSide(
         lite = false
     )
 
-    val io = IO(new continuationAllocationSideIO(addrWidth, peCount, vcas(0).regBlock.cfgAxi, vcasAxiFullCfg, vcasCount))
+    val io_export = IO(new continuationAllocationSideIO_export(pePortWidth=pePortWidth, peCount=peCount))
+    val io_internal = IO(new continuationAllocationSideIO_internal(vcas(0).regBlock.cfgAxi, vcasCount, vcasAxiFullCfg))
     
     val vcasRvmRO = Seq.fill(vcasCount)(Module(new readyValidMem(addrWidth, addrWidth, write=false, burstLength=15)))
 
+    val mux = Module(new Mux(axiCfgSlave = vcasAxiFullCfg, numSlaves=vcasCount, muxCfg = MuxConfig(slaveBuffers = axi4.BufferConfig.all(1))))
+    mux.m_axi :=> io_internal.vcas_axi_full
 
     for(i <- 0 until vcasCount){
-        io.axi_mgmt_vcas(i)               <> vcas(i).io.axi_mgmt
+        io_internal.axi_mgmt_vcas(i)      :=> vcas(i).io.axi_mgmt
         
         vcasRvmRO(i).io.read.get.address  <> vcas(i).io.read_address
         vcasRvmRO(i).io.read.get.data     <> vcas(i).io.read_data
-        vcasRvmRO(i).axi                  <> io.vcas_axi_full(i)
-        vcas(i).io.dataOut                  <> continuationNetwork.io.connVCAS(i)
+        vcasRvmRO(i).axi                  :=> mux.s_axi(i) 
+        vcas(i).io.dataOut                <> continuationNetwork.io.connVCAS(i)
     }
 
 
+    val axis_stream_converters_out = Seq.fill(peCount)(Module(new axisDwConverter(dataWidthIn = addrWidth, dataWidthOut = pePortWidth)))
     for(i <- 0 until peCount){
-        continuationNetwork.io.connPE(i) <> io.contOut(i).lite
+        axis_stream_converters_out(i).io.dataIn.lite <> continuationNetwork.io.connPE(i)
+        io_export.closureOut(i).lite <> axis_stream_converters_out(i).io.dataOut.lite
     }
 }
 /*
