@@ -80,7 +80,8 @@ case class sideConfig(
     val numVirtualServers: Int = 0,  
     val capacityVirtualQueue: Int = 0,
     val capacityPhysicalQueue: Int = 0,
-    val portWidth: Int = 32
+    val portWidth: Int = 32,
+    val virtualEntrtyWidth: Int = 0,
 ) {
   assert(sideType == "scheduler" || sideType == "allocator" || sideType == "argumentNotifier" || sideType == "memoryAllocator")
 }
@@ -140,6 +141,10 @@ case class taskDescriptor(
   def getPortWidth(sideType: String): Int = {
     assert(sideType == "scheduler" || sideType == "allocator" || sideType == "argumentNotifier" || sideType == "memoryAllocator")
     sidesConfigs.find(_.sideType == sideType).map(_.portWidth).getOrElse(0)
+  }
+  def getVirtualEntrtyWidth(sideType: String): Int = {
+    assert(sideType == "scheduler" || sideType == "allocator" || sideType == "argumentNotifier" || sideType == "memoryAllocator")
+    sidesConfigs.find(_.sideType == sideType).map(_.virtualEntrtyWidth).getOrElse(0)
   }
 }
 
