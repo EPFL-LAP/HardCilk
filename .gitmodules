@@ -1,3 +1,6 @@
 [submodule "architecture-generator/chext"]
 	path = architecture-generator/chext
 	url = git@github.com:jnbrq/chext.git
+[submodule "software/svm"]
+	path = software/svm
+	url = git@github.com:jnbrq/svm.git
