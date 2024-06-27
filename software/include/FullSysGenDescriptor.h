@@ -1,10 +1,11 @@
-
 #ifndef FULLSYS_DESCRIPTOR_H
 #define FULLSYS_DESCRIPTOR_H
 
 #include <string>
 #include <vector>
 #include <cassert>
+#include <stdint.h>
+#include <map>
 
 class MemSystemDescriptor
 {
@@ -37,6 +38,7 @@ public:
     int widthTask;
     std::vector<SideConfig> sidesConfigs;
     MemSystemDescriptor mgmtBaseAddresses;
+    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
 
     int getNumServers(const std::string &sideType) const
     {

@@ -10,6 +10,15 @@
 #include <unistd.h>
 #include <vector>
 #include <stdexcept>
+#include <iostream>
+
+
+// This is used to track memory freed by the processor to extend one of the FPGA queues to another location
+struct freedMemBlock
+{
+    uint64_t addr;
+    uint64_t size;
+};
 
 
 class hardCilkDriver
@@ -39,8 +48,25 @@ class hardCilkDriver
         return_addresses.push_back(addr);
         return 0;
     }
-
+    /**
+     * @brief Allocate memory on the FPGA. This function is used to allocate memory on the FPGA.
+     * 
+     * @param size The size of the memory in bytes to allocate
+     */
     uint64_t allocateMemFPGA(uint64_t size){
+        // Check if any memory freed by the processor can be used, if yes return and remove it from the freed memory
+        for(auto it = freed_mem_blocks.begin(); it != freed_mem_blocks.end(); it++){
+            if(it->size >= size){
+                uint64_t addr = it->addr;
+                it->addr += size;
+                it->size -= size;
+                if(it->size == 0){
+                    freed_mem_blocks.erase(it);
+                }
+                return addr;
+            }
+        }
+        // If no memory is freed by the processor, allocate new memory
         uint64_t addr = free_mem_base_addr;
         free_mem_base_addr += size;
         return addr;
@@ -64,6 +90,10 @@ class hardCilkDriver
     }
 
     int managePausedServer();
+
+    int manageSchedulerServer(uint64_t base_address, TaskDescriptor taskDescriptor);
+    int manageAllocationServer(uint64_t base_address, TaskDescriptor taskDescriptor);
+    int manageMemoryAllocatorServer(uint64_t base_address, TaskDescriptor taskDescriptor);
 
     int writeReg64(uint64_t addr, uint64_t data);
     uint64_t readReg64(uint64_t addr);
@@ -99,6 +129,8 @@ class hardCilkDriver
     const uint8_t scheduler_server_processorInterrupt_shift = 0x28;
 
     uint64_t free_mem_base_addr = 0x0;
+
+    std::vector <freedMemBlock> freed_mem_blocks;
     
     std::vector <uint64_t> return_addresses;
     

@@ -49,7 +49,7 @@ template <typename T> int init_system(std::vector<T> base_task_data){
                 
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
                 std::vector<uint64_t> addresses;
-                for(auto i = 0; i < taskDescriptor->getCapacityVirtualQueue("scheduler"); i++){
+                for(auto i = 0; i < taskDescriptor->getCapacityVirtualQueue("allocator"); i++){
                     addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor->widthTask/8);
                 }
 
@@ -59,6 +59,8 @@ template <typename T> int init_system(std::vector<T> base_task_data){
                 waitPaused(*base_address + alloc_server_rpause_shift);   
                 writeReg64(*base_address + alloc_server_raddr_shift, continuation_queue_addr);
                 writeReg64(*base_address + alloc_server_availableSize_shift, taskDescriptor->getCapacityVirtualQueue("allocator"));
+
+                taskDescriptor->mapServerAddressToClosureBaseAddress[*base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, taskDescriptor->getCapacityVirtualQueue("allocator")));
             }
 
             // Allocate memory for all the memory allocator servers
