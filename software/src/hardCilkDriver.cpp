@@ -244,3 +244,53 @@ int hardCilkDriver::writeMem(d4e_addr_t dest, void const *src, size_t size){
 
     return EXIT_FAILURE;
 }
+
+/**
+ * Function that takes no params writes 0xDDDAAADDDD to the base_addr registers of each server
+ * and reads it back. If the value is not the same, it throws an exception.
+ * 
+ * It also creates a 100 element array of 0xDAAADDDDD and writes it to the memory and reads it back. 
+ * If the value is not the same, it throws an exception.
+ */
+int hardCilkDriver::sanityCheck(){
+    if(pcie_flag){
+        for(auto taskDescriptor = descriptor.taskDescriptors.begin(); taskDescriptor != descriptor.taskDescriptors.end(); taskDescriptor++){
+            for(auto base_address = taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++){
+                writeReg64(*base_address + scheduler_server_raddr_shift, 0xDDDAAADDDD);
+                if(readReg64(*base_address + scheduler_server_raddr_shift) != 0xDDDAAADDDD){
+                    throw std::runtime_error("Sanity check failed for scheduler server at address " + std::to_string(*base_address));
+                }
+            }
+            for(auto base_address = taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++){
+                writeReg64(*base_address + alloc_server_raddr_shift, 0xDDDAAADDDD);
+                if(readReg64(*base_address + alloc_server_raddr_shift) != 0xDDDAAADDDD){
+                    throw std::runtime_error("Sanity check failed for allocation server at address " + std::to_string(*base_address));
+                }
+            }
+            for(auto base_address = taskDescriptor->mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.end(); base_address++){
+                writeReg64(*base_address, 0xDDDAAADDDD);
+                if(readReg64(*base_address) != 0xDDDAAADDDD){
+                    throw std::runtime_error("Sanity check failed for memory allocator server at address " + std::to_string(*base_address));
+                }
+            }
+        }
+        // Write a 100 element array of 0xDAAADDDDD to the memory and read it back
+        uint64_t addr = allocateMemFPGA(100 * sizeof(uint64_t));
+        uint64_t data[100];
+        for(int i = 0; i < 100; i++){
+            data[i] = 0xDAAADDDDD;
+        }
+        writeMem(addr, static_cast<const void*>(data), 100 * sizeof(uint64_t));
+        uint64_t read_data[100];
+        readMem(read_data, addr, 100 * sizeof(uint64_t));
+        for(int i = 0; i < 100; i++){
+            if(read_data[i] != 0xDAAADDDDD){
+                throw std::runtime_error("Sanity check failed for memory at address " + std::to_string(addr));
+            }
+        }
+        
+    } else {
+        throw std::runtime_error("Not implemented yet, only PCIe is supported for now.");
+    }
+    return 0;
+}

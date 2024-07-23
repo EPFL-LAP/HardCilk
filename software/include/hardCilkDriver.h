@@ -13,6 +13,37 @@
 #include <iostream>
 
 
+struct MmioInterface {
+    virtual void read32(uint64_t addr, uint32_t *data) = 0;
+    virtual void write32(uint64_t addr, uint32_t data) = 0;
+
+    virtual void read64(uint64_t addr, uint64_t *data) = 0;
+    virtual void write64(uint64_t addr, uint64_t data) = 0;
+
+    virtual void wait_ns(uint64_t ns) = 0;
+
+    virtual ~MmioInterface() {}
+};
+
+struct SystemC_MmioInterface {
+    void read32(uint64_t addr, uint32_t *data) {
+        std::cout << "Reading 32-bit value from address " << addr << std::endl;
+    }
+
+    void write32(uint64_t addr, uint32_t data) {
+        std::cout << "Writing 32-bit value " << data << " to address " << addr << std::endl;
+    }
+
+    void read64(uint64_t addr, uint64_t *data) {
+        std::cout << "Reading 64-bit value from address " << addr << std::endl;
+    }
+
+    void write64(uint64_t addr, uint64_t data) {
+        std::cout << "Writing 64-bit value " << data << " to address " << addr << std::endl;
+    }
+
+};
+
 // This is used to track memory freed by the processor to extend one of the FPGA queues to another location
 struct freedMemBlock
 {
@@ -26,7 +57,7 @@ class hardCilkDriver
 
     public:
 
-    hardCilkDriver(bool pcie = true);
+    hardCilkDriver();
 
     // template <typename T> int init_system(std::vector<T>);
     #include "hardCilkDriver.tpp"
@@ -72,6 +103,9 @@ class hardCilkDriver
         return addr;
     }
 
+ 
+    int sanityCheck();
+
     ~hardCilkDriver();
 
     private:
@@ -88,7 +122,11 @@ class hardCilkDriver
         }
         return 0;
     }
-
+    /**
+     * Function that takes no params and makes sure that this driver is connected to the system on the FPGA
+     */
+    int sanityCheck();
+    
     int managePausedServer();
 
     int manageSchedulerServer(uint64_t base_address, TaskDescriptor taskDescriptor);
