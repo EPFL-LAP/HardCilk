@@ -8,13 +8,13 @@
             "isCont": false,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 32,
+            "numProcessingElements": 2,
             "widthTask": 256,
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
                     "numVirtualServers": 1,  
-                    "capacityVirtualQueue": 2048,
+                    "capacityVirtualQueue": 8192,
                     "capacityPhysicalQueue": 32
                 }
             ]
@@ -27,7 +27,7 @@
             "isCont": true,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 16,
+            "numProcessingElements": 2,
             "widthTask": 128,
 
 
@@ -35,19 +35,19 @@
                 {
                     "sideType": "scheduler",
                     "numVirtualServers": 1,   
-                    "capacityVirtualQueue": 2048,
+                    "capacityVirtualQueue": 8192,
                     "capacityPhysicalQueue": 32
                 },
                 {
                     "sideType": "allocator",
                     "numVirtualServers": 1,  
-                    "capacityVirtualQueue": 4096,
+                    "capacityVirtualQueue": 8192,
                     "capacityPhysicalQueue": 32
                 },
                 {
                     "sideType": "argumentNotifier",
                     "numVirtualServers": 1,  
-                    "capacityVirtualQueue": 4096,
+                    "capacityVirtualQueue": 8192,
                     "capacityPhysicalQueue": 32
                 }
             ]
@@ -64,5 +64,6 @@
         "qsortSync": ["qsortSync"]
     },
     "widthAddress":64,
-    "widthContCounter":32
+    "widthContCounter":32,
+    "targetFrequency": 225
 }

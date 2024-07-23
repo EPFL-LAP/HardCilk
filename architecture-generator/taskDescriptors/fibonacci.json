@@ -8,14 +8,15 @@
             "isCont": false,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 5,
+            "numProcessingElements": 2,
             "widthTask": 128,
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
                     "numVirtualServers": 1,  
                     "capacityVirtualQueue": 128,
-                    "capacityPhysicalQueue": 32
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 128
                 }
             ]
             
@@ -27,7 +28,7 @@
             "isCont": true,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 5,
+            "numProcessingElements": 2,
             "widthTask": 256,
 
 
@@ -36,19 +37,22 @@
                     "sideType": "scheduler",
                     "numVirtualServers": 1,   
                     "capacityVirtualQueue": 128,
-                    "capacityPhysicalQueue": 32
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 256
                 },
                 {
                     "sideType": "allocator",
                     "numVirtualServers": 1,  
                     "capacityVirtualQueue": 128,
-                    "capacityPhysicalQueue": 32
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 64
                 },
                 {
                     "sideType": "argumentNotifier",
                     "numVirtualServers": 1,  
                     "capacityVirtualQueue": 128,
-                    "capacityPhysicalQueue": 32
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 64
                 }
             ]
         }
