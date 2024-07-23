@@ -4,9 +4,9 @@ import descriptors.fullSysGenDescriptor
 
 class tclGeneralConfigs(){
 
-    def getHBMConfigTclSyntax(): String = {
+    def getHBMConfigTclSyntax(totalAXIPorts: Int): String = {
         val sb = new StringBuilder
- 
+        
         sb.append("""
             # 1. Create and configure the HBM
             create_bd_cell -type ip -vlnv xilinx.com:ip:hbm:1.0 hbm_0
@@ -25,10 +25,21 @@ class tclGeneralConfigs(){
 
         """)
 
-        for(i <- 0 until 32){
+        for(i <- 0 until totalAXIPorts){
             // Connecting the constant to the parity bits of the HBM
            sb.append("connect_bd_net [get_bd_pins xlconstant_0/dout] [get_bd_pins hbm_0/AXI_"+f"${i}%02d"+"_WDATA_PARITY]\n")
         }
+        
+        if(totalAXIPorts < 32){
+            // Create a config for the HBm to remove the extra axi ports
+            sb.append("set_property -dict [list \\\n")
+
+            for(i <- totalAXIPorts until 32){
+                sb.append("CONFIG.USER_SAXI_"+f"${i}%02d"+" {false} \\\n")
+            }
+            sb.append("] [get_bd_cells hbm_0]\n")
+        }
+
 
         sb.append("""
         #  3. EXPORT HBM_CATTRIP_LS 
@@ -69,6 +80,21 @@ class tclGeneralConfigs(){
                     CONFIG.pl_link_cap_max_link_width {X16} \
                     CONFIG.xdma_pcie_64bit_en {true} \
                     ] [get_bd_cells xdma_0]
+
+        set_property -dict [list \
+            CONFIG.axilite_master_scale {Megabytes} \
+            CONFIG.axilite_master_size {4} \
+        ] [get_bd_cells xdma_0]
+
+        set_property CONFIG.cfg_mgmt_if {false} [get_bd_cells xdma_0]
+
+        # Ground the irq
+        create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_1
+        set_property CONFIG.CONST_VAL {0} [get_bd_cells xlconstant_1]
+        connect_bd_net [get_bd_pins xlconstant_1/dout] [get_bd_pins xdma_0/usr_irq_req]
+
+        # Export the xdma pcie_mgt interface
+        make_bd_intf_pins_external  [get_bd_intf_pins xdma_0/pcie_mgt] -name PEX
 
         # 3. Create the clocking buffer for the xdma
         create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 util_ds_buf_0

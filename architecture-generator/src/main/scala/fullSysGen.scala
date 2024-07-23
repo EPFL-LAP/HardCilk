@@ -28,7 +28,10 @@ import hardcilk.util.readyValidMem
 import descriptors._
 
 import _root_.circt.stage.ChiselStage
+import java.time.format.DateTimeFormatter
 
+import tclResources._
+import softwareResources._
 
 class fullSysGen(val fullSysGenDescriptor: fullSysGenDescriptor) extends Module with chisel3.interface.Extra {
   
@@ -176,21 +179,39 @@ object commandLineEmiiterV2 {
       )
     } else {
 
+      // Create a directory under the output directory with the name of the json file, date, and timestamp (nearest second)
+      val pathOutputDir = args(1)
       val pathInputJsonFile = args(0)
       val jsonName = basename(pathInputJsonFile)
-      val pathOutputDir = args(1)
+      val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+      val timeFormatter = DateTimeFormatter.ofPattern("HH-mm-ss")
+      val outputDirName = s"${jsonName}_${java.time.LocalDate.now.format(dateFormatter)}_${java.time.LocalTime.now.format(timeFormatter)}"
+      val outputDirPathRTL = s"$pathOutputDir/$outputDirName/rtl"
+      val outputDirPathSoftwareHeaders = s"$pathOutputDir/$outputDirName/softwareHeaders"
+      val outputDirPathTCL = s"$pathOutputDir/$outputDirName/tcl"
+     
+      // Create the directories
+      new java.io.File(outputDirPathRTL).mkdirs()
+      new java.io.File(outputDirPathSoftwareHeaders).mkdirs()
+      new java.io.File(outputDirPathTCL).mkdirs()
+
+      val systemDescriptor = parseJsonFile[fullSysGenDescriptor](pathInputJsonFile)
 
       val temp = ChiselStage.emitSystemVerilogFile(
         {
-          val module = new fullSysGen(parseJsonFile[fullSysGenDescriptor](pathInputJsonFile))
-          val pathOutputTxt = f"${pathOutputDir}/${jsonName}.txt"
-          //writeFile(pathOutputTxt, module.connectionsTxt)
+          val module = new fullSysGen(systemDescriptor)
           module
         },
-        Array(f"--target-dir=${pathOutputDir}"),
+        Array(f"--target-dir=${outputDirPathRTL}"),
         Array("--disable-all-randomization")
       )
 
+      val tclGen = new tclGeneratorCompute(systemDescriptor, outputDirPathTCL)
+      val tclGenMem = new tclGeneratorMem(systemDescriptor, outputDirPathTCL)
+      val cppHeaderGen = CppHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders)
+      
+
+      dumpJsonFile[fullSysGenDescriptorExtended](s"$outputDirPathRTL/${systemDescriptor.name}_descriptor_2.json", fullSysGenDescriptorExtended.fromFullSysGenDescriptor(systemDescriptor))
     }
   }
 }

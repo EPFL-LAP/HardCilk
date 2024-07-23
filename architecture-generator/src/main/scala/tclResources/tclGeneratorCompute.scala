@@ -29,7 +29,7 @@ class tclGeneratorCompute(val fullSysGenDescriptor: fullSysGenDescriptor, val tc
         for (task <- fullSysGenDescriptor.taskDescriptors){
             // For each PE, create a tcl command to create a PE given the task.numProcessingElements
             for (index <- 0 until task.numProcessingElements){
-                tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:${task.name}:${task.name}:${task.peVersion} ${task.name}_${index}")
+                tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:hls:${task.name}:${task.peVersion} ${task.name}_${index}")
             }
 
         }
@@ -135,7 +135,7 @@ class tclGeneratorCompute(val fullSysGenDescriptor: fullSysGenDescriptor, val tc
         tclWriteln("connect_bd_net [get_bd_ports clk] [get_bd_pins */*clk]") // for the PEs and smartconnects
         tclWriteln("connect_bd_net [get_bd_ports clk] [get_bd_pins */*clock]") // for the system
         tclWriteln("connect_bd_net [get_bd_ports reset_n] [get_bd_pins */ap_rst_n]") // for the PEs reset
-        tclWriteln("connect_bd_net [get_bd_ports reset_n] [get_bd_pins */aresetn]") // for the smartconnects reset
+        tclWriteln("connect_bd_net [get_bd_ports reset_n] [get_bd_pins */*aresetn]") // for the smartconnects reset
         
         // Create a polarity reversal for the system reset and connect it with the external negative reset
         tclWriteln("create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 util_vector_logic_0")

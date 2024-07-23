@@ -7,14 +7,17 @@ import chisel3.ChiselEnum
 import os.stat
 import scala.annotation.tailrec
 
+import chisel3.experimental.prefix
 import chext.axi4
 import axi4._
 import axi4.Ops._
+import chext.elastic.ConnectOp._
 import axi4.lite.components.RegisterBlock
+import chisel3.experimental.AffectsChiselPrefix
 
 class virtualStealServerIO(taskWidth: Int, regBlock:RegisterBlock, sysAddressWidth: Int) extends Bundle {
     val connNetwork   = Flipped(new stNwStSrvConn(taskWidth))
-    val axi_mgmt      = axi4.Slave(regBlock.cfgAxi)
+    val axi_mgmt      = axi4.lite.Slave(regBlock.cfgAxi)
     val read_address  = DecoupledIO(UInt(sysAddressWidth.W)) 
     val read_data     = Flipped(DecoupledIO(UInt(taskWidth.W)))
     val read_burst_len = Output(UInt(4.W))
@@ -60,8 +63,8 @@ class virtualStealServer(taskWidth: Int,
 
 
     io.axi_mgmt.suggestName("S_AXI_MGMT")
-    // regBlock.saxil <> io.axi_mgmt
-    regBlock.s_axil <> io.axi_mgmt.asLite
+
+    io.axi_mgmt :=> regBlock.s_axil 
 
 
     private val rAddr             = RegInit(0.U(64.W))
@@ -392,3 +395,16 @@ class virtualStealServer(taskWidth: Int,
     }
 }
 
+// object virtualStealServer extends App {
+//     (new chisel3.stage.ChiselStage).emitVerilog(
+//         {
+//           val module = (new virtualStealServer(256, 4, 8, 2, 1, 64, false))
+//           module
+
+//         },
+//         Array(
+//           "--emission-options=disableMemRandomization,disableRegisterRandomization",
+//           f"--target-dir=output"
+//         )
+//       )
+// }

@@ -27,7 +27,7 @@ class tclGeneratorMem(val fullSysGenDescriptor: fullSysGenDescriptor, val tclFil
         tclWriteln(tclGeneralConfigsObject.getXdmaConfigTclSyntax())
         
         // Create and configure the hbm 
-        tclWriteln(tclGeneralConfigsObject.getHBMConfigTclSyntax())
+        tclWriteln(tclGeneralConfigsObject.getHBMConfigTclSyntax(fullSysGenDescriptor.getMemoryConnectionsStats().totalAXIPorts))
 
         // Connect the management port from xdma to the compute system
         tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins compute_0/s_axil_mgmt_hardcilk_0]")
@@ -46,6 +46,11 @@ class tclGeneratorMem(val fullSysGenDescriptor: fullSysGenDescriptor, val tclFil
 
         // Create the clocking wizard and reset for the system
         tclWriteln(tclGeneralConfigsObject.getSytstemClockingAndResetConfigTclSyntax(fullSysGenDescriptor))
+
+
+        // Assign addresses
+        tclWriteln("assign_bd_address")
+        tclWriteln("set_property range 2M [get_bd_addr_segs {xdma_0/M_AXI_LITE/SEG_quickSort_0_reg0}]")
 
         // End the group of commands
         tclWriteln("endgroup")

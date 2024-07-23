@@ -220,11 +220,16 @@ case class fullSysGenDescriptor(
     val totalProcessingElements = map.filter { case (_, mapped_list) => mapped_list.contains(task_name) }
       .keys
       .flatMap(taskName => taskDescriptors.find(_.name == taskName))
-      .map(_.numProcessingElements)
-      .sum
+      
+      
+    var sum = 0
+    totalProcessingElements.foreach { task =>
+      sum += task.numProcessingElements
+    }
 
     // if the port_type is spawn, decrement the return value by the value returned by selfSpawnCount 
-    val finalCount = if (port_type == "spawn") totalProcessingElements - selfSpawnedCount(task_name) else totalProcessingElements
+    val finalCount = if (port_type == "spawn") sum - selfSpawnedCount(task_name) else sum
+
 
     finalCount
   }
@@ -339,7 +344,7 @@ case class fullSysGenDescriptor(
       interconnectDescriptor(descriptors.map(_.count).sum, ratio)
     }.toList
 
-    assert(interconnectDescriptorsAggregated.map(_.count).sum == 32)
+    assert(interconnectDescriptorsAggregated.map(_.count).sum <= 32)
        
 
 
@@ -348,14 +353,54 @@ case class fullSysGenDescriptor(
 
 }
 
+case class fullSysGenDescriptorExtended(
+    val fullSysGenDescriptor: fullSysGenDescriptor,
+    val systemConnections: systemConnections,
+    val memStats: memStats
+)
+
 object fullSysGenDescriptor {
     implicit val memSystemDescriptorReads: Reads[memSystemDescriptor] = Json.using[Json.WithDefaultValues].reads[memSystemDescriptor]
+    implicit val memSystemDescriptorWrites: Writes[memSystemDescriptor] = Json.using[Json.WithDefaultValues].writes[memSystemDescriptor]
+    
     implicit val sideConfigReads: Reads[sideConfig] = Json.using[Json.WithDefaultValues].reads[sideConfig]
+    implicit val sideConfigWrites: Writes[sideConfig] = Json.using[Json.WithDefaultValues].writes[sideConfig]
+    
     implicit val taskDescriptorReads: Reads[taskDescriptor] = Json.using[Json.WithDefaultValues].reads[taskDescriptor]
+    implicit val taskDescriptorWrites: Writes[taskDescriptor] = Json.using[Json.WithDefaultValues].writes[taskDescriptor]
+    
     implicit val cfgAxiHardCilkReads: Reads[chext.axi4.Config] = Json.using[Json.WithDefaultValues].reads[chext.axi4.Config]
+    implicit val cfgAxiHardCilkWrites: Writes[chext.axi4.Config] = Json.using[Json.WithDefaultValues].writes[chext.axi4.Config]
+
     implicit val fullSysGenDescriptorReads: Reads[fullSysGenDescriptor] = Json.using[Json.WithDefaultValues].reads[fullSysGenDescriptor]
+    implicit val fullSysGenDescriptorWrites: Writes[fullSysGenDescriptor] = Json.using[Json.WithDefaultValues].writes[fullSysGenDescriptor]
 }
 
+object fullSysGenDescriptorExtended {
+  def fromFullSysGenDescriptor(fullSysGenDescriptor: fullSysGenDescriptor): fullSysGenDescriptorExtended = {
+    val systemConnections = fullSysGenDescriptor.getSystemConnectionsDescriptor()
+    val memStats = fullSysGenDescriptor.getMemoryConnectionsStats()
+    fullSysGenDescriptorExtended(fullSysGenDescriptor, systemConnections, memStats)
+  }
+
+  implicit val portDescriptorReads: Reads[portDescriptor] = Json.using[Json.WithDefaultValues].reads[portDescriptor]
+  implicit val portDescriptorWrites: Writes[portDescriptor] = Json.using[Json.WithDefaultValues].writes[portDescriptor]
+
+  implicit val connectionDescriptorReads: Reads[connectionDescriptor] = Json.using[Json.WithDefaultValues].reads[connectionDescriptor]
+  implicit val connectionDescriptorWrites: Writes[connectionDescriptor] = Json.using[Json.WithDefaultValues].writes[connectionDescriptor]
+  
+  implicit val systemConnectionsReads: Reads[systemConnections] = Json.using[Json.WithDefaultValues].reads[systemConnections]
+  implicit val systemConnectionsWrites: Writes[systemConnections] = Json.using[Json.WithDefaultValues].writes[systemConnections]
+
+  implicit val interconnectDescriptorReads: Reads[interconnectDescriptor] = Json.using[Json.WithDefaultValues].reads[interconnectDescriptor]
+  implicit val interconnectDescriptorWrites: Writes[interconnectDescriptor] = Json.using[Json.WithDefaultValues].writes[interconnectDescriptor]
+
+  implicit val memStatsReads: Reads[memStats] = Json.using[Json.WithDefaultValues].reads[memStats]
+  implicit val memStatsWrites: Writes[memStats] = Json.using[Json.WithDefaultValues].writes[memStats]
+
+  implicit val fullSysGenDescriptorExtendedReads: Reads[fullSysGenDescriptorExtended] = Json.using[Json.WithDefaultValues].reads[fullSysGenDescriptorExtended]
+  implicit val fullSysGenDescriptorExtendedWrites: Writes[fullSysGenDescriptorExtended] = Json.using[Json.WithDefaultValues].writes[fullSysGenDescriptorExtended]
+}
 
 object parseJsonFile {
   def apply[T](fpath: String)(implicit reads: Reads[T]): T = {
@@ -365,6 +410,17 @@ object parseJsonFile {
       case JsSuccess(value, _) => value
       case JsError(errors) => throw new Exception(s"Error parsing JSON file: $errors")
     }
+  }
+}
+
+
+object dumpJsonFile {
+  def apply[T](fpath: String, data: T)(implicit writes: Writes[T]): Unit = {
+    val json = Json.toJson(data)
+    val jsonString = Json.prettyPrint(json)
+    val writer = new java.io.PrintWriter(fpath)
+    writer.write(jsonString)
+    writer.close()
   }
 }
 

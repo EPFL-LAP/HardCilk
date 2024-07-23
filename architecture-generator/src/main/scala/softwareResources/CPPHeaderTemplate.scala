@@ -1,8 +1,9 @@
 package softwareResources
 import descriptors._
+import java.io.PrintWriter
 
 object CppHeaderTemplate {
-  def generateCppHeader(descriptor: fullSysGenDescriptor): String = {
+  def generateCppHeader(descriptor: fullSysGenDescriptor, headerFileDirectory: String): Int = {
     // Generate TaskDescriptor class
     val taskDescriptorClass =
       s"""
@@ -17,6 +18,7 @@ object CppHeaderTemplate {
          |    int widthTask;
          |    std::vector<SideConfig> sidesConfigs;
          |    MemSystemDescriptor mgmtBaseAddresses;
+         |    std::map<uint64_t,std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
          |
          |    int getNumServers(const std::string& sideType) const {
          |        assert(sideType == "scheduler" || sideType == "allocator" || 
@@ -69,6 +71,7 @@ object CppHeaderTemplate {
          """.stripMargin
     }.mkString(",\n")
 
+    val  headerContent =
     s"""
        |#ifndef FULLSYS_DESCRIPTOR_H
        |#define FULLSYS_DESCRIPTOR_H
@@ -76,6 +79,8 @@ object CppHeaderTemplate {
        |#include <string>
        |#include <vector>
        |#include <cassert>
+       |#include <stdint.h>
+       |#include <map>
        |
        |class MemSystemDescriptor {
        |public:
@@ -108,6 +113,12 @@ object CppHeaderTemplate {
        |
        |#endif // FULLSYS_DESCRIPTOR_H
        """.stripMargin
+
+      val writer = new PrintWriter(f"$headerFileDirectory/FullSysGenDescriptor.h")
+      writer.write(headerContent)
+      writer.close()
+
+      return 0
   }
 
   private def generateSideConfig(sidesConfigs: List[sideConfig]): String = {
