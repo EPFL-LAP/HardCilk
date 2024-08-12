@@ -1,6 +1,6 @@
 package tclResources
 
-import descriptors.fullSysGenDescriptor
+import descriptors._
 
 class tclGeneralConfigs(){
 
@@ -25,7 +25,7 @@ class tclGeneralConfigs(){
 
         """)
 
-        for(i <- 0 until totalAXIPorts){
+        for(i <- 0 until math.min(totalAXIPorts, 32)){
             // Connecting the constant to the parity bits of the HBM
            sb.append("connect_bd_net [get_bd_pins xlconstant_0/dout] [get_bd_pins hbm_0/AXI_"+f"${i}%02d"+"_WDATA_PARITY]\n")
         }
@@ -127,7 +127,7 @@ class tclGeneralConfigs(){
         """
     }
 
-    def getSytstemClockingAndResetConfigTclSyntax(descrpt: fullSysGenDescriptor): String = {
+    def getSytstemClockingAndResetConfigTclSyntax(descriptor: fullSysGenDescriptor): String = {
         val sb = new StringBuilder
 
         // Create and configure the clock wizard
@@ -138,7 +138,7 @@ class tclGeneralConfigs(){
             CONFIG.CLKOUT1_DRIVES {Buffer} \
             CONFIG.CLKOUT1_JITTER {98.427} \
             CONFIG.CLKOUT1_PHASE_ERROR {87.466} \""" +
-            f"CONFIG.CLKOUT1_REQUESTED_OUT_FREQ ${descrpt.targetFrequency}%.3f"+ """\""" + 
+            f"CONFIG.CLKOUT1_REQUESTED_OUT_FREQ ${descriptor.targetFrequency}%.3f"+ """\""" + 
             """
             CONFIG.CLKOUT2_DRIVES {Buffer} \
             CONFIG.CLKOUT3_DRIVES {Buffer} \
@@ -146,7 +146,6 @@ class tclGeneralConfigs(){
             CONFIG.CLKOUT5_DRIVES {Buffer} \
             CONFIG.CLKOUT6_DRIVES {Buffer} \
             CONFIG.CLKOUT7_DRIVES {Buffer} \
-            CONFIG.CLK_IN1_BOARD_INTERFACE {pcie_refclk} \
             CONFIG.ENABLE_CDDC {false} \
             CONFIG.ENABLE_CLOCK_MONITOR {false} \
             CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} \
@@ -169,7 +168,7 @@ class tclGeneralConfigs(){
 
         // Connect the axi clocks to this clock
         sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins hbm_0/AXI_*_ACLK]\n")
-        sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins compute_0/clk]\n")
+        sb.append(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ${descriptor.name}_0/clock]\n")
         sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_clock_converter_0/m_axi_aclk]\n")
         sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_clock_converter_1/m_axi_aclk]\n")
 
@@ -183,10 +182,17 @@ class tclGeneralConfigs(){
         sb.append("connect_bd_net [get_bd_pins clk_wiz_0/locked] [get_bd_pins proc_sys_reset_1/dcm_locked]\n")
         sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out1]\n")
         sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins hbm_0/AXI_*_ARESET_N]\n")
-        sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins compute_0/reset_n]\n")
+        sb.append(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_reset] [get_bd_pins ${descriptor.name}_0/reset]\n")
         sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_clock_converter_0/m_axi_aresetn]\n")
         sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_clock_converter_1/m_axi_aresetn]\n")
         sb.append("connect_bd_net [get_bd_ports PCIE_PERST_LS_65] [get_bd_pins proc_sys_reset_1/ext_reset_in]\n")
+
+
+        sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins smartconnect*/*clk]\n") // for the   smartconnects
+        sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins smartconnect*/*aresetn]\n") // for the smartconnects reset
+
+        sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter*/*clk*]\n") // for the   smartconnects
+        sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter*/*aresetn*]\n") // for the smartconnects reset
 
         sb.toString()
     }

@@ -9,14 +9,14 @@ import continuationSide._
 import argRouting._
 import commonInterfaces._
 
-import chext.axi4
-import chext.axis4
+import chext.amba.axi4
+import chext.amba.axi4s
 
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
 
-import axis4.Casts._
-import chext.axi4.full.components._
+import axi4s.Casts._
+import chext.amba.axi4.full.components._
 import hardcilk.util.readyValidMem
 
 import AXIHelpers.axisDwConverter
@@ -25,9 +25,14 @@ class continuationAllocationSideIO_export(
     val pePortWidth: Int,
     val peCount: Int,    
 ) extends Bundle {
-    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = pePortWidth, onlyRV = true)
-    val closureOut    = Vec(peCount, axis4.Master(axisCfgAddress))
-    
+    implicit val axisCfgAddress: axi4s.Config = axi4s.Config(wData = pePortWidth, onlyRV = true)
+    val closureOut    = Vec(peCount, axi4s.Master(axisCfgAddress))
+
+    def getPort(name: String, index: Int): axi4s.Interface = {
+        name match {
+            case "closureOut" => closureOut(index)
+        }
+    }   
 }
 
 class continuationAllocationSideIO_internal(
@@ -78,7 +83,8 @@ class continuationAllocationSide(
     val vcasAxiFullCfg = axi4.Config(
         wAddr = addrWidth,
         wData = addrWidth,
-        lite = false
+        lite = false,
+        wId = 1
     )
 
     val io_export = IO(new continuationAllocationSideIO_export(pePortWidth=pePortWidth, peCount=peCount))

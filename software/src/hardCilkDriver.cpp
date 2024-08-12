@@ -1,15 +1,21 @@
 #include "hardCilkDriver.h"
 
 
-hardCilkDriver::hardCilkDriver(bool pcie){
-    pcie_flag = pcie;
-    if(pcie_flag){
-        // Open the PCIe device and map the address space
+hardCilkDriver::hardCilkDriver(){
+    #ifdef PCIE
         if(d4e_xil_device_open(&xil_device, "/dev/xdma0", 0, 0, MAP_SZ) < 0)
             throw std::runtime_error("Failed to open the device");
-    } else {
-        throw std::runtime_error("Not implemented yet, only PCIe is supported for now.");
-    }
+        return;
+    #endif
+
+    #ifdef SYSTEM_C
+        // Do something
+        
+        return;
+    #endif
+
+    throw std::runtime_error("Not implemented yet, only PCIe is supported for now.");
+    
 }
 
 hardCilkDriver::~hardCilkDriver(){

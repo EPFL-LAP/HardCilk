@@ -6,13 +6,13 @@ import chisel3.ChiselEnum
 import commonInterfaces._
 import os.stat
 
-import chext.axi4
-import chext.axis4
+import chext.amba.axi4
+import chext.amba.axi4s
 
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
 
-import axis4.Casts._
+import axi4s.Casts._
 
 class argRouteVirtServerV2IO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int) extends Bundle {
     val connNetwork   = Flipped(DecoupledIO(UInt(sysAddressWidth.W)))

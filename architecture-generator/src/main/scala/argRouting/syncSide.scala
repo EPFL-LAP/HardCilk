@@ -9,14 +9,14 @@ import continuationSide._
 import argRouting._
 import commonInterfaces._
 
-import chext.axi4
-import chext.axis4
+import chext.amba.axi4
+import chext.amba.axi4s
 
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
-import chext.axi4.full.components._
+import chext.amba.axi4.full.components._
 
-import axis4.Casts._
+import axi4s.Casts._
 
 import hardcilk.util.readyValidMem
 import AXIHelpers.axisDwConverter
@@ -26,9 +26,16 @@ class syncSideIO(
     val peCount: Int,  
     ) extends Bundle{
     
-    implicit val axisCfgAddress: axis4.Config = axis4.Config(wData = pePortWidth, onlyRV = true)
+    implicit val axisCfgAddress: axi4s.Config = axi4s.Config(wData = pePortWidth, onlyRV = true)
     
-    val argIn = Vec(peCount, axis4.Slave(axisCfgAddress))
+    val argIn = Vec(peCount, axi4s.Slave(axisCfgAddress))
+    
+    // a getter function for the port with name and index
+    def getPort(name: String, index: Int): axi4s.Interface = {
+        name match {
+            case "argIn" => argIn(index)
+        }
+    }
     
 }    
 
@@ -43,10 +50,10 @@ class syncSide(
     val pePortWidth: Int
 ) extends Module {
 
-    val io = IO(new syncSideIO(pePortWidth=pePortWidth, peCount=peCount))
+    val io_export = IO(new syncSideIO(pePortWidth=pePortWidth, peCount=peCount))
     val connStealNtw = IO(Vec(argRouteServersNumber, Flipped(new stNwStSrvConn(taskWidth))))
     
-
+    assert(isPow2(argRouteServersNumber) && argRouteServersNumber > 1)
     val argSide = Module(new argRouteNetwork( addrWidth = addrWidth,
                                               taskWidth = taskWidth, 
                                               peCount = peCount,
@@ -94,10 +101,10 @@ class syncSide(
     }       
 
 
-    val axis_stream_converters_in = Seq.fill(peCount)(Module(new axisDwConverter(dataWidthIn = pePortWidth, dataWidthOut = taskWidth)))
+    val axis_stream_converters_in = Seq.fill(peCount)(Module(new axisDwConverter(dataWidthIn = pePortWidth, dataWidthOut = addrWidth)))
     for(i <- 0 until peCount){
         axis_stream_converters_in(i).io.dataOut.lite <> argSide.io.connPE(i)
-        io.argIn(i).lite <> axis_stream_converters_in(i).io.dataIn.lite
+        io_export.argIn(i).lite <> axis_stream_converters_in(i).io.dataIn.lite
     }
 }
 
@@ -113,8 +120,8 @@ class wrapper() extends Module {
                         )
     
 
-    val syncConn = IO(chiselTypeOf(alloc.io)).suggestName("fib")
-    syncConn <> alloc.io
+    val syncConn = IO(chiselTypeOf(alloc.io_export)).suggestName("fib")
+    syncConn <> alloc.io_export
 
     val internalConn = IO(chiselTypeOf(alloc.connStealNtw)).suggestName("fib_internal")
     internalConn <> alloc.connStealNtw

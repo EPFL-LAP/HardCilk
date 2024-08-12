@@ -15,9 +15,8 @@ lazy val root = (project in file("."))
       "org.chipsalliance" %% "chisel" % chiselVersion,
       "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
       "com.typesafe.play" %% "play-json" % "2.9.2",
-      "jnbrq" %% "strenc-scala" % "0.1.0",
-      "jnbrq" %% "chisel3-interface" % "0.1.0",
-      "epfl-lap" %% "chext" % "0.1.0"
+      "hdlstuff" %% "chext" % "0.1.0",
+      "hdlstuff" %% "hdlinfo" % "0.1.0"
     ) ++ Seq(
       "io.circe" %% "circe-core",
       "io.circe" %% "circe-generic",

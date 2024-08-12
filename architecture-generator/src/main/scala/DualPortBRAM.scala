@@ -6,7 +6,7 @@
 
 package dualPortBRAM
 
-import chisel3._
+import  chisel3._
 import chisel3.util._
 import commonInterfaces._
 
@@ -36,8 +36,8 @@ class DualPortBRAM(addrBits: Int, dataBits: Int) extends BlackBox (Map( "DATA" -
 
   assert(generationType == "Simulation" || generationType == "Synthesis")
 
-  if (generationType == "Simulation")
-    addResource("DualPortBRAM_sim.v")
-  else
-    addResource("DualPortBRAM_xpm.v")
+  // if (generationType == "Simulation")
+  //   addResource("DualPortBRAM_sim.v")
+  // else
+  //   addResource("DualPortBRAM_xpm.v")
 }

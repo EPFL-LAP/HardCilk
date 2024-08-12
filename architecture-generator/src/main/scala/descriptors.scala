@@ -48,6 +48,7 @@ case class portDescriptor(
       "err"
     }
   } 
+
 }
 
 
@@ -89,6 +90,7 @@ case class sideConfig(
 case class taskDescriptor(
     name: String,
     peVersion: String = "1.0",
+    peHDLPath: String = "",
 
     isRoot: Boolean,
     isCont: Boolean,
@@ -156,8 +158,9 @@ case class fullSysGenDescriptor(
     val spawnList: Map[String, List[String]],
     val spawnNextList: Map[String, List[String]],
     val sendArgumentList: Map[String, List[String]],
-    val cfgAxiHardCilk: chext.axi4.Config = chext.axi4.Config(),
-    val targetFrequency: Int = 250 
+    val cfgAxiHardCilk: chext.amba.axi4.Config = chext.amba.axi4.Config(),
+    val targetFrequency: Int = 250,
+    val memorySizeSim: Int = 1, // in GB
 ) {
   assert(isPow2(widthAddress) && widthAddress <= 64)
   assert(isPow2(widthContCounter) && widthContCounter <= 64)
@@ -288,31 +291,35 @@ case class fullSysGenDescriptor(
 
   def getSystemAXIPortsNames(): List[String] = {
     val schedulerPorts = taskDescriptors.flatMap { task =>
-      (0 until task.getNumServers("scheduler")).map { i =>
-        if(task.getNumServers("scheduler") == 1) f"${task.name}_schedulerAXI"
-        else f"${task.name}_schedulerAXI_${i}"
-      }
+      if(task.getNumServers("scheduler") > 0) List(f"${task.name}_schedulerAXI") else List()
+      // (0 until task.getNumServers("scheduler")).map { i =>
+      //   if(task.getNumServers("scheduler") == 1) f"${task.name}_schedulerAXI"
+      //   else f"${task.name}_schedulerAXI_${i}"
+      // }
     }
 
     val allocatorPorts = taskDescriptors.flatMap { task =>
-      (0 until task.getNumServers("allocator")).map { i =>
-        if(task.getNumServers("allocator") == 1) f"${task.name}_closureAllocatorAXI"
-        else f"${task.name}_closureAllocatorAXI_${i}"
-      }
+      if(task.getNumServers("allocator") > 0) List(f"${task.name}_closureAllocatorAXI") else List()
+      // (0 until task.getNumServers("allocator")).map { i =>
+      //   if(task.getNumServers("allocator") == 1) f"${task.name}_closureAllocatorAXI"
+      //   else f"${task.name}_closureAllocatorAXI_${i}"
+      // }
     }
 
     val argumentNotifierPorts = taskDescriptors.flatMap { task =>
-      (0 until task.getNumServers("argumentNotifier")).map { i =>
-        if(task.getNumServers("argumentNotifier") == 1) f"${task.name}_argumentNotifierAXI"
-        else f"${task.name}_argumentNotifierAXI_${i}"
-      }
+      if(task.getNumServers("argumentNotifier") > 0) List(f"${task.name}_argumentNotifierAXI") else List()
+      // (0 until task.getNumServers("argumentNotifier")).map { i =>
+      //   if(task.getNumServers("argumentNotifier") == 1) f"${task.name}_argumentNotifierAXI"
+      //   else f"${task.name}_argumentNotifierAXI_${i}"
+      // }
     }
 
     val memoryAllocatorPorts = taskDescriptors.flatMap { task =>
-      (0 until task.getNumServers("memoryAllocator")).map { i =>
-        if(task.getNumServers("memoryAllocator") == 1) f"${task.name}_memoryAllocatorAXI"
-        else f"${task.name}_memoryAllocatorAXI_${i}"
-      }
+      if(task.getNumServers("memoryAllocator") > 0) List(f"${task.name}_memoryAllocatorAXI") else List()
+      // (0 until task.getNumServers("memoryAllocator")).map { i =>
+      //   if(task.getNumServers("memoryAllocator") == 1) f"${task.name}_memoryAllocatorAXI"
+      //   else f"${task.name}_memoryAllocatorAXI_${i}"
+      // }
     }
 
 
@@ -369,8 +376,8 @@ object fullSysGenDescriptor {
     implicit val taskDescriptorReads: Reads[taskDescriptor] = Json.using[Json.WithDefaultValues].reads[taskDescriptor]
     implicit val taskDescriptorWrites: Writes[taskDescriptor] = Json.using[Json.WithDefaultValues].writes[taskDescriptor]
     
-    implicit val cfgAxiHardCilkReads: Reads[chext.axi4.Config] = Json.using[Json.WithDefaultValues].reads[chext.axi4.Config]
-    implicit val cfgAxiHardCilkWrites: Writes[chext.axi4.Config] = Json.using[Json.WithDefaultValues].writes[chext.axi4.Config]
+    implicit val cfgAxiHardCilkReads: Reads[chext.amba.axi4.Config] = Json.using[Json.WithDefaultValues].reads[chext.amba.axi4.Config]
+    implicit val cfgAxiHardCilkWrites: Writes[chext.amba.axi4.Config] = Json.using[Json.WithDefaultValues].writes[chext.amba.axi4.Config]
 
     implicit val fullSysGenDescriptorReads: Reads[fullSysGenDescriptor] = Json.using[Json.WithDefaultValues].reads[fullSysGenDescriptor]
     implicit val fullSysGenDescriptorWrites: Writes[fullSysGenDescriptor] = Json.using[Json.WithDefaultValues].writes[fullSysGenDescriptor]

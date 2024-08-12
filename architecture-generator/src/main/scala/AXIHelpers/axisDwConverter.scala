@@ -3,8 +3,8 @@ package AXIHelpers
 import chisel3._
 import chisel3.util._
 
-import chext.axis4
-import axis4.Casts._
+import chext.amba.axi4s
+import axi4s.Casts._
 
 import chisel3.ChiselEnum
 import os.read
@@ -12,11 +12,11 @@ import _root_.circt.stage.ChiselStage
 
 class axisDwConverter_IO(val dataWidthIn: Int, val dataWidthOut: Int) extends Bundle {
 
-    implicit val axisCfgSlave: axis4.Config = axis4.Config(wData = dataWidthIn, onlyRV = true)
-    implicit val axisCfgMaster: axis4.Config = axis4.Config(wData = dataWidthOut, onlyRV = true)
+    implicit val axisCfgSlave: axi4s.Config = axi4s.Config(wData = dataWidthIn, onlyRV = true)
+    implicit val axisCfgMaster: axi4s.Config = axi4s.Config(wData = dataWidthOut, onlyRV = true)
 
-    val dataIn = axis4.Slave(axisCfgSlave)
-    val dataOut = axis4.Master(axisCfgMaster)
+    val dataIn = axi4s.Slave(axisCfgSlave)
+    val dataOut = axi4s.Master(axisCfgMaster)
 
 }
 
@@ -128,7 +128,9 @@ class axisDwConverter(val dataWidthIn: Int, val dataWidthOut: Int) extends Modul
         downScaler.io.dataIn <> io.dataIn
         io.dataOut <> downScaler.io.dataOut
     } else{
-        io.dataOut <> io.dataIn
+        io.dataOut.TDATA := io.dataIn.TDATA
+        io.dataOut.TVALID := io.dataIn.TVALID
+        io.dataIn.TREADY := io.dataOut.TREADY
     }
 
 }

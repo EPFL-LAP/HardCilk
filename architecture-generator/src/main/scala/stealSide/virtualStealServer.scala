@@ -8,7 +8,7 @@ import os.stat
 import scala.annotation.tailrec
 
 import chisel3.experimental.prefix
-import chext.axi4
+import chext.amba.axi4
 import axi4._
 import axi4.Ops._
 import chext.elastic.ConnectOp._

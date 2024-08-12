@@ -4,12 +4,11 @@ import chisel3._
 import chisel3.util._
 import os.truncate
 
-import chext.axi4
+import chext.amba.axi4
 
 import axi4._
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
-import chisel3.stage.ChiselStage
 
 
 class readValidMemIO(taskWidth: Int, addrWidth: Int, readFlag: Boolean, writeFlag: Boolean, varBurst: Boolean) extends Bundle {

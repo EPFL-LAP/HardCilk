@@ -4,13 +4,13 @@ import chisel3._
 import chisel3.util._
 import chisel3.ChiselEnum
 
-import chext.axi4
-import chext.axis4
+import chext.amba.axi4
+import chext.amba.axi4s
 
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
 
-import axis4.Casts._
+import axi4s.Casts._
 
 
 class virtContAddrServerIO(dataWidth: Int, regBlock:RegisterBlock, sysAddressWidth: Int) extends Bundle {

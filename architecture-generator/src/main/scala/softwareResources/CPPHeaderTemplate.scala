@@ -109,6 +109,32 @@ object CppHeaderTemplate {
        |    std::vector<TaskDescriptor> taskDescriptors = {
        |        ${taskDescriptorsInit}
        |    };
+       |    int getNumberAxiMasters() const
+       |    {
+       |        int numMasters = 0;
+       |        for (const auto &task : taskDescriptors)
+       |        {
+       |            // For each task, each side has a single master if the side exists
+       |            numMasters += (task.getNumServers("scheduler") > 0) ? 1 : 0;
+       |            numMasters += (task.getNumServers("allocator") > 0) ? 1 : 0;
+       |            numMasters += (task.getNumServers("argumentNotifier") > 0) ? 1 : 0;
+       |            numMasters += (task.getNumServers("memoryAllocator") > 0) ? 1 : 0;
+       |
+       |            // For each PE of each task there is a master
+       |            numMasters += task.numProcessingElements;
+       |        }
+       |        return numMasters;
+       |    }
+       |    int getNumberPEsAXISlaves() const
+       |    {
+       |        int numSlaves = 0;
+       |        for (const auto &task : taskDescriptors)
+       |        {
+       |            numSlaves += task.numProcessingElements;
+       |        }
+       |        return numSlaves;
+       |    }
+       |
        |};
        |
        |#endif // FULLSYS_DESCRIPTOR_H

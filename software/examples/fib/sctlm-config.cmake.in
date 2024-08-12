@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.15)
+
+# https://cmake.org/cmake/help/book/mastering-cmake/chapter/Finding%20Packages.html
+get_filename_component(SCTLM_CONFIG_CMAKE "${CMAKE_CURRENT_LIST_FILE}" PATH)
+get_filename_component(SCTLM_INSTALL_PREFIX "${SCTLM_CONFIG_CMAKE}/../.." ABSOLUTE)
+
+
+set(CMAKE_CXX_STANDARD @CMAKE_CXX_STANDARD@)
+set(VERILATOR_ARGS --pins-bv 2 --trace -Wno-SYMRSVDWORD)
+
+include("${SCTLM_INSTALL_PREFIX}/lib/sctlm/sctlm-targets.cmake")

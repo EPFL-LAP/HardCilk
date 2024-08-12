@@ -7,6 +7,13 @@ set(CMAKE_CXX_STANDARD 11)
 # Locate all source files
 file(GLOB SOURCES "src/*.cpp" "include/*.h" "include/*.tpp")
 
+
+find_package(SystemCLanguage REQUIRED)
+find_package(fmt REQUIRED)
+find_package(verilator REQUIRED)
+find_package(hdlscw REQUIRED)
+find_package(sctlm REQUIRED)
+
 # Add executable target
 add_executable(HardCilkDriver ${SOURCES})
 
@@ -19,4 +26,4 @@ add_subdirectory(svm/software/util)
 add_subdirectory(svm/software/d4e)
 add_subdirectory(svm/software/com9n)
 
-target_link_libraries(HardCilkDriver PUBLIC svm::d4e)
+target_link_libraries(HardCilkDriver PUBLIC svm::d4e sctlm::sctlm)

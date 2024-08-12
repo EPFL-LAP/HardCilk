@@ -3,12 +3,12 @@
     "taskDescriptors": [
         {
             "name": "fib",
-
+            "peHDLPath": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/fib/hdl/verilog",
             "isRoot": true,
             "isCont": false,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 2,
+            "numProcessingElements": 50,
             "widthTask": 128,
             "sidesConfigs": [
                 {
@@ -23,12 +23,12 @@
         },
         {
             "name": "sum",
-
+            "peHDLPath": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/sum/hdl/verilog",
             "isRoot": false,
             "isCont": true,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 2,
+            "numProcessingElements": 32,
             "widthTask": 256,
 
 
@@ -43,13 +43,13 @@
                 {
                     "sideType": "allocator",
                     "numVirtualServers": 1,  
-                    "capacityVirtualQueue": 128,
+                    "capacityVirtualQueue": 100000,
                     "capacityPhysicalQueue": 32,
                     "portWidth": 64
                 },
                 {
                     "sideType": "argumentNotifier",
-                    "numVirtualServers": 1,  
+                    "numVirtualServers": 2,  
                     "capacityVirtualQueue": 128,
                     "capacityPhysicalQueue": 32,
                     "portWidth": 64
@@ -68,5 +68,6 @@
         "sum": ["sum"]
     },
     "widthAddress":64,
-    "widthContCounter":32
+    "widthContCounter":32,
+    "memorySizeSim": 1
 }

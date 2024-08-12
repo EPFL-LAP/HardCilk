@@ -3,7 +3,7 @@ package sysGen
 import chisel3._
 import chisel3.util._
 
-import axis4._
+import axi4s._
 import stealSide._
 import continuationSide._
 import argRouting._
@@ -32,10 +32,10 @@ class sysGenHDL( sysAddressWidth : Int,
 
     // Instantiate the IOs
     val io = IO(new Bundle {
-        val taskOut    = Vec(peCount, axis4.Master(axisCfgTask))
-        val taskIn     = Vec(peCount, axis4.Slave(axisCfgTask))
-        val contOut    = Vec(peCount, axis4.Master(axisCfgAddress))
-        val addrIn     = Vec(peCount, axis4.Slave(axisCfgAddress))
+        val taskOut    = Vec(peCount, axi4s.Master(axisCfgTask))
+        val taskIn     = Vec(peCount, axi4s.Slave(axisCfgTask))
+        val contOut    = Vec(peCount, axi4s.Master(axisCfgAddress))
+        val addrIn     = Vec(peCount, axi4s.Slave(axisCfgAddress))
     })
 
 

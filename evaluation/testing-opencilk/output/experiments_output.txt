@@ -1,5 +1,0 @@
-Experiment: paper_exp1
-	 Workers Count            8 | Delay:           16 | T1:     0.342017 | TN_perfect:  0.042752125  | TN:    0.0809674 | Efficiency:         52.8%
-	 Workers Count            8 | Delay:           32 | T1:     0.697659 | TN_perfect:  0.087207375  | TN:       0.1484 | Efficiency:        58.77%
-	 Workers Count            8 | Delay:           64 | T1:      1.69146 | TN_perfect:    0.2114325  | TN:     0.297342 | Efficiency:        71.11%
-===================================================

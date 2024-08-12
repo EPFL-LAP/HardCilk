@@ -10,14 +10,14 @@ import commonInterfaces._
 
 import hardcilk.util.readyValidMem
 
-import chext.axi4
-import chext.axis4
+import chext.amba.axi4
+import chext.amba.axi4s
 
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
-import chext.axi4.full.components._
+import chext.amba.axi4.full.components._
 
-import axis4.Casts._
+import axi4s.Casts._
 import AXIHelpers.axisDwConverter
 
 class stealSideIO_export(
@@ -27,13 +27,22 @@ class stealSideIO_export(
     val peCountGlobalTaskIn: Int,
     ) extends Bundle{
 
-    implicit val axisCfgTask: axis4.Config    = axis4.Config(wData = pePortWidth, onlyRV = true)
+    implicit val axisCfgTask: axi4s.Config    = axi4s.Config(wData = pePortWidth, onlyRV = true)
 
 
-    val taskOut = Vec(peCount, axis4.Master(axisCfgTask))    
+    val taskOut = Vec(peCount, axi4s.Master(axisCfgTask))    
 
-    val taskIn = if (spawnsItself) Some(Vec(peCount, axis4.Slave(axisCfgTask))) else None
-    val taskInGlobal = if (peCountGlobalTaskIn > 0) Some(Vec(peCountGlobalTaskIn, axis4.Slave(axisCfgTask))) else None
+    val taskIn = if (spawnsItself) Some(Vec(peCount, axi4s.Slave(axisCfgTask))) else None
+    val taskInGlobal = if (peCountGlobalTaskIn > 0) Some(Vec(peCountGlobalTaskIn, axi4s.Slave(axisCfgTask))) else None
+
+    // a getter function for the port with name and index
+    def getPort(name: String, index: Int): axi4s.Interface = {
+        name match {
+            case "taskOut" => taskOut(index)
+            case "taskIn" => taskIn.get(index)
+            case "taskInGlobal" => taskInGlobal.get(index)
+        }
+    }
 }
 
 class stealSideIO_internal(
@@ -67,7 +76,8 @@ class stealSide(
     val vssAxiFullCfg = axi4.Config(
         wAddr = addrWidth,
         wData = taskWidth,
-        lite = false
+        lite = false,
+        wId = 1
     )
 
     val stealNW_TQ = Module(new stealNW_TQ( peCount = peCount,

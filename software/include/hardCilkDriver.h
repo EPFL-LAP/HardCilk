@@ -1,3 +1,5 @@
+#define PCIE
+#define SYSTEM_C
 #ifndef DRIVER_H
 #define DRIVER_H
 
