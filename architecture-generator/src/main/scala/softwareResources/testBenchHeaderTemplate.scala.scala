@@ -13,7 +13,7 @@ object testBenchHeaderTemplate {
         |#define TESTBENCH_H
         |
         |
-        |#include <fibonacci.hpp>
+        |#include <${descriptor.name}.hpp>
         |#include <FullSysGenDescriptor.h>
         |#include <systemc>
         |#include <tlm>
@@ -27,14 +27,17 @@ object testBenchHeaderTemplate {
         |using namespace sc_core;
         |using namespace sc_dt;
         |
+        | #include <${descriptor.name}Driver.h>
+        | #include <memIO_tlm.h>
         |
         |FullSysGenDescriptor helperDescriptor;
-        |// A memory of 1 GB
-        |#define memorySize ${descriptor.memorySizeSim} * 1024 * 1024 * 1024 
+        |// A memory of ${descriptor.memorySizeSim} GB
+        |#define memorySize ${descriptor.memorySizeSim}ull * 1024ull * 1024ull * 1024ull 
         |
         |class TestBench : public sc_module {
         |public:
         |
+        |    SC_HAS_PROCESS(TestBench);
         |    TestBench(const sc_module_name& name = "TestBench")
         |        : sc_module(name)
         |        , memory_("memory", sc_time(0, SC_NS), memorySize, 0, nullptr)
@@ -42,7 +45,10 @@ object testBenchHeaderTemplate {
         |        , iconnectPEMgmt_("iconnectPEMgmt", 1, helperDescriptor.getNumberPEsAXISlaves())
         |        , memoryDriverMemory_("memoryDriverMemory")
         |        , memoryDriverManagement_("memoryDriverManagement")
-        |        , clock_("clock", sc_time(2, SC_NS)) {
+        |        , clock_("clock", sc_time(2, SC_NS)
+        |        , mem_(memoryDriverMemory_, memoryDriverManagement_)
+        |        , driver_(&mem_)
+        |         {
         |
         |        myModule = new ${descriptor.name}("myModule");
         |        myModule->reset(reset_);
@@ -59,7 +65,12 @@ object testBenchHeaderTemplate {
         |        iconnectPEMgmt_.memmap(0x0000, 0x1000, 0);
         |
         |        memoryDriverManagement_.socket.bind(myModule->s_axil_mgmt_hardcilk);
+        |        SC_THREAD(thread);
         |        
+        |    }
+        |
+        |    void thread(){
+        |       driver_.run_test_bench();
         |    }
         |
         |    ${descriptor.name} * myModule;
@@ -70,8 +81,10 @@ object testBenchHeaderTemplate {
         |    sctlm::tlm_lib::drivers::memory_interface memoryDriverManagement_;
         |    sctlm::tlm_lib::drivers::memory_interface peMgmtDriver_; // Connected but not used
         |
+        |    TlmMemory mem_;
         |    sc_signal<bool> reset_;
         |    sc_clock clock_;
+        |    ${descriptor.name}Driver driver_;
         |};
         |
         |#endif
