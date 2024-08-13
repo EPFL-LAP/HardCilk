@@ -32,7 +32,7 @@ object testBenchHeaderTemplate {
         |
         |FullSysGenDescriptor helperDescriptor;
         |// A memory of ${descriptor.memorySizeSim} GB
-        |#define memorySize ${descriptor.memorySizeSim}ull * 1024ull * 1024ull * 1024ull 
+        |#define memorySize (${descriptor.memorySizeSim}ull * 1024ull * 1024ull * 1024ull) 
         |
         |class TestBench : public sc_module {
         |public:
@@ -45,7 +45,7 @@ object testBenchHeaderTemplate {
         |        , iconnectPEMgmt_("iconnectPEMgmt", 1, helperDescriptor.getNumberPEsAXISlaves())
         |        , memoryDriverMemory_("memoryDriverMemory")
         |        , memoryDriverManagement_("memoryDriverManagement")
-        |        , clock_("clock", sc_time(2, SC_NS)
+        |        , clock_("clock", sc_time(2, SC_NS))
         |        , mem_(memoryDriverMemory_, memoryDriverManagement_)
         |        , driver_(&mem_)
         |         {
@@ -70,6 +70,10 @@ object testBenchHeaderTemplate {
         |    }
         |
         |    void thread(){
+        |       reset_.write(true);
+        |       wait(10.0, SC_NS);
+        |       reset_.write(false);
+        |       wait(10.0, SC_NS);
         |       driver_.run_test_bench();
         |    }
         |
