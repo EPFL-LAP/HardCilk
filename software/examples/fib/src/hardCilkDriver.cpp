@@ -78,7 +78,7 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     uint64_t maxLength = memory_->readReg64(base_address + scheduler_server_maxLength_shift);
 
     // Log the information of calling this function 
-    std::cout << "Managing scheduler server of task type " << taskDescriptor.name << " at address " << base_address << "with rAddress " << addr << " and maxLength " << maxLength << std::endl;
+    std::cout << "Managing scheduler server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << " and maxLength " << maxLength << std::endl;
 
     freed_mem_blocks.push_back(freedMemBlock{addr, maxLength*taskDescriptor.widthTask/8}); // Free the memory and write it in bytes.
 
@@ -96,8 +96,8 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     memory_->writeReg64(base_address + scheduler_server_raddr_shift, new_addr);
 
     // Write the new head and tail registers
-    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, 0x0);
-    memory_->writeReg64(base_address + scheduler_server_fifoHeadReg_shift, maxLength);
+    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, maxLength);
+    memory_->writeReg64(base_address + scheduler_server_fifoHeadReg_shift, 0x0);
 
     // Write the new MaxLength
     memory_->writeReg64(base_address + scheduler_server_maxLength_shift, maxLength * 2);
@@ -133,7 +133,7 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
         // iterate over data and check if the value is less than 0
         for(int i = 0; i < address.second && addresses.size() < size; i++){
             int val = *(int *)(data + i * taskDescriptor.widthTask/8);            
-            if(val < 0){
+            if(val == 0x1000000){
                 // Indication of a freed closure, shall be tagged from the PE
                 addresses.push_back(address.first + i * taskDescriptor.widthTask/8);
             }
