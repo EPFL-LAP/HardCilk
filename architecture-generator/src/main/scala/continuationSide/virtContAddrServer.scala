@@ -76,7 +76,7 @@ class virtContAddrServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int)
 
         when(burstCounter === 0.U && io.read_data.valid){
             stateReg      := state.giveData
-            avaialbleSize := avaialbleSize - (burstLength + 1).U
+            avaialbleSize := avaialbleSize - 1.U
             burstCounter  := burstLength.U
         }
 
