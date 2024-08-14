@@ -1,0 +1,247 @@
+<ENTRY>
+{
+ "thisFile": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/fib.hlscompile_summary",
+ "connectId": "",
+ "serverToken": "",
+ "timestamp": "0"
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_CmdStep",
+ "dateTimestamp": "Tue Aug  6 21:59:43 2024",
+ "timestampMillis": "1722974383523",
+ "buildStep": {
+  "cmdId": "ac966a7c-f7ee-44bd-b6b0-82b146b82996",
+  "name": "v++",
+  "logFile": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/logs/fib.steps.log",
+  "commandLine": "/toolsB/Xilinx/Vitis/2024.1/bin/unwrapped/lnx64.o/v++  -c --mode hls --config /toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/hls_config.cfg --work_dir fib ",
+  "args": [
+   "-c",
+   "--mode",
+   "hls",
+   "--config",
+   "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/hls_config.cfg",
+   "--work_dir",
+   "fib"
+  ],
+  "iniFiles": [
+   {
+    "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/hls_config.cfg",
+    "content": "part=xcu55c-fsvh2892-2L-e\n\n[hls]\nflow_target=vivado\npackage.output.format=ip_catalog\npackage.output.syn=false\nsyn.top=fib\nclock=250MHz\nsyn.file=fib.cpp\nsyn.file=sum.cpp\nsyn.file=fib.h\ncosim.disable_deadlock_detection=1"
+   }
+  ],
+  "cwd": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Tue Aug  6 21:59:43 2024",
+ "timestampMillis": "1722974383523",
+ "status": {
+  "cmdId": "ac966a7c-f7ee-44bd-b6b0-82b146b82996",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_FlowMetaData",
+ "dateTimestamp": "Tue Aug  6 21:59:47 2024",
+ "timestampMillis": "1722974387590",
+ "buildSummary": {
+  "hardwarePlatform": "",
+  "hardwareDsa": "",
+  "platformDirectory": "",
+  "runtime": "",
+  "systemConfig": "",
+  "flow": "BF_COMPILE",
+  "target": "TT_HW",
+  "kernels": [
+   {
+    "base": {
+     "type": "KERNEL",
+     "name": "fib",
+     "file": "",
+     "reports": [],
+     "uuid": ""
+    },
+    "sources": [
+     "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib.cpp",
+     "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/sum.cpp",
+     "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib.h"
+    ],
+    "psSources": [],
+    "cuNames": [],
+    "type": "HLS",
+    "frequency": 0,
+    "freqUnits": ""
+   }
+  ],
+  "toolVersion": "2024.1"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_SubCmdStep",
+ "dateTimestamp": "Tue Aug  6 21:59:47 2024",
+ "timestampMillis": "1722974387591",
+ "buildStep": {
+  "cmdId": "a7d397e5-1681-4b20-9b94-774d163672fb",
+  "name": "csynth_design",
+  "logFile": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/hls/hls.log",
+  "commandLine": "csynth_design",
+  "args": [],
+  "iniFiles": [],
+  "cwd": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Tue Aug  6 21:59:47 2024",
+ "timestampMillis": "1722974387592",
+ "status": {
+  "cmdId": "a7d397e5-1681-4b20-9b94-774d163672fb",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:47 2024",
+ "timestampMillis": "1722974387592",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/hls/hls_data.json",
+  "name": "",
+  "fileType": "JSON",
+  "reportType": "HLS_SYNTHESIS",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:47 2024",
+ "timestampMillis": "1722974387592",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/hls/syn/report/csynth.rpt",
+  "name": "",
+  "fileType": "TEXT",
+  "reportType": "HLS_SYNTHESIS",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:47 2024",
+ "timestampMillis": "1722974387592",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/hls/syn/report/csynth.xml",
+  "name": "",
+  "fileType": "XML",
+  "reportType": "HLS_SYNTHESIS",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:56 2024",
+ "timestampMillis": "1722974396432",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/hls",
+  "name": "",
+  "fileType": "DIR",
+  "reportType": "HLS_DATAFLOW",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:56 2024",
+ "timestampMillis": "1722974396433",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/hls",
+  "name": "",
+  "fileType": "DIR",
+  "reportType": "HLS_FUNCTION_CALL_GRAPH",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:56 2024",
+ "timestampMillis": "1722974396433",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/hls",
+  "name": "",
+  "fileType": "DIR",
+  "reportType": "HLS_SCHEDULE",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Tue Aug  6 21:59:56 2024",
+ "timestampMillis": "1722974396433",
+ "status": {
+  "cmdId": "a7d397e5-1681-4b20-9b94-774d163672fb",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Tue Aug  6 21:59:56 2024",
+ "timestampMillis": "1722974396514",
+ "status": {
+  "cmdId": "ac966a7c-f7ee-44bd-b6b0-82b146b82996",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:56 2024",
+ "timestampMillis": "1722974396587",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/reports/v++_compile_fib_guidance.html",
+  "name": "",
+  "fileType": "HTML",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Tue Aug  6 21:59:56 2024",
+ "timestampMillis": "1722974396588",
+ "report": {
+  "path": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/reports/.db/v++_compile_fib_guidance.pb3",
+  "name": "",
+  "fileType": "BINARY_PROTOBUF",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>

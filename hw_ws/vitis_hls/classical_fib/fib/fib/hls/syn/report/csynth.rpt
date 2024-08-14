@@ -1,0 +1,184 @@
+
+
+================================================================
+== Synthesis Summary Report of 'fib'
+================================================================
++ General Information: 
+    * Date:           Tue Aug  6 21:59:55 2024
+    * Version:        2024.1 (Build 5069499 on May 21 2024)
+    * Project:        fib
+    * Solution:       hls (Vivado IP Flow Target)
+    * Product family: virtexuplusHBM
+    * Target device:  xcu55c-fsvh2892-2L-e
+    
+
++ Performance & Resource Estimates: 
+    
+    PS: '+' for module; 'o' for loop; '*' for dataflow
+    +--------+------+------+---------+--------+----------+---------+------+----------+---------+----+------------+------------+-----+
+    | Modules| Issue|      | Latency | Latency| Iteration|         | Trip |          |         |    |            |            |     |
+    | & Loops| Type | Slack| (cycles)|  (ns)  |  Latency | Interval| Count| Pipelined|  BRAM   | DSP|     FF     |     LUT    | URAM|
+    +--------+------+------+---------+--------+----------+---------+------+----------+---------+----+------------+------------+-----+
+    |+ fib   |     -|  0.00|       16|  64.000|         -|       17|     -|        no|  2 (~0%)|   -|  1672 (~0%)|  2700 (~0%)|    -|
+    +--------+------+------+---------+--------+----------+---------+------+----------+---------+----+------------+------------+-----+
+
+
+================================================================
+== HW Interfaces
+================================================================
+* M_AXI
++------------+------------+------------+---------------+---------+--------+----------+-----------+--------------+--------------+-------------+-------------+-------------------+
+| Interface  | Read/Write | Data Width | Address Width | Latency | Offset | Register | Max Widen | Max Read     | Max Write    | Num Read    | Num Write   | Resource Estimate |
+|            |            | (SW->HW)   |               |         |        |          | Bitwidth  | Burst Length | Burst Length | Outstanding | Outstanding |                   |
++------------+------------+------------+---------------+---------+--------+----------+-----------+--------------+--------------+-------------+-------------+-------------------+
+| m_axi_gmem | WRITE_ONLY | 8 -> 64    | 64            | 0       | slave  | 0        | 0         | 16           | 16           | 16          | 16          | BRAM=2            |
++------------+------------+------------+---------------+---------+--------+----------+-----------+--------------+--------------+-------------+-------------+-------------------+
+
+* S_AXILITE Interfaces
++---------------+------------+---------------+--------+----------+
+| Interface     | Data Width | Address Width | Offset | Register |
++---------------+------------+---------------+--------+----------+
+| s_axi_control | 32         | 5             | 16     | 0        |
++---------------+------------+---------------+--------+----------+
+
+* S_AXILITE Registers
++---------------+----------+--------+-------+--------+--------------------+
+| Interface     | Register | Offset | Width | Access | Description        |
++---------------+----------+--------+-------+--------+--------------------+
+| s_axi_control | mem_1    | 0x10   | 32    | W      | Data signal of mem |
+| s_axi_control | mem_2    | 0x14   | 32    | W      | Data signal of mem |
++---------------+----------+--------+-------+--------+--------------------+
+
+* AXIS
++-----------+-----------+---------------+-------+--------+--------+
+| Interface | Direction | Register Mode | TDATA | TREADY | TVALID |
++-----------+-----------+---------------+-------+--------+--------+
+| argOut    | out       | both          | 64    | 1      | 1      |
+| closureIn | in        | both          | 64    | 1      | 1      |
+| taskIn    | in        | both          | 128   | 1      | 1      |
+| taskOut   | out       | both          | 128   | 1      | 1      |
++-----------+-----------+---------------+-------+--------+--------+
+
+* TOP LEVEL CONTROL
++-----------+------------+-----------------------------------+
+| Interface | Type       | Ports                             |
++-----------+------------+-----------------------------------+
+| ap_clk    | clock      | ap_clk                            |
+| ap_rst_n  | reset      | ap_rst_n                          |
+| ap_ctrl   | ap_ctrl_hs | ap_done ap_idle ap_ready ap_start |
++-----------+------------+-----------------------------------+
+
+
+================================================================
+== SW I/O Information
+================================================================
+* Top Function Arguments
++-----------+-----------+---------------------------+
+| Argument  | Direction | Datatype                  |
++-----------+-----------+---------------------------+
+| taskIn    | in        | stream<fib_args, 0>&      |
+| taskOut   | out       | stream<fib_args, 0>&      |
+| argOut    | out       | stream<unsigned long, 0>& |
+| closureIn | in        | stream<unsigned long, 0>& |
+| mem       | out       | void*                     |
++-----------+-----------+---------------------------+
+
+* SW-to-HW Mapping
++-----------+---------------+-----------+----------+---------------------------------+
+| Argument  | HW Interface  | HW Type   | HW Usage | HW Info                         |
++-----------+---------------+-----------+----------+---------------------------------+
+| taskIn    | taskIn        | interface |          |                                 |
+| taskOut   | taskOut       | interface |          |                                 |
+| argOut    | argOut        | interface |          |                                 |
+| closureIn | closureIn     | interface |          |                                 |
+| mem       | m_axi_gmem    | interface |          | channel=0                       |
+| mem       | s_axi_control | register  | offset   | name=mem_1 offset=0x10 range=32 |
+| mem       | s_axi_control | register  | offset   | name=mem_2 offset=0x14 range=32 |
++-----------+---------------+-----------+----------+---------------------------------+
+
+
+================================================================
+== M_AXI Burst Information
+================================================================
+ Note: All burst requests might be further partitioned into multiple requests during RTL generation based on max_read_burst_length or max_write_burst_length settings.
+
+* Inferred Burst Summary
++--------------+-----------+--------+-------+
+| HW Interface | Direction | Length | Width |
++--------------+-----------+--------+-------+
+| m_axi_gmem   | write     | 2      | 64    |
++--------------+-----------+--------+-------+
+
+* All M_AXI Variable Accesses
++--------------+----------+-----------------+-----------+--------------+--------+------------+-------------------------------------------------------------------------------------------------------+
+| HW Interface | Variable | Access Location | Direction | Burst Status | Length | Resolution | Problem                                                                                               |
++--------------+----------+-----------------+-----------+--------------+--------+------------+-------------------------------------------------------------------------------------------------------+
+| m_axi_gmem   | mem      | fib.cpp:43:64   | write     | Widen Fail   |        | 214-353    | Could not widen since type i64 size is greater than or equal to the max_widen_bitwidth threshold of 0 |
+| m_axi_gmem   | mem      | fib.cpp:43:64   | write     | Widen Fail   |        | 214-353    | Could not widen since type i32 size is greater than or equal to the max_widen_bitwidth threshold of 0 |
+| m_axi_gmem   | mem      | fib.cpp:43:64   | write     | Inferred     | 2      |            |                                                                                                       |
+| m_axi_gmem   | mem      | fib.cpp:43:64   | write     | Inferred     | 4      |            |                                                                                                       |
++--------------+----------+-----------------+-----------+--------------+--------+------------+-------------------------------------------------------------------------------------------------------+
+
+    * Resolution URL: docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=XXX-YYY.html (replace XXX-YYY with column value)
+
+================================================================
+== Bind Op Report
+================================================================
++-------------------------+-----+--------+-------------+-------+-----------+---------+
+| Name                    | DSP | Pragma | Variable    | Op    | Impl      | Latency |
++-------------------------+-----+--------+-------------+-------+-----------+---------+
+| + fib                   | 0   |        |             |       |           |         |
+|   icmp_ln21_fu_297_p2   |     |        | icmp_ln21   | seteq | auto      | 0       |
+|   x_addr_fu_539_p2      |     |        | x_addr      | add   | fabric    | 0       |
+|   y_addr_fu_558_p2      |     |        | y_addr      | add   | fabric    | 0       |
+|   fib_args1_n_fu_544_p2 |     |        | fib_args1_n | add   | fabric    | 0       |
+|   fib_args2_n_fu_563_p2 |     |        | fib_args2_n | add   | fabric    | 0       |
+|   add_ln43_fu_303_p2    |     |        | add_ln43    | add   | fabric    | 0       |
+|   shl_ln43_fu_378_p2    |     |        | shl_ln43    | shl   | auto_pipe | 0       |
+|   shl_ln43_2_fu_395_p2  |     |        | shl_ln43_2  | shl   | auto_pipe | 0       |
+|   add_ln43_1_fu_411_p2  |     |        | add_ln43_1  | add   | fabric    | 0       |
+|   shl_ln43_3_fu_437_p2  |     |        | shl_ln43_3  | shl   | auto_pipe | 0       |
+|   add_ln43_2_fu_453_p2  |     |        | add_ln43_2  | add   | fabric    | 0       |
+|   shl_ln43_4_fu_475_p2  |     |        | shl_ln43_4  | shl   | auto_pipe | 0       |
+|   add_ln43_3_fu_491_p2  |     |        | add_ln43_3  | add   | fabric    | 0       |
+|   shl_ln43_5_fu_513_p2  |     |        | shl_ln43_5  | shl   | auto_pipe | 0       |
+|   add_ln23_fu_355_p2    |     |        | add_ln23    | add   | fabric    | 0       |
+|   shl_ln23_fu_583_p2    |     |        | shl_ln23    | shl   | auto_pipe | 0       |
+|   shl_ln23_2_fu_600_p2  |     |        | shl_ln23_2  | shl   | auto_pipe | 0       |
+|   icmp_ln25_fu_616_p2   |     |        | icmp_ln25   | seteq | auto      | 0       |
++-------------------------+-----+--------+-------------+-------+-----------+---------+
+
+
+================================================================
+== Storage Report
+================================================================
++-------------------+-----------+-----------+------+------+--------+----------+------+---------+------------------+
+| Name              | Usage     | Type      | BRAM | URAM | Pragma | Variable | Impl | Latency | Bitwidth, Depth, |
+|                   |           |           |      |      |        |          |      |         | Banks            |
++-------------------+-----------+-----------+------+------+--------+----------+------+---------+------------------+
+| + fib             |           |           | 2    | 0    |        |          |      |         |                  |
+|   control_s_axi_U | interface | s_axilite |      |      |        |          |      |         |                  |
+|   gmem_m_axi_U    | interface | m_axi     | 2    |      |        |          |      |         |                  |
++-------------------+-----------+-----------+------+------+--------+----------+------+---------+------------------+
+
+
+================================================================
+== Pragma Report
+================================================================
+* Valid Pragma Syntax
++-----------+--------------------------+------------------------------+
+| Type      | Options                  | Location                     |
++-----------+--------------------------+------------------------------+
+| interface | mode=axis port=taskIn    | fib.cpp:11 in fib, taskIn    |
+| interface | mode=axis port=taskOut   | fib.cpp:12 in fib, taskOut   |
+| interface | mode=axis port=argOut    | fib.cpp:13 in fib, argOut    |
+| interface | mode=axis port=closureIn | fib.cpp:14 in fib, closureIn |
+| interface | mode=m_axi port=mem      | fib.cpp:15 in fib, mem       |
+| protocol  | mode=fixed               | fib.cpp:24 in fib            |
+| interface | mode=axis port=taskIn    | sum.cpp:9 in sum, taskIn     |
+| interface | mode=axis port=argOut    | sum.cpp:10 in sum, argOut    |
+| interface | mode=m_axi port=mem      | sum.cpp:11 in sum, mem       |
+| protocol  | mode=fixed               | sum.cpp:17 in sum            |
++-----------+--------------------------+------------------------------+
+
+

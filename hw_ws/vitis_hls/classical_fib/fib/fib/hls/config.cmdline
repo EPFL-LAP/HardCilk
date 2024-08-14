@@ -1,0 +1,3 @@
+relativeroot=/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib
+original_argv=--mode hls --package --config /toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/hls_config.cfg --work_dir fib 
+

@@ -1,0 +1,26 @@
+[
+  {
+    "directory": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib",
+    "arguments": [
+      "/alpha/tools/Xilinx/Vitis_HLS/2024.1/vcxx/libexec/clang++",
+      "-fhls",
+      "-hls-syn-headers-dir=/alpha/tools/Xilinx/Vitis_HLS/2024.1/common/technology/autopilot",
+      "",
+      "-c",
+      "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib.cpp"
+    ],
+    "file": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib.cpp"
+  },
+  {
+    "directory": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib",
+    "arguments": [
+      "/alpha/tools/Xilinx/Vitis_HLS/2024.1/vcxx/libexec/clang++",
+      "-fhls",
+      "-hls-syn-headers-dir=/alpha/tools/Xilinx/Vitis_HLS/2024.1/common/technology/autopilot",
+      "",
+      "-c",
+      "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/sum.cpp"
+    ],
+    "file": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/sum.cpp"
+  }
+]
