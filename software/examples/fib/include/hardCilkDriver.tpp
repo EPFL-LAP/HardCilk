@@ -63,18 +63,18 @@ template <typename T> int init_system(std::vector<T> base_task_data){
                 memory_->copyToDevice(data_queue_address, reinterpret_cast<const uint8_t*>(base_task_data.data()), base_task_data.size() * sizeof(T));
                 printf("        Wrote root task data to the scheduler server\n");
 
-                // Update the fifoHeadReg of the first scheduler server
+                // Update the fifoTailReg of the first scheduler server
                 memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_fifoTailReg_shift, base_task_data.size());
 
                 // Log the successful initialization information of the root scheduler server with indentation
-                printf("        Initialized root task at scheduler server at address %lx with length %lx, fifoTail %lx, fifoHead %lx\n", *(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()), taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, base_task_data.size());
+                printf("        Initialized root task at scheduler server at address %lx with length %lx, fifoHead %lx, fifoTail %lx\n", *(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()), taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, base_task_data.size());
             }
             
             // Allocate memory for all the allocation servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++){
                 // First allocate memory to carry the continuation tasks
-                uint64_t continuation_tasks_holder_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, taskDescriptor.widthTask/8);
-                uint64_t continuation_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * descriptor.widthAddress/8, descriptor.widthAddress/8);
+                uint64_t continuation_tasks_holder_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, taskDescriptor.widthTask/8);
+                uint64_t continuation_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, descriptor.widthAddress/8);
                 
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
                 std::vector<uint64_t> addresses;
