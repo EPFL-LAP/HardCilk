@@ -3,19 +3,19 @@
     "taskDescriptors": [
         {
             "name": "fib",
-            "peHDLPath": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/fib/hdl/verilog",
+            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/fib/hdl/verilog",
             "isRoot": true,
             "isCont": false,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 50,
+            "numProcessingElements": 64,
             "widthTask": 128,
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
                     "numVirtualServers": 1,  
-                    "capacityVirtualQueue": 128,
-                    "capacityPhysicalQueue": 32,
+                    "capacityVirtualQueue": 2048,
+                    "capacityPhysicalQueue": 128,
                     "portWidth": 128
                 }
             ]
@@ -23,7 +23,7 @@
         },
         {
             "name": "sum",
-            "peHDLPath": "/toolsB/HardCilk_Old/hw_ws_2024.1/vitisHLS_ws/classical_fib/fib/fib/sum/hdl/verilog",
+            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/sum/hdl/verilog",
             "isRoot": false,
             "isCont": true,
             "dynamicMemAlloc": false,
@@ -36,21 +36,21 @@
                 {
                     "sideType": "scheduler",
                     "numVirtualServers": 1,   
-                    "capacityVirtualQueue": 128,
-                    "capacityPhysicalQueue": 32,
+                    "capacityVirtualQueue": 2048,
+                    "capacityPhysicalQueue": 128,
                     "portWidth": 256
                 },
                 {
                     "sideType": "allocator",
-                    "numVirtualServers": 1,  
-                    "capacityVirtualQueue": 100000,
-                    "capacityPhysicalQueue": 32,
+                    "numVirtualServers": 4,  
+                    "capacityVirtualQueue": 4096,
+                    "capacityPhysicalQueue": 16,
                     "portWidth": 64
                 },
                 {
                     "sideType": "argumentNotifier",
-                    "numVirtualServers": 2,  
-                    "capacityVirtualQueue": 128,
+                    "numVirtualServers": 8,  
+                    "capacityVirtualQueue": 2048,
                     "capacityPhysicalQueue": 32,
                     "portWidth": 64
                 }
@@ -69,5 +69,5 @@
     },
     "widthAddress":64,
     "widthContCounter":32,
-    "memorySizeSim": 1
+    "memorySizeSim": 16
 }
