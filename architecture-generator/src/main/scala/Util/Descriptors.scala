@@ -5,13 +5,13 @@ import chisel3.util.isPow2
 import scala.collection.mutable.ListBuffer
 import scala.collection.mutable
 
-case class memSystemDescriptor(
+case class MemSystemDescriptor(
     var schedulerServersBaseAddresses: Seq[Int] = Seq.empty,
     var allocationServersBaseAddresses: Seq[Int] = Seq.empty,
     var memoryAllocatorServersBaseAddresses: Seq[Int] = Seq.empty
 )
 
-case class portDescriptor(
+case class PortDescriptor(
     val parentName: String,
     val parentType: String,
     val parentIndex: Int,
@@ -27,7 +27,7 @@ case class portDescriptor(
   )
   assert(portIndex >= 0)
 
-  def getFormatedPortName(descriptor: fullSysGenDescriptor): String = {
+  def getFormatedPortName(descriptor: FullSysGenDescriptor): String = {
     if (parentType == "PE") {
       // TODO: Take care of multiple port indicies
       // TODO: Unify Port types
@@ -56,30 +56,30 @@ case class portDescriptor(
 
 }
 
-case class connectionDescriptor(
-    val srcPort: portDescriptor,
-    val dstPort: portDescriptor,
+case class ConnectionDescriptor(
+    val srcPort: PortDescriptor,
+    val dstPort: PortDescriptor,
     val bitWidth: Int = 0,
     val connectionType: String
 )
 
-case class systemConnections(
-    val connections: List[connectionDescriptor]
+case class SystemConnections(
+    val connections: List[ConnectionDescriptor]
 )
 
-case class interconnectDescriptor(
+case class InterconnectDescriptor(
     val count: Int,
     val ratio: Int
 )
 
-case class memStats(
+case class MemStats(
     val numSysAXI: Int,
     val numPEs: Int,
     val totalAXIPorts: Int,
-    val interconnectDescriptors: List[interconnectDescriptor]
+    val interconnectDescriptors: List[InterconnectDescriptor]
 )
 
-case class sideConfig(
+case class SideConfig(
     val sideType: String, // scheduler, allocator, argumentNotifier, memoryAllocator
     val numVirtualServers: Int = 0,
     val capacityVirtualQueue: Int = 0,
@@ -90,7 +90,7 @@ case class sideConfig(
   assert(sideType == "scheduler" || sideType == "allocator" || sideType == "argumentNotifier" || sideType == "memoryAllocator")
 }
 
-case class taskDescriptor(
+case class TaskDescriptor(
     name: String,
     peVersion: String = "1.0",
     peHDLPath: String = "",
@@ -99,8 +99,8 @@ case class taskDescriptor(
     dynamicMemAlloc: Boolean,
     numProcessingElements: Int,
     widthTask: Int,
-    sidesConfigs: List[sideConfig],
-    mgmtBaseAddresses: memSystemDescriptor = memSystemDescriptor()
+    sidesConfigs: List[SideConfig],
+    mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor()
 ) {
 
   assert(numProcessingElements > 0)
@@ -160,11 +160,11 @@ case class taskDescriptor(
   }
 }
 
-case class fullSysGenDescriptor(
+case class FullSysGenDescriptor(
     val name: String,
     val widthAddress: Int,
     val widthContCounter: Int,
-    val taskDescriptors: List[taskDescriptor],
+    val taskDescriptors: List[TaskDescriptor],
     val spawnList: Map[String, List[String]],
     val spawnNextList: Map[String, List[String]],
     val sendArgumentList: Map[String, List[String]],
@@ -247,7 +247,7 @@ case class fullSysGenDescriptor(
     finalCount
   }
 
-  def getSystemConnectionsDescriptor(): systemConnections = {
+  def getSystemConnectionsDescriptor(): SystemConnections = {
     // mutable map of aggregators from string to int initialized to zero
     val aggregatorMapSendArg = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSpawnNext = mutable.Map[String, Int]().withDefaultValue(0)
@@ -258,18 +258,18 @@ case class fullSysGenDescriptor(
       val spawnNextTasks = spawnNextList.getOrElse(task.name, List())
 
       val taskConnections = (0 until task.numProcessingElements).map { i =>
-        connectionDescriptor(
-          portDescriptor(f"${task.name}", "HardCilk", 0, "taskOut", i),
-          portDescriptor(task.name, "PE", i, "taskIn", 0),
+        ConnectionDescriptor(
+          PortDescriptor(f"${task.name}", "HardCilk", 0, "taskOut", i),
+          PortDescriptor(task.name, "PE", i, "taskIn", 0),
           task.widthTask,
           "AXIS"
         )
       }
 
       val selfSpawnedConnections = (0 until selfSpawnedCount(task.name)).map { i =>
-        connectionDescriptor(
-          portDescriptor(task.name, "PE", i, "taskOut", 0),
-          portDescriptor(f"${task.name}", "HardCilk", 0, "taskIn", i),
+        ConnectionDescriptor(
+          PortDescriptor(task.name, "PE", i, "taskOut", 0),
+          PortDescriptor(f"${task.name}", "HardCilk", 0, "taskIn", i),
           task.widthTask,
           "AXIS"
         )
@@ -278,9 +278,9 @@ case class fullSysGenDescriptor(
       val spawnedConnections = spawnedTasks.filterNot(_ == task.name).zipWithIndex.flatMap { case (spawnedTask, j) =>
         val spawnedTaskDescriptor = taskDescriptors.find(_.name == spawnedTask).get
         (0 until task.numProcessingElements).map { i =>
-          connectionDescriptor(
-            portDescriptor(task.name, "PE", i, "taskOutGlobal", j),
-            portDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal", i),
+          ConnectionDescriptor(
+            PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
+            PortDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal", i),
             spawnedTaskDescriptor.widthTask,
             "AXIS"
           )
@@ -291,9 +291,9 @@ case class fullSysGenDescriptor(
         taskDescriptors.find(_.name == argumentTask).get
         (0 until task.numProcessingElements).map { i =>
           aggregatorMapSendArg(argumentTask) += 1
-          connectionDescriptor(
-            portDescriptor(task.name, "PE", i, "argOut", j),
-            portDescriptor(f"${argumentTask}", "HardCilk", 0, "argIn", aggregatorMapSendArg(argumentTask) - 1),
+          ConnectionDescriptor(
+            PortDescriptor(task.name, "PE", i, "argOut", j),
+            PortDescriptor(f"${argumentTask}", "HardCilk", 0, "argIn", aggregatorMapSendArg(argumentTask) - 1),
             widthAddress,
             "AXIS"
           )
@@ -304,9 +304,9 @@ case class fullSysGenDescriptor(
         val spawnNextTaskDescriptor = taskDescriptors.find(_.name == spawnNextTask).get
         (0 until task.numProcessingElements).map { i =>
           aggregatorMapSpawnNext(spawnNextTask) += 1
-          connectionDescriptor(
-            portDescriptor(f"${spawnNextTask}", "HardCilk", 0, "closureOut", aggregatorMapSpawnNext(spawnNextTask) - 1),
-            portDescriptor(task.name, "PE", i, "closureIn", 0),
+          ConnectionDescriptor(
+            PortDescriptor(f"${spawnNextTask}", "HardCilk", 0, "closureOut", aggregatorMapSpawnNext(spawnNextTask) - 1),
+            PortDescriptor(task.name, "PE", i, "closureIn", 0),
             spawnNextTaskDescriptor.widthTask,
             "AXIS"
           )
@@ -316,7 +316,7 @@ case class fullSysGenDescriptor(
       taskConnections ++ selfSpawnedConnections ++ spawnedConnections ++ argumentConnections ++ spawnNextConnections
     }
 
-    systemConnections(connections)
+    SystemConnections(connections)
   }
 
   def getNumConfigPorts(): Int = {
@@ -361,8 +361,8 @@ case class fullSysGenDescriptor(
     schedulerPorts ++ allocatorPorts ++ argumentNotifierPorts ++ memoryAllocatorPorts
   }
 
-  def getMemoryConnectionsStats(): memStats = {
-    val interconnectDescriptors = ListBuffer[interconnectDescriptor]()
+  def getMemoryConnectionsStats(): MemStats = {
+    val interconnectDescriptors = ListBuffer[InterconnectDescriptor]()
 
     val numSysAXI = taskDescriptors.map(_.sidesConfigs.length).sum
 
@@ -375,7 +375,7 @@ case class fullSysGenDescriptor(
     var iteration = 0
     do {
       val ratio = (optimizer / (32.0 - iteration)).ceil.toInt
-      interconnectDescriptors += interconnectDescriptor(1, ratio)
+      interconnectDescriptors += InterconnectDescriptor(1, ratio)
       optimizer = optimizer - ratio
       iteration += 1
     } while (optimizer > 0)
@@ -385,76 +385,76 @@ case class fullSysGenDescriptor(
     val interconnectDescriptorsAggregated = interconnectDescriptors
       .groupBy(_.ratio)
       .map { case (ratio, descriptors) =>
-        interconnectDescriptor(descriptors.map(_.count).sum, ratio)
+        InterconnectDescriptor(descriptors.map(_.count).sum, ratio)
       }
       .toList
 
     assert(interconnectDescriptorsAggregated.map(_.count).sum <= 32)
 
-    memStats(numSysAXI, numPEs, totalAXIPorts, interconnectDescriptorsAggregated)
+    MemStats(numSysAXI, numPEs, totalAXIPorts, interconnectDescriptorsAggregated)
   }
 
 }
 
-case class fullSysGenDescriptorExtended(
-    val fullSysGenDescriptor: fullSysGenDescriptor,
-    val systemConnections: systemConnections,
-    val memStats: memStats
+case class FullSysGenDescriptorExtended(
+    val fullSysGenDescriptor: FullSysGenDescriptor,
+    val systemConnections: SystemConnections,
+    val memStats: MemStats
 )
 
-object fullSysGenDescriptor {
-  implicit val memSystemDescriptorReads: Reads[memSystemDescriptor] =
-    Json.using[Json.WithDefaultValues].reads[memSystemDescriptor]
-  implicit val memSystemDescriptorWrites: Writes[memSystemDescriptor] =
-    Json.using[Json.WithDefaultValues].writes[memSystemDescriptor]
+object FullSysGenDescriptor {
+  implicit val memSystemDescriptorReads: Reads[MemSystemDescriptor] =
+    Json.using[Json.WithDefaultValues].reads[MemSystemDescriptor]
+  implicit val memSystemDescriptorWrites: Writes[MemSystemDescriptor] =
+    Json.using[Json.WithDefaultValues].writes[MemSystemDescriptor]
 
-  implicit val sideConfigReads: Reads[sideConfig] = Json.using[Json.WithDefaultValues].reads[sideConfig]
-  implicit val sideConfigWrites: Writes[sideConfig] = Json.using[Json.WithDefaultValues].writes[sideConfig]
+  implicit val sideConfigReads: Reads[SideConfig] = Json.using[Json.WithDefaultValues].reads[SideConfig]
+  implicit val sideConfigWrites: Writes[SideConfig] = Json.using[Json.WithDefaultValues].writes[SideConfig]
 
-  implicit val taskDescriptorReads: Reads[taskDescriptor] = Json.using[Json.WithDefaultValues].reads[taskDescriptor]
-  implicit val taskDescriptorWrites: Writes[taskDescriptor] = Json.using[Json.WithDefaultValues].writes[taskDescriptor]
+  implicit val taskDescriptorReads: Reads[TaskDescriptor] = Json.using[Json.WithDefaultValues].reads[TaskDescriptor]
+  implicit val taskDescriptorWrites: Writes[TaskDescriptor] = Json.using[Json.WithDefaultValues].writes[TaskDescriptor]
 
   implicit val cfgAxiHardCilkReads: Reads[chext.amba.axi4.Config] =
     Json.using[Json.WithDefaultValues].reads[chext.amba.axi4.Config]
   implicit val cfgAxiHardCilkWrites: Writes[chext.amba.axi4.Config] =
     Json.using[Json.WithDefaultValues].writes[chext.amba.axi4.Config]
 
-  implicit val fullSysGenDescriptorReads: Reads[fullSysGenDescriptor] =
-    Json.using[Json.WithDefaultValues].reads[fullSysGenDescriptor]
-  implicit val fullSysGenDescriptorWrites: Writes[fullSysGenDescriptor] =
-    Json.using[Json.WithDefaultValues].writes[fullSysGenDescriptor]
+  implicit val fullSysGenDescriptorReads: Reads[FullSysGenDescriptor] =
+    Json.using[Json.WithDefaultValues].reads[FullSysGenDescriptor]
+  implicit val fullSysGenDescriptorWrites: Writes[FullSysGenDescriptor] =
+    Json.using[Json.WithDefaultValues].writes[FullSysGenDescriptor]
 }
 
-object fullSysGenDescriptorExtended {
-  def fromFullSysGenDescriptor(fullSysGenDescriptor: fullSysGenDescriptor): fullSysGenDescriptorExtended = {
+object FullSysGenDescriptorExtended {
+  def fromFullSysGenDescriptor(fullSysGenDescriptor: FullSysGenDescriptor): FullSysGenDescriptorExtended = {
     val systemConnections = fullSysGenDescriptor.getSystemConnectionsDescriptor()
     val memStats = fullSysGenDescriptor.getMemoryConnectionsStats()
-    fullSysGenDescriptorExtended(fullSysGenDescriptor, systemConnections, memStats)
+    FullSysGenDescriptorExtended(fullSysGenDescriptor, systemConnections, memStats)
   }
 
-  implicit val portDescriptorReads: Reads[portDescriptor] = Json.using[Json.WithDefaultValues].reads[portDescriptor]
-  implicit val portDescriptorWrites: Writes[portDescriptor] = Json.using[Json.WithDefaultValues].writes[portDescriptor]
+  implicit val portDescriptorReads: Reads[PortDescriptor] = Json.using[Json.WithDefaultValues].reads[PortDescriptor]
+  implicit val portDescriptorWrites: Writes[PortDescriptor] = Json.using[Json.WithDefaultValues].writes[PortDescriptor]
 
-  implicit val connectionDescriptorReads: Reads[connectionDescriptor] =
-    Json.using[Json.WithDefaultValues].reads[connectionDescriptor]
-  implicit val connectionDescriptorWrites: Writes[connectionDescriptor] =
-    Json.using[Json.WithDefaultValues].writes[connectionDescriptor]
+  implicit val connectionDescriptorReads: Reads[ConnectionDescriptor] =
+    Json.using[Json.WithDefaultValues].reads[ConnectionDescriptor]
+  implicit val connectionDescriptorWrites: Writes[ConnectionDescriptor] =
+    Json.using[Json.WithDefaultValues].writes[ConnectionDescriptor]
 
-  implicit val systemConnectionsReads: Reads[systemConnections] = Json.using[Json.WithDefaultValues].reads[systemConnections]
-  implicit val systemConnectionsWrites: Writes[systemConnections] = Json.using[Json.WithDefaultValues].writes[systemConnections]
+  implicit val systemConnectionsReads: Reads[SystemConnections] = Json.using[Json.WithDefaultValues].reads[SystemConnections]
+  implicit val systemConnectionsWrites: Writes[SystemConnections] = Json.using[Json.WithDefaultValues].writes[SystemConnections]
 
-  implicit val interconnectDescriptorReads: Reads[interconnectDescriptor] =
-    Json.using[Json.WithDefaultValues].reads[interconnectDescriptor]
-  implicit val interconnectDescriptorWrites: Writes[interconnectDescriptor] =
-    Json.using[Json.WithDefaultValues].writes[interconnectDescriptor]
+  implicit val interconnectDescriptorReads: Reads[InterconnectDescriptor] =
+    Json.using[Json.WithDefaultValues].reads[InterconnectDescriptor]
+  implicit val interconnectDescriptorWrites: Writes[InterconnectDescriptor] =
+    Json.using[Json.WithDefaultValues].writes[InterconnectDescriptor]
 
-  implicit val memStatsReads: Reads[memStats] = Json.using[Json.WithDefaultValues].reads[memStats]
-  implicit val memStatsWrites: Writes[memStats] = Json.using[Json.WithDefaultValues].writes[memStats]
+  implicit val memStatsReads: Reads[MemStats] = Json.using[Json.WithDefaultValues].reads[MemStats]
+  implicit val memStatsWrites: Writes[MemStats] = Json.using[Json.WithDefaultValues].writes[MemStats]
 
-  implicit val fullSysGenDescriptorExtendedReads: Reads[fullSysGenDescriptorExtended] =
-    Json.using[Json.WithDefaultValues].reads[fullSysGenDescriptorExtended]
-  implicit val fullSysGenDescriptorExtendedWrites: Writes[fullSysGenDescriptorExtended] =
-    Json.using[Json.WithDefaultValues].writes[fullSysGenDescriptorExtended]
+  implicit val fullSysGenDescriptorExtendedReads: Reads[FullSysGenDescriptorExtended] =
+    Json.using[Json.WithDefaultValues].reads[FullSysGenDescriptorExtended]
+  implicit val fullSysGenDescriptorExtendedWrites: Writes[FullSysGenDescriptorExtended] =
+    Json.using[Json.WithDefaultValues].writes[FullSysGenDescriptorExtended]
 }
 
 object parseJsonFile {

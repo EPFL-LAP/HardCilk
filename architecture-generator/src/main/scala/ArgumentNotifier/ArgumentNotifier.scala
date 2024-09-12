@@ -16,8 +16,8 @@ import axi4s.Casts._
 import AXIHelpers.AxisDataWidthConverter
 
 class ArgumentNotifierIO(
-    val pePortWidth: Int,
-    val peCount: Int
+    pePortWidth: Int,
+    peCount: Int
 ) extends Bundle {
 
   implicit val axisCfgAddress: axi4s.Config = axi4s.Config(wData = pePortWidth, onlyRV = true)
@@ -33,13 +33,14 @@ class ArgumentNotifierIO(
 }
 
 class ArgumentNotifier(
-    val addrWidth: Int,
-    val taskWidth: Int,
-    val queueDepth: Int,
-    val peCount: Int,
-    val argRouteServersNumber: Int,
-    val contCounterWidth: Int,
-    val pePortWidth: Int
+    addrWidth: Int,
+    taskWidth: Int,
+    queueDepth: Int,
+    peCount: Int,
+    argRouteServersNumber: Int,
+    contCounterWidth: Int,
+    pePortWidth: Int,
+    reduceAxi: Boolean
 ) extends Module {
 
   val io_export = IO(new ArgumentNotifierIO(pePortWidth = pePortWidth, peCount = peCount))
@@ -75,24 +76,13 @@ class ArgumentNotifier(
     Module(new RVtoAXIBridge(contCounterWidth, addrWidth, write = false, burstLength = (taskWidth / contCounterWidth) - 2))
   )
 
-  val argRouteAxiFullCfg =
-    axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false, wId = log2Ceil(2 * argRouteServersNumber))
-
-  val axi_full_argRoute = IO(axi4.full.Master(argRouteAxiFullCfg)).suggestName("axi_full_argRoute")
-
   val axiCfgSlave = axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false, wId = 0)
+  val argRouteAxiFullCfg = axiCfgSlave.copy(wId = axiCfgSlave.wId + (if (reduceAxi) log2Ceil(2 * argRouteServersNumber) else 0))
 
-  val mux = Module(
-    new Mux(
-      axiCfgSlave = axiCfgSlave,
-      numSlaves = 2 * argRouteServersNumber,
-      muxCfg = MuxConfig(slaveBuffers = axi4.BufferConfig.all(2))
-    )
-  )
-  mux.m_axi :=> axi_full_argRoute
+  val nAxiPorts = if (reduceAxi) 1 else 2 * argRouteServersNumber
+  val axi_full_argRoute = IO(Vec(nAxiPorts, axi4.full.Master(argRouteAxiFullCfg)))
 
   for (i <- 0 until argRouteServersNumber) {
-    argRouteRvm(i).axi :=> mux.s_axi(i)
     argRouteRvm(i).io.read.get.address <> argRouteServers(i).io.read_address
     argRouteRvm(i).io.read.get.data <> argRouteServers(i).io.read_data
     argRouteRvm(i).io.write.get.address <> argRouteServers(i).io.write_address
@@ -100,9 +90,28 @@ class ArgumentNotifier(
     argRouteServers(i).io.connNetwork <> argSide.io.connVAS(i)
     argRouteServers(i).io.connStealNtw <> connStealNtw(i)
 
-    argRouteRvmReadOnly(i).axi :=> mux.s_axi(i + argRouteServersNumber)
     argRouteRvmReadOnly(i).io.read.get.address <> argRouteServers(i).io.read_address_task
     argRouteRvmReadOnly(i).io.read.get.data <> argRouteServers(i).io.read_data_task
+  }
+
+  if (reduceAxi) {
+    val mux = Module(
+      new Mux(
+        axiCfgSlave = axiCfgSlave,
+        numSlaves = 2 * argRouteServersNumber,
+        muxCfg = MuxConfig(slaveBuffers = axi4.BufferConfig.all(2))
+      )
+    )
+    mux.m_axi :=> axi_full_argRoute(0)
+    for (i <- 0 until argRouteServersNumber) {
+      argRouteRvm(i).axi :=> mux.s_axi(i)
+      argRouteRvmReadOnly(i).axi :=> mux.s_axi(i + argRouteServersNumber)
+    }
+  } else {
+    for (i <- 0 until argRouteServersNumber) {
+      argRouteRvm(i).axi :=> axi_full_argRoute(i)
+      argRouteRvmReadOnly(i).axi :=> axi_full_argRoute(i + argRouteServersNumber)
+    }
   }
 
   val axis_stream_converters_in =

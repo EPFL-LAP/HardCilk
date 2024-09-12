@@ -3,7 +3,7 @@ package TclResources
 import Descriptors._
 import scala.collection.mutable.Map
 
-class TclGeneratorCompute(val fullSysGenDescriptor: fullSysGenDescriptor, val tclFileDirectory: String){
+class TclGeneratorCompute(val fullSysGenDescriptor: FullSysGenDescriptor, val tclFileDirectory: String){
     private def initialize() = {
         // create a data structure to hold the tcl commands to be dumped later
         val tclCommands = new StringBuilder()

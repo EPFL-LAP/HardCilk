@@ -1,51 +1,46 @@
 import chisel3._
 
 import Scheduler._
-import ClosureAllocator._
+import Allocator._
 import ArgumentNotifier._
 import Descriptors._
 import TclResources._
 import HLSHelpers._
+import SoftwareUtil._
 
 import chext.amba.axi4
-
 import axi4.Ops._
 import axi4.lite.components._
 
-import scala.collection.mutable.ArrayBuffer
-
-import _root_.circt.stage.ChiselStage
-import java.time.format.DateTimeFormatter
-
 import io.circe.syntax._
 import io.circe.generic.auto._
-import SoftwareUtil._
+import scala.collection.mutable.ArrayBuffer
 
 class HardCilk(
-    fullSysGenDescriptor: fullSysGenDescriptor,
-    outputDirPathRTL: String
+    fullSysGenDescriptor: FullSysGenDescriptor,
+    outputDirPathRTL: String,
+    debug: Boolean,
+    reduceAxi: Boolean
 ) extends Module {
 
   override def desiredName: String =
     if (fullSysGenDescriptor.name.isEmpty) "fullSysGen"
     else fullSysGenDescriptor.name
 
-  private def initialize() = {
-    val conn_array = new ArrayBuffer[String]()
-
+  private def initialize(): Unit = {
     // create a modifiable seq to carry the Scheduler, ClosureAllocator, and ArgumentNotifier
-    val SchedulerMap = scala.collection.mutable.Map[String, Scheduler]()
-    val ClosureAllocatorMap = scala.collection.mutable.Map[String, ClosureAllocator]()
-    val ArgumentNotifierMap = scala.collection.mutable.Map[String, ArgumentNotifier]()
+    val schedulerMap = scala.collection.mutable.Map[String, Scheduler]()
+    val closureAllocatorMap = scala.collection.mutable.Map[String, Allocator]()
+    val argumentNotifierMap = scala.collection.mutable.Map[String, ArgumentNotifier]()
     val peMap = scala.collection.mutable.Map[String, Seq[HLSHelpers.VitisModule]]()
 
     val interfaceBuffer = new ArrayBuffer[hdlinfo.Interface]()
 
-    val RegisterBlockSize = 6
+    val registerBlockSize = 6
     val numMasters = fullSysGenDescriptor.getNumConfigPorts()
-    val axiCfgCtrl = axi4.Config(wAddr = numMasters + RegisterBlockSize, wData = 64, lite = true)
+    val axiCfgCtrl = axi4.Config(wAddr = numMasters + registerBlockSize, wData = 64, lite = true)
 
-    val demux = Module(new Demux(axiCfgCtrl, numMasters, (x: UInt) => (x >> RegisterBlockSize.U)))
+    val demux = Module(new Demux(axiCfgCtrl, numMasters, (x: UInt) => (x >> registerBlockSize.U)))
 
     // connect the demux input to the input of the module
     val s_axil_mgmt = IO(axi4.Slave(axiCfgCtrl)).suggestName("s_axil_mgmt_hardcilk")
@@ -115,7 +110,7 @@ class HardCilk(
 
       }
 
-      SchedulerMap += (task.name -> Module(
+      schedulerMap += (task.name -> Module(
         new Scheduler(
           addrWidth = fullSysGenDescriptor.widthAddress,
           taskWidth = task.widthTask,
@@ -126,71 +121,75 @@ class HardCilk(
           argRouteServersNumber = task.getNumServers("argumentNotifier"),
           virtualAddressServersNumber = task.getNumServers("scheduler"),
           pePortWidth = task.getPortWidth("scheduler"),
-          peType = task.name
+          peType = task.name,
+          reduceAxi = reduceAxi,
+          debug = debug
         )
       ))
 
-      // val SchedulerExport = IO(chiselTypeOf(SchedulerSeq.last.io_export)).suggestName(f"${task.name}_scheduler")
-      // SchedulerExport <> SchedulerSeq.last.io_export
-
       // Export the AXI interface of the Scheduler
-      val SchedulerAXI = IO(axi4.Master(SchedulerMap(task.name).vssAxiFullCfg)).suggestName(f"${task.name}_schedulerAXI")
-      SchedulerMap(task.name).io_internal.vss_axi_full :=> SchedulerAXI.asFull
-      interfaceBuffer.addOne(
-        hdlinfo.Interface(
-          f"${task.name}_schedulerAXI",
-          hdlinfo.InterfaceRole.master,
-          hdlinfo.InterfaceKind("axi4"),
-          "clock",
-          "reset",
-          Map("config" -> hdlinfo.TypedObject(SchedulerAXI.cfg))
-        )
-      )
+      schedulerMap(task.name).io_internal.vss_axi_full.zipWithIndex.foreach {
+        case (port, idx) => {
+          val name = f"${task.name}_schedulerAXI_${idx}"
+          val schedulerAXI = IO(axi4.Master(port.cfg)).suggestName(name)
+          port :=> schedulerAXI.asFull
+          interfaceBuffer.addOne(
+            hdlinfo.Interface(
+              name,
+              hdlinfo.InterfaceRole.master,
+              hdlinfo.InterfaceKind("axi4"),
+              "clock",
+              "reset",
+              Map("config" -> hdlinfo.TypedObject(schedulerAXI.cfg))
+            )
+          )
+        }
+      }
 
       // Connect the Scheduler Management to the management demux
       for (i <- j until j + task.getNumServers("scheduler")) {
-        demux.m_axil(i) :=> SchedulerMap(task.name).io_internal.axi_mgmt_vss(i - j)
+        demux.m_axil(i) :=> schedulerMap(task.name).io_internal.axi_mgmt_vss(i - j)
       }
       j += task.getNumServers("scheduler")
 
       if (task.isCont) {
-
-        ClosureAllocatorMap += (task.name -> Module(
-          new ClosureAllocator(
+        closureAllocatorMap += (task.name -> Module(
+          new Allocator(
             addrWidth = fullSysGenDescriptor.widthAddress,
             peCount = fullSysGenDescriptor.getPortCount("spawnNext", task.name),
             vcasCount = task.getNumServers("allocator"),
             queueDepth = task.getCapacityPhysicalQueue("allocator"),
-            pePortWidth = task.getPortWidth("allocator")
+            pePortWidth = task.getPortWidth("allocator"),
+            reduceAxi = reduceAxi
           )
         ))
 
-        // val ClosureAllocatorExport = IO(chiselTypeOf(ClosureAllocatorSeq.last.io_export)).suggestName(f"${task.name}_closureAllocator")
-        // ClosureAllocatorExport <> ClosureAllocatorSeq.last.io_export
-
         // Export the AXI interface of the ClosureAllocator
-        val ClosureAllocatorAXI =
-          IO(axi4.Master(ClosureAllocatorMap(task.name).vcasAxiFullCfgSlave)).suggestName(f"${task.name}_closureAllocatorAXI")
-        ClosureAllocatorMap(task.name).io_internal.vcas_axi_full :=> ClosureAllocatorAXI.asFull
-
-        interfaceBuffer.addOne(
-          hdlinfo.Interface(
-            f"${task.name}_closureAllocatorAXI",
-            hdlinfo.InterfaceRole.master,
-            hdlinfo.InterfaceKind("axi4"),
-            "clock",
-            "reset",
-            Map("config" -> hdlinfo.TypedObject(ClosureAllocatorAXI.cfg))
-          )
-        )
+        closureAllocatorMap(task.name).io_internal.vcas_axi_full.zipWithIndex.foreach {
+          case (port, idx) => {
+            val name = f"${task.name}_closureAllocatorAXI_${idx}"
+            val closureAllocatorAXI = IO(axi4.Master(port.cfg)).suggestName(name)
+            port :=> closureAllocatorAXI.asFull
+            interfaceBuffer.addOne(
+              hdlinfo.Interface(
+                name,
+                hdlinfo.InterfaceRole.master,
+                hdlinfo.InterfaceKind("axi4"),
+                "clock",
+                "reset",
+                Map("config" -> hdlinfo.TypedObject(closureAllocatorAXI.cfg))
+              )
+            )
+          }
+        }
 
         // Connect the ClosureAllocator Management to the management demux
         for (i <- j until j + task.getNumServers("allocator")) {
-          demux.m_axil(i) :=> ClosureAllocatorMap(task.name).io_internal.axi_mgmt_vcas(i - j)
+          demux.m_axil(i) :=> closureAllocatorMap(task.name).io_internal.axi_mgmt_vcas(i - j)
         }
         j += task.getNumServers("allocator")
 
-        ArgumentNotifierMap += (task.name -> Module(
+        argumentNotifierMap += (task.name -> Module(
           new ArgumentNotifier(
             addrWidth = fullSysGenDescriptor.widthAddress,
             taskWidth = task.widthTask,
@@ -198,7 +197,8 @@ class HardCilk(
             peCount = fullSysGenDescriptor.getPortCount("sendArgument", task.name),
             argRouteServersNumber = task.getNumServers("argumentNotifier"),
             contCounterWidth = fullSysGenDescriptor.widthContCounter,
-            pePortWidth = task.getPortWidth("argumentNotifier")
+            pePortWidth = task.getPortWidth("argumentNotifier"),
+            reduceAxi = reduceAxi
           )
         ))
         println(f"sync side port width ${task.getPortWidth("argumentNotifier")}")
@@ -207,22 +207,25 @@ class HardCilk(
         // ArgumentNotifierExport <> ArgumentNotifierSeq.last.io
 
         // Export the AXI interface of the ArgumentNotifier
-        val ArgumentNotifierAXI =
-          IO(axi4.Master(ArgumentNotifierMap(task.name).argRouteAxiFullCfg)).suggestName(f"${task.name}_argumentNotifierAXI")
-        ArgumentNotifierMap(task.name).axi_full_argRoute :=> ArgumentNotifierAXI.asFull
+        argumentNotifierMap(task.name).axi_full_argRoute.zipWithIndex.foreach {
+          case (port, idx) => {
+            val name = f"${task.name}_argumentNotifierAXI_${idx}"
+            val argumentNotifierAXI = IO(axi4.Master(port.cfg)).suggestName(name)
+            port :=> argumentNotifierAXI.asFull
+            interfaceBuffer.addOne(
+              hdlinfo.Interface(
+                name,
+                hdlinfo.InterfaceRole.master,
+                hdlinfo.InterfaceKind("axi4"),
+                "clock",
+                "reset",
+                Map("config" -> hdlinfo.TypedObject(argumentNotifierAXI.cfg))
+              )
+            )
+          }
+        }
 
-        interfaceBuffer.addOne(
-          hdlinfo.Interface(
-            f"${task.name}_argumentNotifierAXI",
-            hdlinfo.InterfaceRole.master,
-            hdlinfo.InterfaceKind("axi4"),
-            "clock",
-            "reset",
-            Map("config" -> hdlinfo.TypedObject(ArgumentNotifierAXI.cfg))
-          )
-        )
-
-        SchedulerMap(task.name).connArgumentNotifier <> ArgumentNotifierMap(task.name).connStealNtw
+        schedulerMap(task.name).connArgumentNotifier <> argumentNotifierMap(task.name).connStealNtw
       }
     }
 
@@ -237,13 +240,13 @@ class HardCilk(
           case "HardCilk" => {
             connection.srcPort.portType match {
               case "taskIn" | "taskOut" =>
-                SchedulerMap(connection.srcPort.parentName).io_export
+                schedulerMap(connection.srcPort.parentName).io_export
                   .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
               case "closureOut" =>
-                ClosureAllocatorMap(connection.srcPort.parentName).io_export
+                closureAllocatorMap(connection.srcPort.parentName).io_export
                   .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
               case "argIn" =>
-                ArgumentNotifierMap(connection.srcPort.parentName).io_export
+                argumentNotifierMap(connection.srcPort.parentName).io_export
                   .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
             }
           }
@@ -256,13 +259,13 @@ class HardCilk(
           case "HardCilk" => {
             connection.dstPort.portType match {
               case "taskIn" | "taskOut" =>
-                SchedulerMap(connection.dstPort.parentName).io_export
+                schedulerMap(connection.dstPort.parentName).io_export
                   .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
               case "closureOut" =>
-                ClosureAllocatorMap(connection.dstPort.parentName).io_export
+                closureAllocatorMap(connection.dstPort.parentName).io_export
                   .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
               case "argIn" =>
-                ArgumentNotifierMap(connection.dstPort.parentName).io_export
+                argumentNotifierMap(connection.dstPort.parentName).io_export
                   .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
             }
           }
@@ -304,15 +307,78 @@ class HardCilk(
     val write = new java.io.PrintWriter(f"${outputDirPathRTL}/${fullSysGenDescriptor.name}.hdlinfo.json")
     write.write(hdlinfoModule.asJson.toString())
     write.close()
-
-    conn_array.mkString("\n")
   }
 
-  val connectionsTxt = initialize()
-
+  initialize()
 }
 
 object HardCilkEmitter extends App {
+  import _root_.circt.stage.ChiselStage
+  import java.time.format.DateTimeFormatter
+  import scopt.OParser
+
+  // Handling argument parsing
+  case class BuilderConfig(
+      val debug: Boolean = false,
+      val reduce_axi: Boolean = false,
+      val timestamped: Boolean = false,
+      val cpp_header_generation: Boolean = false,
+      val tcl_generation: Boolean = false,
+      val rtl_generation: Boolean = false,
+      val sc_header_generation: Boolean = false,
+      val output_dir: String = ".",
+      val json_path: String = ""
+  )
+
+  val builder = OParser.builder[BuilderConfig]
+  val parser = {
+    import builder._
+    OParser.sequence(
+      programName("HardCilk"),
+      head("HardCilk", "0.1"),
+      arg[String]("<json-path>")
+        .required()
+        .action((x, c) => c.copy(json_path = x))
+        .text("path of a JSON descriptor for the HardCilk system"),
+      opt[String]('o', "output-dir")
+        .action((x, c) => c.copy(output_dir = x))
+        .text("output directory"),
+      opt[Unit]('d', "debug")
+        .action((_, c) => c.copy(debug = true))
+        .text("enable debug hardware counters and simulation logging"),
+      opt[Unit]('r', "reduce-axi")
+        .action((_, c) => c.copy(reduce_axi = true))
+        .text("enable AXI port reduction to HBM capacity"),
+      opt[Unit]('t', "timestamped")
+        .action((_, c) => c.copy(timestamped = true))
+        .text("generate output in a timestamped folder"),
+      opt[Unit]('g', "rtl-generation")
+        .action((_, c) => c.copy(rtl_generation = true))
+        .text("Generates the RTL output of the HardCilk"),
+      opt[Unit]('c', "cpp-headers")
+        .action((_, c) => c.copy(cpp_header_generation = true))
+        .text("Generates the C++ headers needed for the driver"),
+      opt[Unit]('b', "tcl-scripts")
+        .action((_, c) => c.copy(tcl_generation = true))
+        .text("Generates the TCL output of the HardCilk for Vivado Block Design"),
+      opt[Unit]('s', "sc-headers")
+        .action((_, c) => c.copy(sc_header_generation = true))
+        .text("Generates the C++ header for SystemC simulation"),
+      opt[Unit]('a', "all")
+        .action((_, c) =>
+          c.copy(
+            cpp_header_generation = true,
+            rtl_generation = true,
+            tcl_generation = true,
+            sc_header_generation = true
+          )
+        )
+        .text("Generates all outputs for HardCilk, equivilant to using `-g -c -b -s` flags"),
+      help("help").text("Prints this help text")
+    )
+  }
+
+  // Helpers
   def readFile(path: String): String = {
     import java.nio.charset.StandardCharsets
     import java.nio.file.{Files, Path}
@@ -329,31 +395,12 @@ object HardCilkEmitter extends App {
     path.split("/").last.split("\\.").head
   }
 
-  if (args.length < 2) {
-    println(
-      "Please enter the path to the task description file as the first argument and the path to the output directory as the second argument"
-    )
-  } else {
-
-    // Create a directory under the output directory with the name of the json file, date, and timestamp (nearest second)
-    val pathOutputDir = args(1)
-    val pathInputJsonFile = args(0)
-    val jsonName = basename(pathInputJsonFile)
-    val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-    val timeFormatter = DateTimeFormatter.ofPattern("HH-mm-ss")
-    val outputDirName =
-      s"${jsonName}_${java.time.LocalDate.now.format(dateFormatter)}_${java.time.LocalTime.now.format(timeFormatter)}"
-    val outputDirPathRTL = s"$pathOutputDir/$outputDirName/rtl"
-    val outputDirPathSoftwareHeaders = s"$pathOutputDir/$outputDirName/softwareHeaders"
-    val outputDirPathTCL = s"$pathOutputDir/$outputDirName/tcl"
-
-    // Create the directories
-    new java.io.File(outputDirPathRTL).mkdirs()
-    new java.io.File(outputDirPathSoftwareHeaders).mkdirs()
-    new java.io.File(outputDirPathTCL).mkdirs()
-
-    val systemDescriptor = parseJsonFile[fullSysGenDescriptor](pathInputJsonFile)
-
+  def generateRTL(
+      systemDescriptor: FullSysGenDescriptor,
+      pathInputJsonFile: String,
+      outputDirPathRTL: String,
+      flags: BuilderConfig
+  ): Unit = {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
       val peHDLPath = task.peHDLPath
@@ -367,22 +414,60 @@ object HardCilkEmitter extends App {
 
     ChiselStage.emitSystemVerilogFile(
       {
-        val module = new HardCilk(systemDescriptor, outputDirPathRTL)
+        val module = new HardCilk(systemDescriptor, outputDirPathRTL, flags.debug, flags.reduce_axi)
         module
       },
       Array(f"--target-dir=${outputDirPathRTL}"),
       Array("--disable-all-randomization")
     )
-
-    /// val tclGen = new tclGeneratorCompute(systemDescriptor, outputDirPathTCL)
-    /// val tclGenMem = new tclGeneratorMem(systemDescriptor, outputDirPathTCL)
-    TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL)
-    CppHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders)
-    TestBenchHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders)
-
-    dumpJsonFile[fullSysGenDescriptorExtended](
-      s"$outputDirPathRTL/${systemDescriptor.name}_descriptor_2.json",
-      fullSysGenDescriptorExtended.fromFullSysGenDescriptor(systemDescriptor)
-    )
   }
+
+  // Main body
+  OParser.parse(parser, args, BuilderConfig()) match {
+    case None =>
+      println(f"Incorrect usage, please run with `--help` option to get the usage help")
+    case Some(flags) => {
+      // Create a directory under the output directory with the name of the json file, date, and timestamp (nearest second)
+      val pathOutputDir = flags.output_dir
+      val pathInputJsonFile = flags.json_path
+      val jsonName = basename(pathInputJsonFile)
+      val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+      val timeFormatter = DateTimeFormatter.ofPattern("HH-mm-ss")
+
+      val outputDirName =
+        if (flags.timestamped)
+          s"${jsonName}_${java.time.LocalDate.now.format(dateFormatter)}_${java.time.LocalTime.now.format(timeFormatter)}"
+        else
+          s"${jsonName}_hardcilk_output"
+
+      val outputDirPathRTL = s"$pathOutputDir/$outputDirName/rtl"
+      val outputDirPathSoftwareHeaders = s"$pathOutputDir/$outputDirName/softwareHeaders"
+      val outputDirPathTCL = s"$pathOutputDir/$outputDirName/tcl"
+
+      // Create the sytem descriptors
+      val systemDescriptor = parseJsonFile[FullSysGenDescriptor](pathInputJsonFile)
+
+      // Create the directories
+      if (flags.rtl_generation) {
+        new java.io.File(outputDirPathRTL).mkdirs()
+        generateRTL(systemDescriptor, pathInputJsonFile, outputDirPathRTL, flags)
+        dumpJsonFile[FullSysGenDescriptorExtended](
+          s"$outputDirPathRTL/${systemDescriptor.name}_descriptor_2.json",
+          FullSysGenDescriptorExtended.fromFullSysGenDescriptor(systemDescriptor)
+        )
+      }
+      if (flags.cpp_header_generation || flags.sc_header_generation) {
+        new java.io.File(outputDirPathSoftwareHeaders).mkdirs()
+        if (flags.cpp_header_generation)
+          CppHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders)
+        if (flags.sc_header_generation)
+          TestBenchHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders)
+      }
+      if (flags.tcl_generation) {
+        new java.io.File(outputDirPathTCL).mkdirs()
+        TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL)
+      }
+    }
+  }
+
 }

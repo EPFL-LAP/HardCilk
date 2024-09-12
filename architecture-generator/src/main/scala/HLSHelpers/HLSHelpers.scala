@@ -85,7 +85,7 @@ class VitisModule(cfg: VitisModuleConfig) extends BlackBox {
   */
 
 object VitisModuleFactory {
-  def apply(taskDescriptor: taskDescriptor): Seq[VitisModule] = {
+  def apply(taskDescriptor: TaskDescriptor): Seq[VitisModule] = {
     val hdlPath = taskDescriptor.peHDLPath
     val moduleName = taskDescriptor.name
     val blackBoxCount = taskDescriptor.numProcessingElements

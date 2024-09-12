@@ -4,7 +4,7 @@ import Descriptors._
 import scala.collection.mutable.Map
 
 object TclGeneratorMemPEs {
-  def generate(fullSysGenDescriptor: fullSysGenDescriptor, tclFileDirectory: String) = {
+  def generate(fullSysGenDescriptor: FullSysGenDescriptor, tclFileDirectory: String) = {
     val tclCommands = new StringBuilder()
     def tclWriteln(s: String) = {
       tclCommands.append(s)

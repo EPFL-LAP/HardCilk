@@ -1,21 +1,21 @@
-package ClosureAllocator
+package Allocator
 
 import chisel3._
 import chisel3.util._
 
-class ClosureAllocatorNetworkIO(addrWidth: Int, peCount: Int, vcasCount: Int) extends Bundle {
+class AllocatorNetworkIO(addrWidth: Int, peCount: Int, vcasCount: Int) extends Bundle {
   val connVCAS = Vec(vcasCount, Flipped(DecoupledIO(UInt(addrWidth.W))))
   val connPE = Vec(peCount, DecoupledIO(UInt(addrWidth.W)))
 }
 
-class ClosureAllocatorNetwork(addrWidth: Int, peCount: Int, queueDepth: Int, vcasCount: Int) extends Module {
+class AllocatorNetwork(addrWidth: Int, peCount: Int, queueDepth: Int, vcasCount: Int) extends Module {
 
-  val io = IO(new ClosureAllocatorNetworkIO(addrWidth, peCount, vcasCount))
+  val io = IO(new AllocatorNetworkIO(addrWidth, peCount, vcasCount))
 
-  val vcasNetworkUnits = Seq.fill(vcasCount)(Module(new ClosureAllocatorServerNetworkUnit(addrWidth)))
-  val networkUnits = Seq.fill(peCount)(Module(new ClosureAllocatorNetworkUnit(addrWidth)))
+  val vcasNetworkUnits = Seq.fill(vcasCount)(Module(new AllocatorServerNetworkUnit(addrWidth)))
+  val networkUnits = Seq.fill(peCount)(Module(new AllocatorNetworkUnit(addrWidth)))
   val casServers = Seq.fill(peCount)(Module(new AllocatorClient(addrWidth)))
-  val queues = Seq.fill(peCount)(Module(new ClosureAllocatorBuffer(addrWidth, queueDepth)))
+  val queues = Seq.fill(peCount)(Module(new AllocatorBuffer(addrWidth, queueDepth)))
 
   val step = peCount / vcasCount
   val vcasIndicies = Array.tabulate(vcasCount)(n => (n + n * step))

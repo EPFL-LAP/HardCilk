@@ -1,17 +1,17 @@
-package ClosureAllocator
+package Allocator
 
 import chisel3._
 import chisel3.util._
 import chisel3.ChiselEnum
 
-class ClosureAllocatorServerNetworkUnitIO(addrWidth: Int) extends Bundle {
+class AllocatorServerNetworkUnitIO(addrWidth: Int) extends Bundle {
   val addressIn0 = Flipped(DecoupledIO(UInt(addrWidth.W)))
   val addressIn1 = Flipped(DecoupledIO(UInt(addrWidth.W)))
   val addressOut = DecoupledIO(UInt(addrWidth.W))
 }
 
-class ClosureAllocatorServerNetworkUnit(addrWidth: Int) extends Module {
-  val io = IO(new ClosureAllocatorServerNetworkUnitIO(addrWidth))
+class AllocatorServerNetworkUnit(addrWidth: Int) extends Module {
+  val io = IO(new AllocatorServerNetworkUnitIO(addrWidth))
 
   object state extends ChiselEnum {
     val takeInAddress0 = Value(0.U)

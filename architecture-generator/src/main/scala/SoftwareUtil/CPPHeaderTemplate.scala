@@ -3,7 +3,7 @@ import Descriptors._
 import java.io.PrintWriter
 
 object CppHeaderTemplate {
-  def generateCppHeader(descriptor: fullSysGenDescriptor, headerFileDirectory: String): Unit = {
+  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String): Unit = {
     // Generate TaskDescriptor class
     val taskDescriptorClass =
       s"""
@@ -147,7 +147,7 @@ object CppHeaderTemplate {
     writer.close()
   }
 
-  private def generateSideConfig(sidesConfigs: List[sideConfig]): String = {
+  private def generateSideConfig(sidesConfigs: List[SideConfig]): String = {
     sidesConfigs
       .map { sc =>
         s"""{"${sc.sideType}", ${sc.numVirtualServers}, ${sc.capacityVirtualQueue}, ${sc.capacityPhysicalQueue}, ${sc.portWidth}, ${sc.virtualEntrtyWidth}}"""
@@ -155,7 +155,7 @@ object CppHeaderTemplate {
       .mkString(", ")
   }
 
-  private def generateMemSystemDescriptor(memDesc: memSystemDescriptor): String = {
+  private def generateMemSystemDescriptor(memDesc: MemSystemDescriptor): String = {
     s"""{
        |    {${memDesc.schedulerServersBaseAddresses.mkString(", ")}},
        |    {${memDesc.allocationServersBaseAddresses.mkString(", ")}},

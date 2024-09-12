@@ -4,7 +4,7 @@ import Descriptors._
 import java.io.PrintWriter
 
 object TestBenchHeaderTemplate {
-  def generateCppHeader(descriptor: fullSysGenDescriptor, headerFileDirectory: String): Unit = {
+  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String): Unit = {
 
     val headerContent =
       s"""
@@ -98,7 +98,7 @@ object TestBenchHeaderTemplate {
     writer.close()
   }
 
-  def generateAXIConnections(descriptor: fullSysGenDescriptor): String = {
+  def generateAXIConnections(descriptor: FullSysGenDescriptor): String = {
     var connections = ""
     var i = 1 // for the memory interconnect
     var k = 0 // for the unused PE mgmt interconnect

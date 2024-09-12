@@ -2,7 +2,7 @@ package ArgumentNotifier
 
 import chisel3._
 import chisel3.util._
-import ClosureAllocator.ClosureAllocatorBuffer
+import Allocator.AllocatorBuffer
 
 class ArgumentNotifierNetworkIO(addrWidth: Int, peCount: Int, vasNum: Int) extends Bundle {
   val connVAS = Vec(vasNum, DecoupledIO(UInt(addrWidth.W)))
@@ -81,7 +81,7 @@ class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasN
         Module(new ArgumentNotifierServerNetworkUnit(addrWidth, log2Ceil(vasNum), tagBitsShift, tag, vasNum))
     }*/
 
-  val queues = Seq.fill(peCount)(Module(new ClosureAllocatorBuffer(addrWidth, queueDepth)))
+  val queues = Seq.fill(peCount)(Module(new AllocatorBuffer(addrWidth, queueDepth)))
 
   // Connect the PEs to the queues
   for (i <- 0 until peCount) {

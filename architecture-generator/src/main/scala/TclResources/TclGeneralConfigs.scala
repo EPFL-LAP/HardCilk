@@ -126,7 +126,7 @@ object TclGeneralConfigs {
         """
   }
 
-  def getSytstemClockingAndResetConfigTclSyntax(descriptor: fullSysGenDescriptor): String = {
+  def getSytstemClockingAndResetConfigTclSyntax(descriptor: FullSysGenDescriptor): String = {
     val sb = new StringBuilder
 
     // Create and configure the clock wizard
