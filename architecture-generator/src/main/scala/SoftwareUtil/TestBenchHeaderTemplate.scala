@@ -4,7 +4,7 @@ import Descriptors._
 import java.io.PrintWriter
 
 object TestBenchHeaderTemplate {
-  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String): Unit = {
+  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String, reduceAxi: Boolean): Unit = {
 
     val headerContent =
       s"""
@@ -58,7 +58,7 @@ object TestBenchHeaderTemplate {
         |
         |        (*iconnectMem_.initiator_socket(0)).bind(memory_.socket);
         |
-        |        ${generateAXIConnections(descriptor)}
+        |        ${generateAXIConnections(descriptor, reduceAxi)}
         |
         |        iconnectMem_.memmap(0x0000, memorySize, 0);
         |        iconnectPEMgmt_.memmap(0x0000, 0x1000, 0);
@@ -98,29 +98,37 @@ object TestBenchHeaderTemplate {
     writer.close()
   }
 
-  def generateAXIConnections(descriptor: FullSysGenDescriptor): String = {
+  def generateAXIConnections(descriptor: FullSysGenDescriptor, reduceAxi: Boolean): String = {
     var connections = ""
     var i = 1 // for the memory interconnect
     var k = 0 // for the unused PE mgmt interconnect
     for (task <- descriptor.taskDescriptors) {
       for (side <- task.sidesConfigs) {
+        val n = if (reduceAxi) 1 else side.numVirtualServers
         if (side.numVirtualServers > 0 && side.sideType == "scheduler") {
-          connections += s"""        myModule->${task.name}_schedulerAXI.bind(*iconnectMem_.target_socket(${i}));\n"""
-          i += 1
+          for (l <- 0 until n) {
+            connections += s"""        myModule->${task.name}_schedulerAXI_${l}.bind(*iconnectMem_.target_socket(${i}));\n"""
+            i += 1
+          }
         } else if (side.numVirtualServers > 0 && side.sideType == "allocator") {
-          connections += s"""        myModule->${task.name}_closureAllocatorAXI.bind(*iconnectMem_.target_socket(${i}));\n"""
-          i += 1
+          for (l <- 0 until n) {
+            connections += s"""        myModule->${task.name}_closureAllocatorAXI_${l}.bind(*iconnectMem_.target_socket(${i}));\n"""
+            i += 1
+          }
         } else if (side.numVirtualServers > 0 && side.sideType == "argumentNotifier") {
-          connections += s"""        myModule->${task.name}_argumentNotifierAXI.bind(*iconnectMem_.target_socket(${i}));\n"""
-          i += 1
+          for (l <- 0 until 2*n) {
+            connections += s"""        myModule->${task.name}_argumentNotifierAXI_${l}.bind(*iconnectMem_.target_socket(${i}));\n"""
+            i += 1
+          }
         }
       }
-      for (j <- 0 until task.numProcessingElements) {
-        connections += s"""        myModule->${task.name}_${j}_m_axi_gmem.bind(*iconnectMem_.target_socket(${i}));\n"""
-        connections += s"""        iconnectPEMgmt_.initiator_socket(${k})->bind(myModule->${task.name}_${j}_s_axi_control);\n"""
-        i += 1
-        k += 1
-      }
+      if (task.hasAXI)
+        for (j <- 0 until task.numProcessingElements) {
+          connections += s"""        myModule->${task.name}_${j}_m_axi_gmem.bind(*iconnectMem_.target_socket(${i}));\n"""
+          connections += s"""        iconnectPEMgmt_.initiator_socket(${k})->bind(myModule->${task.name}_${j}_s_axi_control);\n"""
+          i += 1
+          k += 1
+        }
     }
 
     connections

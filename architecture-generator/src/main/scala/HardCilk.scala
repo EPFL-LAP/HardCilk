@@ -31,6 +31,7 @@ class HardCilk(
     // create a modifiable seq to carry the Scheduler, ClosureAllocator, and ArgumentNotifier
     val schedulerMap = scala.collection.mutable.Map[String, Scheduler]()
     val closureAllocatorMap = scala.collection.mutable.Map[String, Allocator]()
+    val memoryAllocatorMap = scala.collection.mutable.Map[String, Allocator]()
     val argumentNotifierMap = scala.collection.mutable.Map[String, ArgumentNotifier]()
     val peMap = scala.collection.mutable.Map[String, Seq[HLSHelpers.VitisModule]]()
 
@@ -70,34 +71,39 @@ class HardCilk(
       for (i <- 0 until task.numProcessingElements) {
         val pe = peArray(i)
         val peName = f"${task.name}_${i}"
-        val pem_axi_gmem =
-          IO(chiselTypeOf(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_gmem")
-        val pes_axi_control =
-          IO(chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_s_axi_control")
+        
+        if (task.hasAXI) {
+          val pem_axi_gmem =
+            IO(chiselTypeOf(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_gmem")
+          val pes_axi_control =
+            IO(chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]))
+              .suggestName(f"${peName}_s_axi_control")
 
-        interfaceBuffer.addOne(
-          hdlinfo.Interface(
-            f"${peName}_m_axi_gmem",
-            hdlinfo.InterfaceRole.master,
-            hdlinfo.InterfaceKind("axi4"),
-            "clock",
-            "reset",
-            Map("config" -> hdlinfo.TypedObject(pem_axi_gmem.cfg))
+          interfaceBuffer.addOne(
+            hdlinfo.Interface(
+              f"${peName}_m_axi_gmem",
+              hdlinfo.InterfaceRole.master,
+              hdlinfo.InterfaceKind("axi4"),
+              "clock",
+              "reset",
+              Map("config" -> hdlinfo.TypedObject(pem_axi_gmem.cfg))
+            )
           )
-        )
-        interfaceBuffer.addOne(
-          hdlinfo.Interface(
-            f"${peName}_s_axi_control",
-            hdlinfo.InterfaceRole.slave,
-            hdlinfo.InterfaceKind("axi4"),
-            "clock",
-            "reset",
-            Map("config" -> hdlinfo.TypedObject(pes_axi_control.cfg))
+          interfaceBuffer.addOne(
+            hdlinfo.Interface(
+              f"${peName}_s_axi_control",
+              hdlinfo.InterfaceRole.slave,
+              hdlinfo.InterfaceKind("axi4"),
+              "clock",
+              "reset",
+              Map("config" -> hdlinfo.TypedObject(pes_axi_control.cfg))
+            )
           )
-        )
 
-        pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface] :=> pem_axi_gmem
-        pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+          pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface] :=> pem_axi_gmem
+          pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+        }
+
         pe.getPort("ap_clk").asInstanceOf[Clock] := clock
         pe.getPort("ap_rst_n").asInstanceOf[Bool] := ~reset.asBool
         try {
@@ -227,6 +233,45 @@ class HardCilk(
 
         schedulerMap(task.name).connArgumentNotifier <> argumentNotifierMap(task.name).connStealNtw
       }
+
+      if (task.dynamicMemAlloc) {
+        memoryAllocatorMap += (task.name -> Module(
+          new Allocator(
+            addrWidth = fullSysGenDescriptor.widthAddress,
+            peCount = fullSysGenDescriptor.getPortCount("memAlloc", task.name),
+            vcasCount = task.getNumServers("memoryAllocator"),
+            queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),
+            pePortWidth = task.getPortWidth("memoryAllocator"),
+            reduceAxi = reduceAxi
+          )
+        ))
+
+        // Export the AXI interface of the ClosureAllocator
+        memoryAllocatorMap(task.name).io_internal.vcas_axi_full.zipWithIndex.foreach {
+          case (port, idx) => {
+            val name = f"${task.name}_memoryAllocatorAXI_${idx}"
+            val memoryAllocatorAXI = IO(axi4.Master(port.cfg)).suggestName(name)
+            port :=> memoryAllocatorAXI.asFull
+            interfaceBuffer.addOne(
+              hdlinfo.Interface(
+                name,
+                hdlinfo.InterfaceRole.master,
+                hdlinfo.InterfaceKind("axi4"),
+                "clock",
+                "reset",
+                Map("config" -> hdlinfo.TypedObject(memoryAllocatorAXI.cfg))
+              )
+            )
+          }
+        }
+
+        for (i <- j until j + task.getNumServers("allocator")) {
+          demux.m_axil(i) :=> memoryAllocatorMap(task.name).io_internal.axi_mgmt_vcas(i - j)
+        }
+        j += task.getNumServers("memoryAllocator")
+
+      }
+
     }
 
     // Connet the PEs to the system based on the connection descriptor
@@ -412,6 +457,17 @@ object HardCilkEmitter extends App {
       }
     }
 
+    // Copy all the files in the src/main/resources/ to the outputDirRTL except the DualPortBRAM_sim.v
+    val resourcesPath = "src/main/resources/"
+    val resourcesFiles = new java.io.File(resourcesPath).listFiles()
+    resourcesFiles.foreach { file =>
+      val fileName = file.getName()
+      if (fileName != "DualPortBRAM_sim.v") {
+        val fileContent = readFile(file.getAbsolutePath())
+        writeFile(s"$outputDirPathRTL/$fileName", fileContent)
+      }
+    }
+
     ChiselStage.emitSystemVerilogFile(
       {
         val module = new HardCilk(systemDescriptor, outputDirPathRTL, flags.debug, flags.reduce_axi)
@@ -420,6 +476,27 @@ object HardCilkEmitter extends App {
       Array(f"--target-dir=${outputDirPathRTL}"),
       Array("--disable-all-randomization")
     )
+
+    // For the file in the outputDirRTL with the name of the systemDescriptor.name run sv2v on it using os.system, then remove the original file
+    import sys.process._
+    val svFilePath = s"$outputDirPathRTL/${systemDescriptor.name}.sv"
+    val vFilePath = s"$outputDirPathRTL/${systemDescriptor.name}.v"
+
+    // Check if the SystemVerilog file exists
+    val svFile = new java.io.File(svFilePath)
+    if (svFile.exists()) {
+      val sv2vCommand = s"sv2v $svFilePath"
+      // Get the ouput of the command instead of stdout
+      val sv2vOutput = sv2vCommand.!!
+      val rmCommand = s"rm $svFilePath"
+      rmCommand.!
+
+      // Write the output of sv2v to the verilog file
+      writeFile(vFilePath, sv2vOutput)
+
+    } else {
+      println(s"Error: File $svFilePath does not exist.")
+    }
   }
 
   // Main body
@@ -459,13 +536,13 @@ object HardCilkEmitter extends App {
       if (flags.cpp_header_generation || flags.sc_header_generation) {
         new java.io.File(outputDirPathSoftwareHeaders).mkdirs()
         if (flags.cpp_header_generation)
-          CppHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders)
+          CppHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders, flags.reduce_axi)
         if (flags.sc_header_generation)
-          TestBenchHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders)
+          TestBenchHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders, flags.reduce_axi)
       }
       if (flags.tcl_generation) {
         new java.io.File(outputDirPathTCL).mkdirs()
-        TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL)
+        TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL, flags.reduce_axi)
       }
     }
   }

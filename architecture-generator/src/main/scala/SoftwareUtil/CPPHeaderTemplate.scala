@@ -3,7 +3,7 @@ import Descriptors._
 import java.io.PrintWriter
 
 object CppHeaderTemplate {
-  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String): Unit = {
+  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String, reduceAxi: Boolean): Unit = {
     // Generate TaskDescriptor class
     val taskDescriptorClass =
       s"""
@@ -14,6 +14,7 @@ object CppHeaderTemplate {
          |    bool isRoot;
          |    bool isCont;
          |    bool dynamicMemAlloc;
+         |    bool hasAXI;
          |    int numProcessingElements;
          |    int widthTask;
          |    std::vector<SideConfig> sidesConfigs;
@@ -64,6 +65,7 @@ object CppHeaderTemplate {
          |    ${td.isRoot},
          |    ${td.isCont},
          |    ${td.dynamicMemAlloc},
+         |    ${td.hasAXI},
          |    ${td.numProcessingElements},
          |    ${td.widthTask},
          |    {${generateSideConfig(td.sidesConfigs)}},
@@ -117,13 +119,13 @@ object CppHeaderTemplate {
        |        for (const auto &task : taskDescriptors)
        |        {
        |            // For each task, each side has a single master if the side exists
-       |            numMasters += (task.getNumServers("scheduler") > 0) ? 1 : 0;
-       |            numMasters += (task.getNumServers("allocator") > 0) ? 1 : 0;
-       |            numMasters += (task.getNumServers("argumentNotifier") > 0) ? 1 : 0;
-       |            numMasters += (task.getNumServers("memoryAllocator") > 0) ? 1 : 0;
+       |            numMasters += ${reduceAxi} ? (task.getNumServers("scheduler") > 0) : task.getNumServers("scheduler");
+       |            numMasters += ${reduceAxi} ? (task.getNumServers("allocator") > 0): task.getNumServers("allocator");
+       |            numMasters += 2*(${reduceAxi} ? (task.getNumServers("argumentNotifier") > 0): task.getNumServers("argumentNotifier"));
+       |            numMasters += ${reduceAxi} ? (task.getNumServers("memoryAllocator") > 0): task.getNumServers("memoryAllocator");
        |
        |            // For each PE of each task there is a master
-       |            numMasters += task.numProcessingElements;
+       |            numMasters += task.hasAXI * task.numProcessingElements;
        |        }
        |        return numMasters;
        |    }
@@ -132,7 +134,7 @@ object CppHeaderTemplate {
        |        int numSlaves = 0;
        |        for (const auto &task : taskDescriptors)
        |        {
-       |            numSlaves += task.numProcessingElements;
+       |            numSlaves += task.hasAXI * task.numProcessingElements;
        |        }
        |        return numSlaves;
        |    }

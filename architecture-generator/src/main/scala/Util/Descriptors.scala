@@ -100,7 +100,8 @@ case class TaskDescriptor(
     numProcessingElements: Int,
     widthTask: Int,
     sidesConfigs: List[SideConfig],
-    mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor()
+    mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
+    hasAXI: Boolean = true
 ) {
 
   assert(numProcessingElements > 0)
@@ -325,48 +326,69 @@ case class FullSysGenDescriptor(
       .sum + taskDescriptors.map(_.getNumServers("allocator")).sum
   }
 
-  def getSystemAXIPortsNames(): List[String] = {
+  def getSystemAXIPortsNames(reduce_axi: Boolean): List[String] = {
     val schedulerPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("scheduler") > 0) List(f"${task.name}_schedulerAXI") else List()
-      // (0 until task.getNumServers("scheduler")).map { i =>
-      //   if(task.getNumServers("scheduler") == 1) f"${task.name}_schedulerAXI"
-      //   else f"${task.name}_schedulerAXI_${i}"
-      // }
+      if (task.getNumServers("scheduler") > 0)
+        if (reduce_axi)
+          List(f"${task.name}_schedulerAXI_0")
+        else
+          (0 until task.getNumServers("scheduler")).map { i =>
+            f"${task.name}_schedulerAXI_${i}"
+          }
+      else List()
     }
 
     val allocatorPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("allocator") > 0) List(f"${task.name}_closureAllocatorAXI") else List()
-      // (0 until task.getNumServers("allocator")).map { i =>
-      //   if(task.getNumServers("allocator") == 1) f"${task.name}_closureAllocatorAXI"
-      //   else f"${task.name}_closureAllocatorAXI_${i}"
-      // }
+      if (task.getNumServers("allocator") > 0)
+        if (reduce_axi)
+          List(f"${task.name}_closureAllocatorAXI_0")
+        else
+          (0 until task.getNumServers("allocator")).map { i =>
+            f"${task.name}_closureAllocatorAXI_${i}"
+          }
+      else List()
     }
 
     val argumentNotifierPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("argumentNotifier") > 0) List(f"${task.name}_argumentNotifierAXI") else List()
-      // (0 until task.getNumServers("argumentNotifier")).map { i =>
-      //   if(task.getNumServers("argumentNotifier") == 1) f"${task.name}_argumentNotifierAXI"
-      //   else f"${task.name}_argumentNotifierAXI_${i}"
-      // }
+      if (task.getNumServers("argumentNotifier") > 0)
+        if (reduce_axi)
+          List(f"${task.name}_argumentNotifierAXI_0")
+        else
+          (0 until task.getNumServers("argumentNotifier") * 2).map { i =>
+            f"${task.name}_argumentNotifierAXI_${i}"
+          }
+      else List()
     }
 
     val memoryAllocatorPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("memoryAllocator") > 0) List(f"${task.name}_memoryAllocatorAXI") else List()
-      // (0 until task.getNumServers("memoryAllocator")).map { i =>
-      //   if(task.getNumServers("memoryAllocator") == 1) f"${task.name}_memoryAllocatorAXI"
-      //   else f"${task.name}_memoryAllocatorAXI_${i}"
-      // }
+      if (task.getNumServers("memoryAllocator") > 0)
+        if (reduce_axi)
+          List(f"${task.name}_memoryAllocatorAXI_0")
+        else
+          (0 until task.getNumServers("memoryAllocator")).map { i =>
+            f"${task.name}_memoryAllocatorAXI_${i}"
+          }
+      else List()
     }
 
     schedulerPorts ++ allocatorPorts ++ argumentNotifierPorts ++ memoryAllocatorPorts
   }
 
-  def getMemoryConnectionsStats(): MemStats = {
+  def getMemoryConnectionsStats(reduce_axi: Boolean): MemStats = {
     val interconnectDescriptors = ListBuffer[InterconnectDescriptor]()
 
-    val numSysAXI = taskDescriptors.map(_.sidesConfigs.length).sum
+    val numSysAXI = taskDescriptors.map { descriptor =>
+      if (reduce_axi) descriptor.sidesConfigs.length
+      else
+        descriptor.getNumServers("scheduler") + descriptor.getNumServers("memoryAllocator") + descriptor.getNumServers(
+          "allocator"
+        ) + descriptor.getNumServers("argumentNotifier") * 2
+    }.sum
 
-    val numPEs = taskDescriptors.map(_.numProcessingElements).sum
+    val numPEs = taskDescriptors
+      .filter(_.hasAXI) // Assuming `hasAXI` is a method or property that checks for AXI presence
+      .map(_.numProcessingElements)
+      .sum
 
     val totalAXIPorts = numSysAXI + numPEs + 1
 
@@ -428,7 +450,7 @@ object FullSysGenDescriptor {
 object FullSysGenDescriptorExtended {
   def fromFullSysGenDescriptor(fullSysGenDescriptor: FullSysGenDescriptor): FullSysGenDescriptorExtended = {
     val systemConnections = fullSysGenDescriptor.getSystemConnectionsDescriptor()
-    val memStats = fullSysGenDescriptor.getMemoryConnectionsStats()
+    val memStats = fullSysGenDescriptor.getMemoryConnectionsStats(true)
     FullSysGenDescriptorExtended(fullSysGenDescriptor, systemConnections, memStats)
   }
 

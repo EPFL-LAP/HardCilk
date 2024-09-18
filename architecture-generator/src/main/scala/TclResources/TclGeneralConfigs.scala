@@ -4,6 +4,121 @@ import Descriptors._
 
 object TclGeneralConfigs {
 
+  def getProjectWrapperTCLSyntax(functionalTcl: String, descriptor: FullSysGenDescriptor): String = {
+    val sb = new StringBuilder
+
+    sb.append(
+      """
+        ################################################################
+        # Get the folder of the script
+        ################################################################
+        namespace eval _tcl {
+            proc get_script_folder {} {
+                set script_path [file normalize [info script]]
+                set script_folder [file dirname $script_path]
+                return $script_folder
+            }
+        }
+        variable script_folder
+        set script_folder [_tcl::get_script_folder]
+
+        ################################################################
+        # Check if script is running in correct Vivado version.
+        ################################################################
+        set scripts_vivado_version 2024.1
+        set current_vivado_version [version -short]
+
+        if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
+            puts ""
+            if { [string compare $scripts_vivado_version $current_vivado_version] > 0 } {
+                catch {common::send_gid_msg -ssname BD::TCL -id 2042 -severity "ERROR" " This script was generated using Vivado <$scripts_vivado_version> and is being run in <$current_vivado_version> of Vivado. Sourcing the script failed since it was created with a future version of Vivado."}
+
+            } else {
+                catch {common::send_gid_msg -ssname BD::TCL -id 2041 -severity "ERROR" "This script was generated using Vivado <$scripts_vivado_version> and is being run in <$current_vivado_version> of Vivado. Please run the script in Vivado <$scripts_vivado_version> then open the design in Vivado <$current_vivado_version>. Upgrade the design by running \"Tools => Report => Report IP Status...\", then run write_bd_tcl to create an updated script."}
+
+            }
+
+            return 1
+        }
+        ################################################################
+        # Create the project
+        ################################################################
+
+        
+      """
+    )
+    
+    sb.append(f"create_project project_1 ${descriptor.name}_vivado_project -part xcu55c-fsvh2892-2L-e -force\n") 
+
+    sb.append("""       
+        set_property BOARD_PART xilinx.com:au55c:part0:1.0 [current_project]
+        variable design_name
+        set design_name design_1
+        create_bd_design $design_name
+        set errMsg ""
+        set nRet 0
+        set cur_design [current_bd_design -quiet]
+        set list_cells [get_bd_cells -quiet]
+
+        ################################################################
+        # Include the verilog modules and constraints
+        ################################################################
+
+        add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
+        import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
+
+        add_files -fileset constrs_1 -norecurse ../rtl/u55c.xdc
+        import_files -fileset constrs_1 ../rtl/u55c.xdc
+
+        ################################################################
+        # Create the root design
+        ################################################################
+        proc create_root_design { parentCell } {
+
+            variable script_folder
+            variable design_name
+
+            if { $parentCell eq "" } {
+                set parentCell [get_bd_cells /]
+            }
+
+            # Get object for parentCell
+            set parentObj [get_bd_cells $parentCell]
+            if { $parentObj == "" } {
+                catch {common::send_gid_msg -ssname BD::TCL -id 2090 -severity "ERROR" "Unable to find parent cell <$parentCell>!"}
+                return
+            }
+
+            # Make sure parentObj is hier blk
+            set parentType [get_property TYPE $parentObj]
+            if { $parentType ne "hier" } {
+                catch {common::send_gid_msg -ssname BD::TCL -id 2091 -severity "ERROR" "Parent <$parentObj> has TYPE = <$parentType>. Expected to be <hier>."}
+                return
+            }
+
+            # Save current instance; Restore later
+            set oldCurInst [current_bd_instance .]
+
+            # Set parent object as current
+            current_bd_instance $parentObj
+        """)
+
+    sb.append(functionalTcl)
+
+    sb.append("""    
+                validate_bd_design
+                save_bd_design
+            }
+
+            create_root_design ""
+
+            set_property top top_pcie [current_fileset]
+            update_compile_order -fileset sources_1
+          """)
+
+    sb.toString()
+  }
+
   def getHBMConfigTclSyntax(totalAXIPorts: Int): String = {
     val sb = new StringBuilder
 
@@ -114,15 +229,6 @@ object TclGeneralConfigs {
 
         # Make AXI domain clock converter for the xdma management access
         create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 axi_clock_converter_1
-
-        # Connect the xdma to the axi clock converters
-        connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]
-        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_0/s_axi_aclk]
-        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_0/s_axi_aresetn]
-
-        connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI_LITE] [get_bd_intf_pins axi_clock_converter_1/S_AXI]
-        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_1/s_axi_aclk]
-        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_1/s_axi_aresetn]
         """
   }
 
@@ -134,29 +240,18 @@ object TclGeneralConfigs {
     sb.append(
       """
         set_property -dict [list \
-            CONFIG.CLKIN1_JITTER_PS {100.0} \
-            CONFIG.CLKOUT1_DRIVES {Buffer} \
-            CONFIG.CLKOUT1_JITTER {98.427} \
-            CONFIG.CLKOUT1_PHASE_ERROR {87.466} \""" +
+              CONFIG.CLKOUT1_JITTER {81.911} \
+              CONFIG.CLKOUT1_PHASE_ERROR {76.967} \
+              """ +
         f"CONFIG.CLKOUT1_REQUESTED_OUT_FREQ ${descriptor.targetFrequency}%.3f" + """\""" +
         """
-            CONFIG.CLKOUT2_DRIVES {Buffer} \
-            CONFIG.CLKOUT3_DRIVES {Buffer} \
-            CONFIG.CLKOUT4_DRIVES {Buffer} \
-            CONFIG.CLKOUT5_DRIVES {Buffer} \
-            CONFIG.CLKOUT6_DRIVES {Buffer} \
-            CONFIG.CLKOUT7_DRIVES {Buffer} \
-            CONFIG.ENABLE_CDDC {false} \
-            CONFIG.ENABLE_CLOCK_MONITOR {false} \
-            CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} \
-            CONFIG.MMCM_BANDWIDTH {OPTIMIZED} \
-            CONFIG.MMCM_CLKFBOUT_MULT_F {11.875} \
-            CONFIG.MMCM_CLKIN1_PERIOD {10.000} \
-            CONFIG.MMCM_CLKOUT0_DIVIDE_F {4.750} \
-            CONFIG.MMCM_COMPENSATION {AUTO} \
-            CONFIG.MMCM_DIVCLK_DIVIDE {1} \
-            CONFIG.OPTIMIZE_CLOCKING_STRUCTURE_EN {false} \
-            CONFIG.PRIMITIVE {MMCM} \
+            CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {300} \
+            CONFIG.CLKOUT2_USED {true} \
+            CONFIG.CLK_IN1_BOARD_INTERFACE {pcie_refclk} \
+            CONFIG.MMCM_CLKFBOUT_MULT_F {15.000} \
+            CONFIG.MMCM_CLKOUT0_DIVIDE_F {6.000} \
+            CONFIG.MMCM_CLKOUT1_DIVIDE {5} \
+            CONFIG.NUM_OUT_CLKS {2} \
             CONFIG.PRIM_SOURCE {Differential_clock_capable_pin} \
             CONFIG.RESET_PORT {resetn} \
             CONFIG.RESET_TYPE {ACTIVE_LOW} \
@@ -168,7 +263,7 @@ object TclGeneralConfigs {
     sb.append("make_bd_intf_pins_external  [get_bd_intf_pins clk_wiz_0/CLK_IN1_D] -name SYSCLK3\n")
 
     // Connect the axi clocks to this clock
-    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins hbm_0/AXI_*_ACLK]\n")
+    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins hbm_0/AXI_*_ACLK]\n")
     sb.append(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ${descriptor.name}_0/clock]\n")
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_clock_converter_0/m_axi_aclk]\n")
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_clock_converter_1/m_axi_aclk]\n")
@@ -190,9 +285,11 @@ object TclGeneralConfigs {
     sb.append(
       "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_clock_converter_1/m_axi_aresetn]\n"
     )
-    sb.append("connect_bd_net [get_bd_ports PCIE_PERST_LS_65] [get_bd_pins proc_sys_reset_1/ext_reset_in]\n")
+    
 
-    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins smartconnect*/*clk]\n") // for the   smartconnects
+    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins smartconnect*/aclk]\n") // for the smartconnects system side
+    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins smartconnect*/aclk1]\n")
+
     sb.append(
       "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins smartconnect*/*aresetn]\n"
     ) // for the smartconnects reset
@@ -203,6 +300,53 @@ object TclGeneralConfigs {
     sb.append(
       "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter*/*aresetn*]\n"
     ) // for the smartconnects reset
+
+    // Reset coming from AXI through the pcie
+    sb.append("""
+            # Create and configure AXI GPIO
+        create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_0
+        set_property -dict [list \
+          CONFIG.C_ALL_OUTPUTS {1} \
+          CONFIG.C_DOUT_DEFAULT {0xFFFFFFFF} \
+          CONFIG.C_GPIO_WIDTH {1} \
+        ] [get_bd_cells axi_gpio_0]
+
+        # Create and configure logic vector
+        create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 util_vector_logic_0
+        set_property -dict [list \
+          CONFIG.C_OPERATION {and} \
+          CONFIG.C_SIZE {1} \
+        ] [get_bd_cells util_vector_logic_0]
+
+        # Create axi interconnect
+        create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_32
+        set_property -dict [list \
+          CONFIG.NUM_MI {2} \
+          CONFIG.NUM_SI {1} \
+        ] [get_bd_cells smartconnect_32]
+
+        
+
+        # Connect the axi full of the xdma to the axi clock converter
+        connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]
+        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_0/s_axi_aclk]
+        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_0/s_axi_aresetn]
+
+        # Connect the xdma axi lite to the axi clock converters and the axi gpio through the smartconnect
+        connect_bd_intf_net [get_bd_intf_pins smartconnect_32/S00_AXI] [get_bd_intf_pins xdma_0/M_AXI_LITE]
+        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_1/s_axi_aclk]
+        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_1/s_axi_aresetn]
+        connect_bd_intf_net [get_bd_intf_pins smartconnect_32/M01_AXI] [get_bd_intf_pins axi_gpio_0/S_AXI]
+        connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/S_AXI] [get_bd_intf_pins smartconnect_32/M00_AXI]
+        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins smartconnect_32/aclk]
+        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins smartconnect_32/aresetn]
+        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_gpio_0/s_axi_aclk]
+        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_gpio_0/s_axi_aresetn]
+        connect_bd_net [get_bd_pins axi_gpio_0/gpio_io_o] [get_bd_pins util_vector_logic_0/Op1]
+    """)
+    
+    sb.append("connect_bd_net [get_bd_ports PCIE_PERST_LS_65] [get_bd_pins util_vector_logic_0/Op2]\n")
+    sb.append("connect_bd_net [get_bd_pins util_vector_logic_0/Res] [get_bd_pins proc_sys_reset_1/ext_reset_in]\n")
 
     sb.toString()
   }

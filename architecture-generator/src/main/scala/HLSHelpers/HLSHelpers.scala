@@ -149,20 +149,26 @@ object VitisModuleFactory {
     }
 
     // Create an Aximm_VitisInterface
-    val M_AXI_GMEM_INTERFACE = Aximm_VitisInterface(
-      "m_axi_gmem",
-      InterfaceRole.master,
-      chext.amba.axi4.Config(
-        wId = idWidth,
-        wAddr = addrWidth,
-        wData = dataWidth,
-        wUserAW = awuserWidth,
-        wUserAR = aruserWidth,
-        wUserW = wuserWidth,
-        wUserR = ruserWidth,
-        wUserB = buserWidth
+    val M_AXI_GMEM_INTERFACE = if (dataWidth > 0) {
+      Some(
+        Aximm_VitisInterface(
+          "m_axi_gmem",
+          InterfaceRole.master,
+          chext.amba.axi4.Config(
+            wId = idWidth,
+            wAddr = addrWidth,
+            wData = dataWidth,
+            wUserAW = awuserWidth,
+            wUserAR = aruserWidth,
+            wUserW = wuserWidth,
+            wUserR = ruserWidth,
+            wUserB = buserWidth
+          )
+        )
       )
-    )
+    } else {
+      None
+    }
 
     val S_AXI_CONTROL_PARAMS =
       moduleContent.split("\n").filter(line => line.contains("parameter") && line.contains("C_S_AXI_CONTROL"))
@@ -186,17 +192,23 @@ object VitisModuleFactory {
       }
     }
 
-    // Create an S_AXI_CONTROL interface
-    val aximmInterface_s_axi_control = Aximm_VitisInterface(
-      "s_axi_control",
-      InterfaceRole.slave,
-      chext.amba.axi4.Config(
-        wData = dataWidth,
-        wAddr = addrWidth,
-        lite = true,
-        hasProt = false
+    // Create an S_AXI_CONTROL interface if dataWidth > 0 otherwise None
+    val aximmInterface_s_axi_control = if (dataWidth > 0) {
+      Some(
+        Aximm_VitisInterface(
+          "s_axi_control",
+          InterfaceRole.slave,
+          chext.amba.axi4.Config(
+            wData = dataWidth,
+            wAddr = addrWidth,
+            lite = true,
+            hasProt = false
+          )
+        )
       )
-    )
+    } else {
+      None
+    }
 
     // In the lines with output or input, find the width of the TDATA and create an Axis_VitisInterface with the name as  {name}_TDATA
     // Only the lines with output or input are considered
@@ -233,20 +245,26 @@ object VitisModuleFactory {
       }
     }
 
-    println("module name: " + moduleName)
-    println("is_ap_start: " + is_ap_start)
-    println("is_ap_done: " + is_ap_done)
-    println("is_ap_idle: " + is_ap_idle)
-    println("is_ap_ready: " + is_ap_ready)
+
+    val config_seq = (Seq(M_AXI_GMEM_INTERFACE, aximmInterface_s_axi_control).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
+
+    // Print the contents of the config sequence
+    config_seq.foreach { interface =>
+      println(s"Interface Name: ${interface.name}")
+      println(s"Interface Role: ${interface.role}")
+      println(s"Interface Type: ${interface.chiselType}")
+    }
+
 
     // Create the config with the interfaces
     VitisModuleConfig(
       moduleName,
-      Seq(M_AXI_GMEM_INTERFACE, aximmInterface_s_axi_control) ++ tdataInterfaces,
+      config_seq,
       is_ap_start,
       is_ap_done,
       is_ap_idle,
       is_ap_ready
     )
+    
   }
 }
