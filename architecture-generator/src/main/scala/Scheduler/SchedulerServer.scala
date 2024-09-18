@@ -34,11 +34,12 @@ class SchedulerServer(
     vasCount: Int,
     sysAddressWidth: Int,
     ignoreRequestSignals: Boolean,
-    nBeats: Int = 1
+    nBeats: Int
 ) extends Module {
 
   require(contentionThreshold + contentionDelta <= (peCount + vasCount))
   require(contentionThreshold - contentionDelta >= 0)
+  require(nBeats <= 16)
 
   // States
   object state extends ChiselEnum {
@@ -66,7 +67,7 @@ class SchedulerServer(
   private val procInterrupt = RegInit(0.U(64.W))
   private val maxLength = RegInit(0.U(64.W))
   private val stateReg = RegInit(state.init)
-  private val currLen = Wire(UInt(64.W))
+  private val currLen = RegInit(0.U(64.W))
   private val contentionCounter = RegInit(0.U(64.W))
   private val contentionThresh = RegInit(contentionThreshold.U(64.W))
   private val networkCongested = RegInit(false.B)
@@ -85,6 +86,7 @@ class SchedulerServer(
   regBlock.reg(fifoTailReg, read = true, write = true, desc = "The tail register of the FIFO")
   regBlock.reg(fifoHeadReg, read = true, write = true, desc = "The head register of the FIFO")
   regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
+  regBlock.reg(currLen, read = true, write = true, desc = "A register that holds the current length of the FIFO")
 
   // Contention Counter FSM
   if (ignoreRequestSignals) {
@@ -184,7 +186,7 @@ class SchedulerServer(
     when(io.write_data.ready && memDataCounter === 1.U) {
       stateReg := state.init
       popOrPush := false.B
-
+      currLen := currLen + 1.U
       when(fifoTailReg < maxLength - 1.U) {
         fifoTailReg := fifoTailReg + 1.U
       }.otherwise {
@@ -193,6 +195,7 @@ class SchedulerServer(
 
     }.elsewhen(io.write_data.ready) {
       memDataCounter := memDataCounter - 1.U
+      currLen := currLen + 1.U
       when(fifoTailReg < maxLength - 1.U) {
         fifoTailReg := fifoTailReg + 1.U
       }.otherwise {
@@ -213,6 +216,7 @@ class SchedulerServer(
       stateReg := state.serveStealRequests
       popOrPush := true.B
 
+      currLen := currLen - 1.U
       when(fifoHeadReg < maxLength - 1.U) {
         fifoHeadReg := fifoHeadReg + 1.U
       }.otherwise {
@@ -220,6 +224,7 @@ class SchedulerServer(
       }
     }.elsewhen(io.read_data.valid) {
       memDataCounter := memDataCounter - 1.U
+      currLen := currLen - 1.U
       when(fifoHeadReg < maxLength - 1.U) {
         fifoHeadReg := fifoHeadReg + 1.U
       }.otherwise {
@@ -342,35 +347,6 @@ class SchedulerServer(
 
   }
 
-  // currLen calculation
-  val lengthHistroy = RegInit(0.U(64.W))
-
-  when(fifoTailReg > fifoHeadReg) {
-
-    currLen := fifoTailReg - fifoHeadReg
-    lengthHistroy := currLen
-
-  }.elsewhen(fifoTailReg < fifoHeadReg) {
-
-    currLen := maxLength - fifoHeadReg + fifoTailReg
-    lengthHistroy := currLen
-
-  }.otherwise {
-
-    lengthHistroy := lengthHistroy
-
-    when(popOrPush) {
-
-      currLen := 0.U
-
-    }.otherwise {
-
-      currLen := lengthHistroy + 1.U
-
-    }
-
-  }
-
   // Reply to axi management operations.
   when(regBlock.rdReq) {
     regBlock.rdOk()
@@ -382,15 +358,7 @@ class SchedulerServer(
 }
 
 // object virtualStealServer extends App {
-//     (new chisel3.stage.ChiselStage).emitVerilog(
-//         {
-//           val module = (new virtualStealServer(256, 4, 8, 2, 1, 64, false))
-//           module
-
-//         },
-//         Array(
-//           "--emission-options=disableMemRandomization,disableRegisterRandomization",
-//           f"--target-dir=output"
-//         )
-//       )
+//   emitVerilog(
+//     new SchedulerServer(256, 4, 8, 2, 1, 64, false, 16)
+//   )
 // }

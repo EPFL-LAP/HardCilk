@@ -109,7 +109,8 @@ class Scheduler(
         contentionDelta = contentionDelta_,
         vasCount = argRouteServersNumber + peCountGlobalTaskIn,
         sysAddressWidth = addrWidth,
-        ignoreRequestSignals = successiveNetworkConfig
+        ignoreRequestSignals = successiveNetworkConfig,
+        nBeats = 16
       )
     )
   )
