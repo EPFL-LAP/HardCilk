@@ -1,29 +1,49 @@
 cmake_minimum_required(VERSION 3.22)
-project(MyProject C CXX)
+set(CMAKE_CXX_STANDARD 20)
 
-# Set the C++ standard
-set(CMAKE_CXX_STANDARD 11)
+project(hardcilk)
 
-# Locate all source files
-file(GLOB SOURCES "src/*.cpp" "include/*.h" "include/*.tpp")
+set(HC_VERILATOR_ARGS --no-timing --timescale 1ns/1ps -Wno-WIDTHEXPAND -Wno-STMTDLY -Wno-WIDTHTRUNC -Wno-WIDTHXZEXPAND -Wno-ASCRANGE -Wno-CASEINCOMPLETE -Wno-COMBDLY -Wno-PINMISSING --trace)
+set(HC_SYSTEMC_COMPILE_DEFINITIONS VERILATED_TRACE_ENABLED)
 
+# add more variables
+# maybe make these variables overridable
 
-find_package(SystemCLanguage REQUIRED)
-find_package(fmt REQUIRED)
-find_package(verilator REQUIRED)
-find_package(hdlscw REQUIRED)
-find_package(sctlm REQUIRED)
+if(NOT DEFINED HC_ENABLE_SYSTEMC_TARGETS)
+    set(
+        HC_ENABLE_SYSTEMC_TARGETS ON
+        CACHE BOOL
+        "Enables SystemC targets, requires sctlm, verilator, and SystemC."
+    )
+endif()
 
-# Add executable target
-add_executable(HardCilkDriver ${SOURCES})
+if(NOT DEFINED HC_ENABLE_PCIE_TARGETS)
+    set(
+        HC_ENABLE_PCIE_TARGETS ON
+        CACHE BOOL
+        "Enables SystemC targets, requires sctlm, verilator, and SystemC."
+    )
+endif()
 
-# Include directories
-include_directories(include/)
+if (NOT DEFINED HC_NO_FMT)
+    set(
+        HC_NO_FMT OFF
+        CACHE BOOL
+        "Enables targets that use the format library, for convenience."
+    )
+endif()
 
-# Add the subdirectory containing the CMakeLists.txt file for the library
-add_subdirectory(svm/software/error)
-add_subdirectory(svm/software/util)
-add_subdirectory(svm/software/d4e)
-add_subdirectory(svm/software/com9n)
+if (HC_ENABLE_SYSTEMC_TARGETS)
+    find_package(SystemCLanguage REQUIRED)
+    find_package(verilator REQUIRED)
+    find_package(hdlscw REQUIRED)
+    find_package(sctlm REQUIRED)
+endif()
 
-target_link_libraries(HardCilkDriver PUBLIC svm::d4e sctlm::sctlm)
+if (NOT HC_NO_FMT)
+    find_package(fmt REQUIRED)
+endif()
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/driver)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/svm/software)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/projects)

@@ -1,0 +1,6642 @@
+{
+  "fullSysGenDescriptor" : {
+    "name" : "fibonacci",
+    "widthAddress" : 64,
+    "widthContCounter" : 32,
+    "taskDescriptors" : [ {
+      "name" : "fib",
+      "peVersion" : "1.0",
+      "peHDLPath" : "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/fib/hdl/verilog",
+      "isRoot" : true,
+      "isCont" : false,
+      "dynamicMemAlloc" : false,
+      "numProcessingElements" : 64,
+      "widthTask" : 128,
+      "sidesConfigs" : [ {
+        "sideType" : "scheduler",
+        "numVirtualServers" : 2,
+        "capacityVirtualQueue" : 2048,
+        "capacityPhysicalQueue" : 8,
+        "portWidth" : 128,
+        "virtualEntrtyWidth" : 0
+      } ],
+      "mgmtBaseAddresses" : {
+        "schedulerServersBaseAddresses" : [ 0, 64 ],
+        "allocationServersBaseAddresses" : [ ],
+        "memoryAllocatorServersBaseAddresses" : [ ]
+      },
+      "hasAXI" : true
+    }, {
+      "name" : "sum",
+      "peVersion" : "1.0",
+      "peHDLPath" : "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/sum/hdl/verilog",
+      "isRoot" : false,
+      "isCont" : true,
+      "dynamicMemAlloc" : false,
+      "numProcessingElements" : 64,
+      "widthTask" : 256,
+      "sidesConfigs" : [ {
+        "sideType" : "scheduler",
+        "numVirtualServers" : 2,
+        "capacityVirtualQueue" : 2048,
+        "capacityPhysicalQueue" : 8,
+        "portWidth" : 256,
+        "virtualEntrtyWidth" : 0
+      }, {
+        "sideType" : "allocator",
+        "numVirtualServers" : 4,
+        "capacityVirtualQueue" : 4096,
+        "capacityPhysicalQueue" : 16,
+        "portWidth" : 64,
+        "virtualEntrtyWidth" : 0
+      }, {
+        "sideType" : "argumentNotifier",
+        "numVirtualServers" : 16,
+        "capacityVirtualQueue" : 2048,
+        "capacityPhysicalQueue" : 32,
+        "portWidth" : 64,
+        "virtualEntrtyWidth" : 0
+      } ],
+      "mgmtBaseAddresses" : {
+        "schedulerServersBaseAddresses" : [ 128, 192 ],
+        "allocationServersBaseAddresses" : [ 256, 320, 384, 448 ],
+        "memoryAllocatorServersBaseAddresses" : [ ]
+      },
+      "hasAXI" : true
+    } ],
+    "spawnList" : {
+      "fib" : [ "fib" ]
+    },
+    "spawnNextList" : {
+      "fib" : [ "sum" ]
+    },
+    "sendArgumentList" : {
+      "fib" : [ "sum" ],
+      "sum" : [ "sum" ]
+    },
+    "cfgAxiHardCilk" : {
+      "wId" : 0,
+      "wAddr" : 32,
+      "wData" : 32,
+      "read" : true,
+      "write" : true,
+      "lite" : false,
+      "hasLock" : true,
+      "hasCache" : true,
+      "hasProt" : true,
+      "hasQos" : true,
+      "hasRegion" : true,
+      "axi3Compat" : false,
+      "wUserAR" : 0,
+      "wUserR" : 0,
+      "wUserAW" : 0,
+      "wUserW" : 0,
+      "wUserB" : 0
+    },
+    "targetFrequency" : 250,
+    "memorySizeSim" : 16
+  },
+  "systemConnections" : {
+    "connections" : [ {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 1
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 1,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 2
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 2,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 3
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 3,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 4
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 4,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 5
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 5,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 6
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 6,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 7
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 7,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 8
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 8,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 9
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 9,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 10
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 10,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 11
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 11,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 12
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 12,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 13
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 13,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 14
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 14,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 15
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 15,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 16
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 16,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 17
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 17,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 18
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 18,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 19
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 19,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 20
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 20,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 21
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 21,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 22
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 22,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 23
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 23,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 24
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 24,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 25
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 25,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 26
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 26,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 27
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 27,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 28
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 28,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 29
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 29,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 30
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 30,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 31
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 31,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 32
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 32,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 33
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 33,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 34
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 34,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 35
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 35,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 36
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 36,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 37
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 37,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 38
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 38,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 39
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 39,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 40
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 40,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 41
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 41,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 42
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 42,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 43
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 43,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 44
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 44,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 45
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 45,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 46
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 46,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 47
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 47,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 48
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 48,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 49
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 49,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 50
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 50,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 51
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 51,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 52
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 52,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 53
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 53,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 54
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 54,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 55
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 55,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 56
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 56,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 57
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 57,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 58
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 58,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 59
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 59,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 60
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 60,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 61
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 61,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 62
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 62,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 63
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 63,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 1,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 1
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 2,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 2
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 3,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 3
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 4,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 4
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 5,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 5
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 6,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 6
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 7,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 7
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 8,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 8
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 9,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 9
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 10,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 10
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 11,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 11
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 12,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 12
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 13,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 13
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 14,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 14
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 15,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 15
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 16,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 16
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 17,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 17
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 18,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 18
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 19,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 19
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 20,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 20
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 21,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 21
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 22,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 22
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 23,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 23
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 24,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 24
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 25,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 25
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 26,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 26
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 27,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 27
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 28,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 28
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 29,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 29
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 30,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 30
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 31,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 31
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 32,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 32
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 33,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 33
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 34,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 34
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 35,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 35
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 36,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 36
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 37,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 37
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 38,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 38
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 39,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 39
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 40,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 40
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 41,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 41
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 42,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 42
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 43,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 43
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 44,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 44
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 45,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 45
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 46,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 46
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 47,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 47
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 48,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 48
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 49,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 49
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 50,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 50
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 51,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 51
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 52,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 52
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 53,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 53
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 54,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 54
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 55,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 55
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 56,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 56
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 57,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 57
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 58,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 58
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 59,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 59
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 60,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 60
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 61,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 61
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 62,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 62
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 63,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 63
+      },
+      "bitWidth" : 128,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 0,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 1,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 1
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 2,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 2
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 3,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 3
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 4,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 4
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 5,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 5
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 6,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 6
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 7,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 7
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 8,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 8
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 9,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 9
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 10,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 10
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 11,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 11
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 12,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 12
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 13,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 13
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 14,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 14
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 15,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 15
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 16,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 16
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 17,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 17
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 18,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 18
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 19,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 19
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 20,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 20
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 21,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 21
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 22,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 22
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 23,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 23
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 24,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 24
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 25,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 25
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 26,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 26
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 27,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 27
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 28,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 28
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 29,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 29
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 30,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 30
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 31,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 31
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 32,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 32
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 33,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 33
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 34,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 34
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 35,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 35
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 36,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 36
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 37,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 37
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 38,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 38
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 39,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 39
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 40,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 40
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 41,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 41
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 42,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 42
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 43,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 43
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 44,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 44
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 45,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 45
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 46,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 46
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 47,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 47
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 48,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 48
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 49,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 49
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 50,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 50
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 51,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 51
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 52,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 52
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 53,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 53
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 54,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 54
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 55,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 55
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 56,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 56
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 57,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 57
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 58,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 58
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 59,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 59
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 60,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 60
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 61,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 61
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 62,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 62
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 63,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 63
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 0,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 1
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 1,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 2
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 2,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 3
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 3,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 4
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 4,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 5
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 5,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 6
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 6,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 7
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 7,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 8
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 8,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 9
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 9,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 10
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 10,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 11
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 11,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 12
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 12,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 13
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 13,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 14
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 14,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 15
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 15,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 16
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 16,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 17
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 17,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 18
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 18,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 19
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 19,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 20
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 20,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 21
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 21,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 22
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 22,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 23
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 23,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 24
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 24,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 25
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 25,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 26
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 26,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 27
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 27,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 28
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 28,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 29
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 29,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 30
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 30,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 31
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 31,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 32
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 32,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 33
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 33,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 34
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 34,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 35
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 35,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 36
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 36,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 37
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 37,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 38
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 38,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 39
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 39,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 40
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 40,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 41
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 41,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 42
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 42,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 43
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 43,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 44
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 44,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 45
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 45,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 46
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 46,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 47
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 47,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 48
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 48,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 49
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 49,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 50
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 50,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 51
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 51,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 52
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 52,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 53
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 53,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 54
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 54,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 55
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 55,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 56
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 56,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 57
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 57,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 58
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 58,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 59
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 59,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 60
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 60,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 61
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 61,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 62
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 62,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "closureOut",
+        "portIndex" : 63
+      },
+      "dstPort" : {
+        "parentName" : "fib",
+        "parentType" : "PE",
+        "parentIndex" : 63,
+        "portType" : "closureIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 0,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 1
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 1,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 2
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 2,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 3
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 3,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 4
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 4,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 5
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 5,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 6
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 6,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 7
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 7,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 8
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 8,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 9
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 9,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 10
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 10,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 11
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 11,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 12
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 12,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 13
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 13,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 14
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 14,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 15
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 15,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 16
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 16,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 17
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 17,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 18
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 18,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 19
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 19,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 20
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 20,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 21
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 21,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 22
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 22,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 23
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 23,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 24
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 24,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 25
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 25,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 26
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 26,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 27
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 27,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 28
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 28,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 29
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 29,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 30
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 30,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 31
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 31,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 32
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 32,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 33
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 33,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 34
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 34,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 35
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 35,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 36
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 36,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 37
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 37,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 38
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 38,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 39
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 39,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 40
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 40,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 41
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 41,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 42
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 42,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 43
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 43,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 44
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 44,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 45
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 45,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 46
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 46,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 47
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 47,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 48
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 48,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 49
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 49,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 50
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 50,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 51
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 51,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 52
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 52,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 53
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 53,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 54
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 54,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 55
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 55,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 56
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 56,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 57
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 57,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 58
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 58,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 59
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 59,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 60
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 60,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 61
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 61,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 62
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 62,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "taskOut",
+        "portIndex" : 63
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 63,
+        "portType" : "taskIn",
+        "portIndex" : 0
+      },
+      "bitWidth" : 256,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 0,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 64
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 1,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 65
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 2,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 66
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 3,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 67
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 4,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 68
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 5,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 69
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 6,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 70
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 7,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 71
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 8,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 72
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 9,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 73
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 10,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 74
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 11,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 75
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 12,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 76
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 13,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 77
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 14,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 78
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 15,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 79
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 16,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 80
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 17,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 81
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 18,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 82
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 19,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 83
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 20,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 84
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 21,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 85
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 22,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 86
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 23,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 87
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 24,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 88
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 25,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 89
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 26,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 90
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 27,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 91
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 28,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 92
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 29,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 93
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 30,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 94
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 31,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 95
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 32,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 96
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 33,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 97
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 34,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 98
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 35,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 99
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 36,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 100
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 37,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 101
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 38,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 102
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 39,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 103
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 40,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 104
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 41,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 105
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 42,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 106
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 43,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 107
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 44,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 108
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 45,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 109
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 46,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 110
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 47,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 111
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 48,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 112
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 49,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 113
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 50,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 114
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 51,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 115
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 52,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 116
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 53,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 117
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 54,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 118
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 55,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 119
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 56,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 120
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 57,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 121
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 58,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 122
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 59,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 123
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 60,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 124
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 61,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 125
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 62,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 126
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    }, {
+      "srcPort" : {
+        "parentName" : "sum",
+        "parentType" : "PE",
+        "parentIndex" : 63,
+        "portType" : "argOut",
+        "portIndex" : 0
+      },
+      "dstPort" : {
+        "parentName" : "sum",
+        "parentType" : "HardCilk",
+        "parentIndex" : 0,
+        "portType" : "argIn",
+        "portIndex" : 127
+      },
+      "bitWidth" : 64,
+      "connectionType" : "AXIS"
+    } ]
+  },
+  "memStats" : {
+    "numSysAXI" : 4,
+    "numPEs" : 128,
+    "totalAXIPorts" : 133,
+    "interconnectDescriptors" : [ {
+      "count" : 5,
+      "ratio" : 5
+    }, {
+      "count" : 27,
+      "ratio" : 4
+    } ]
+  }
+}
