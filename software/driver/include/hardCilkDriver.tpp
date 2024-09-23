@@ -19,7 +19,7 @@ template <typename T> int init_system(std::vector<T> base_task_data){
 
     // Set the return addresses of the driver
     for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
-        set_return_addr(taskData->cont);
+        setReturnAddr(taskData->cont);
     }
 
     // Initialize the different servers
