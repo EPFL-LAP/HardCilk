@@ -31,7 +31,6 @@ reg taskIn_TVALID_reg;
 reg taskIn_TREADY_reg;
 reg [63:0] argOut_TDATA_reg;
 reg argOut_TVALID_reg;
-reg argOut_TREADY_reg;
 
     always @(posedge ap_clk) begin
         if (!ap_rst_n) begin
@@ -40,15 +39,13 @@ reg argOut_TREADY_reg;
             taskIn_TREADY_reg <= 1'b0;
             argOut_TDATA_reg <= 64'b0;
             argOut_TVALID_reg <= 1'b0;
-            argOut_TREADY_reg <= 1'b0;
         end else begin
             taskIn_TDATA_reg <= taskIn_TDATA;
             taskIn_TVALID_reg <= taskIn_TVALID;
-            taskIn_TREADY_reg <= taskIn_TVALID && argOut_TREADY;
+            taskIn_TREADY_reg <= argOut_TREADY;
 
             argOut_TDATA_reg <= taskIn_TDATA_reg[127:64];
             argOut_TVALID_reg <= taskIn_TVALID_reg;
-            argOut_TREADY_reg <= taskIn_TVALID_reg && argOut_TREADY;
         end
     end
 
@@ -56,9 +53,5 @@ reg argOut_TREADY_reg;
 
     assign argOut_TDATA = argOut_TDATA_reg;
     assign argOut_TVALID = argOut_TVALID_reg;
-    assign argOut_TREADY = argOut_TREADY_reg;
 
 endmodule
-
-
-

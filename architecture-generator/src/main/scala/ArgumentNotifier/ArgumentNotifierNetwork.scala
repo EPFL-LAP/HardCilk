@@ -4,6 +4,9 @@ import chisel3._
 import chisel3.util._
 import Allocator.AllocatorBuffer
 
+import chext.elastic
+import chext.elastic.ConnectOp._
+
 class ArgumentNotifierNetworkIO(addrWidth: Int, peCount: Int, vasNum: Int) extends Bundle {
   val connVAS = Vec(vasNum, DecoupledIO(UInt(addrWidth.W)))
   val connPE = Vec(peCount, Flipped(DecoupledIO(UInt(addrWidth.W))))
@@ -44,36 +47,7 @@ class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasN
   val tagList = List.tabulate(upperPowerOf2)(n => n)
 
   val io = IO(new ArgumentNotifierNetworkIO(addrWidth, peCount, vasNum))
-  val networkUnits = Seq.fill(peCount)(Module(new ArgumentNotifierNetworkUnit(addrWidth)))
-
-  var virtNetworkUnits: List[ArgumentNotifierServerNetworkUnit] = Nil
-
-  var numberVASWithTwoTags = upperPowerOf2 - vasNum
-
-  var currentVas = 0
-  var i = 0
-  while (i < tagList.length) {
-    if (currentVas < numberVASWithTwoTags) {
-      // println("Two tags")
-      virtNetworkUnits = virtNetworkUnits :+ Module(
-        new ArgumentNotifierServerNetworkUnit(
-          addrWidth,
-          log2Ceil(vasNum),
-          tagBitsShift,
-          Array(tagList(i), tagList(i + 1)),
-          vasNum
-        )
-      )
-      i = i + 2
-    } else {
-      // println("One tag")
-      virtNetworkUnits = virtNetworkUnits :+ Module(
-        new ArgumentNotifierServerNetworkUnit(addrWidth, log2Ceil(vasNum), tagBitsShift, Array(tagList(i)), vasNum)
-      )
-      i = i + 1
-    }
-    currentVas += 1
-  }
+  val networkUnits = Seq.tabulate(peCount)(idx => Module(new ArgumentNotifierNetworkUnit(addrWidth, peCount - idx - 1)))
 
   /*
     val virtNetworkUnits = tagList.zipWithIndex.map { case (tag, index) =>
@@ -100,16 +74,16 @@ class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasN
   networkUnits(peCount - 1).io.addressIn.valid := false.B
   connectZeros(networkUnits(peCount - 1).io.addressIn.bits)
 
-  // Connection from the PEs network to the virtual servers network
-  virtNetworkUnits(vasNum - 1).io.addressIn <> networkUnits(0).io.addressOut
-
-  // Connection of virtual servers network units
-  for (i <- 0 until vasNum - 1) {
-    virtNetworkUnits(i).io.addressIn <> virtNetworkUnits(i + 1).io.addressOut
+  val demux = Module(new elastic.Demux(UInt(addrWidth.W), vasNum))
+  io.connVAS.zip(demux.io.sinks).map(x => x._2 :=> x._1)
+  new elastic.Fork(networkUnits(0).io.addressOut) {
+    protected def onFork: Unit = {
+      fork() :=> demux.io.source
+      new elastic.Transform(fork(), demux.io.select) {
+        protected def onTransform: Unit = {
+          out := (in >> tagBitsShift.U) % vasNum.U
+        }
+      }      
+    }
   }
-  virtNetworkUnits(0).io.addressOut.ready := false.B
-  for (i <- 0 until vasNum) {
-    virtNetworkUnits(i).io.vasAddressOut <> io.connVAS(i)
-  }
-
 }

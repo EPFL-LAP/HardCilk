@@ -151,7 +151,9 @@ case class TaskDescriptor(
     assert(
       sideType == "scheduler" || sideType == "allocator" || sideType == "argumentNotifier" || sideType == "memoryAllocator"
     )
-    sidesConfigs.find(_.sideType == sideType).map(_.portWidth).getOrElse(0)
+    val width = sidesConfigs.find(_.sideType == sideType).map(_.portWidth).getOrElse(0)
+    assert(width != 0, "Please make sure to specify the width of each port in the json descriptor")
+    width
   }
   def getVirtualEntrtyWidth(sideType: String): Int = {
     assert(

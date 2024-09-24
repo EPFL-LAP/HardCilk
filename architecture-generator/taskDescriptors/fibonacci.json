@@ -15,7 +15,7 @@
                     "sideType": "scheduler",
                     "numVirtualServers": 2,
                     "capacityVirtualQueue": 2048,
-                    "capacityPhysicalQueue": 8,
+                    "capacityPhysicalQueue": 64,
                     "portWidth": 128
                 }
             ]
@@ -28,7 +28,7 @@
             "isCont": true,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 64,
+            "numProcessingElements": 32,
             "widthTask": 256,
 
 
@@ -37,7 +37,7 @@
                     "sideType": "scheduler",
                     "numVirtualServers": 2,   
                     "capacityVirtualQueue": 2048,
-                    "capacityPhysicalQueue": 8,
+                    "capacityPhysicalQueue": 64,
                     "portWidth": 256
                 },
                 {

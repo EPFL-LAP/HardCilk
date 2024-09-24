@@ -10,7 +10,7 @@ class ArgumentNotifierNetworkUnitIO(addrWidth: Int) extends Bundle {
   val addressOut = DecoupledIO(UInt(addrWidth.W)) // Output to the next unit
 }
 
-class ArgumentNotifierNetworkUnit(addrWidth: Int) extends Module {
+class ArgumentNotifierNetworkUnit(addrWidth: Int, priority: Int) extends Module {
   val io = IO(new ArgumentNotifierNetworkUnitIO(addrWidth))
 
   object state extends ChiselEnum {
@@ -20,7 +20,7 @@ class ArgumentNotifierNetworkUnit(addrWidth: Int) extends Module {
 
   val stateReg = RegInit(state.takeInAddress)
   val addressReg = RegInit(0.U(addrWidth.W))
-  val priorityReg = RegInit(true.B)
+  val priorityReg = RegInit(priority.U)
 
   io.addressIn.ready := false.B
   io.peAddress.ready := false.B
@@ -29,17 +29,21 @@ class ArgumentNotifierNetworkUnit(addrWidth: Int) extends Module {
 
   when(stateReg === state.takeInAddress) {
     when(io.addressIn.valid && io.peAddress.valid) {
-      when(priorityReg) {
+      when(priorityReg === 0.U) {
         addressReg := io.peAddress.bits
+        priorityReg := priority.U
       }.otherwise {
         addressReg := io.addressIn.bits
       }
-      priorityReg := ~priorityReg
+      priorityReg := priorityReg - 1.U
     }.otherwise {
       when(io.peAddress.valid) {
         addressReg := io.peAddress.bits
       }.elsewhen(io.addressIn.valid) {
         addressReg := io.addressIn.bits
+        when(priorityReg =/= 0.U) {
+          priorityReg := priorityReg - 1.U
+        }
       }
     }
 
@@ -57,7 +61,7 @@ class ArgumentNotifierNetworkUnit(addrWidth: Int) extends Module {
 
   when(stateReg === state.takeInAddress) {
     when(io.addressIn.valid && io.peAddress.valid) {
-      when(priorityReg) {
+      when(priorityReg === 0.U) {
         io.peAddress.ready := true.B
       }.otherwise {
         io.addressIn.ready := true.B

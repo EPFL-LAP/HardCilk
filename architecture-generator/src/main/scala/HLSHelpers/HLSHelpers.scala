@@ -217,6 +217,7 @@ object VitisModuleFactory {
     val tdataInterfaces = tdataLines.map { line =>
       val tdataWidth = line.split("\\[")(1).split(":")(0).toInt + 1
       val tdataName = line.split(" ")(3).split("_")(0)
+
       Axis_VitisInterface(
         f"${tdataName}",
         if (line.contains("output")) InterfaceRole.master else InterfaceRole.slave,
@@ -245,16 +246,7 @@ object VitisModuleFactory {
       }
     }
 
-
     val config_seq = (Seq(M_AXI_GMEM_INTERFACE, aximmInterface_s_axi_control).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
-
-    // Print the contents of the config sequence
-    config_seq.foreach { interface =>
-      println(s"Interface Name: ${interface.name}")
-      println(s"Interface Role: ${interface.role}")
-      println(s"Interface Type: ${interface.chiselType}")
-    }
-
 
     // Create the config with the interfaces
     VitisModuleConfig(

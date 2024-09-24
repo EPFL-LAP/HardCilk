@@ -45,15 +45,12 @@ class SchedulerLocalNetwork(
   var maxLengthThresh = max((0.7 * queueMaxLength).asInstanceOf[Int], 1)
 
   if (!spawnsItself) {
-    // println("Does not spawn itself")
     minLengthThresh = (0.8 * queueMaxLength).asInstanceOf[Int]
     maxLengthThresh = queueMaxLength - 1
   }
 
   assert(minLengthThresh < queueMaxLength)
   assert(maxLengthThresh <= queueMaxLength)
-
-  // println(f"\t\t From Steal Server the minLengthThresh = ${minLengthThresh}, the maxLengthThresh = ${maxLengthThresh}")
 
   // Instantiate the stealing servers.
   val stealServers = Seq.fill(peCount)(

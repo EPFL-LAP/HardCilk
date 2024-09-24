@@ -3,22 +3,21 @@
     "taskDescriptors": [
         {
             "name": "qsort",
-            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSort/qsort/qsort/hls/impl/verilog",
+            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/qsort/hls/syn/verilog",
             "isRoot": true,
             "isCont": false,
             "dynamicMemAlloc": false,
-
             "numProcessingElements": 64,
             "widthTask": 256,
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 1,  
+                    "numVirtualServers": 1,
                     "capacityVirtualQueue": 8192,
-                    "capacityPhysicalQueue": 128
+                    "capacityPhysicalQueue": 64,
+                    "portWidth": 256
                 }
             ]
-            
         },
         {
             "name": "sync",
@@ -29,41 +28,50 @@
             "hasAXI": false,
             "numProcessingElements": 16,
             "widthTask": 128,
-
-
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 1,   
+                    "numVirtualServers": 1,
                     "capacityVirtualQueue": 8192,
-                    "capacityPhysicalQueue": 128
+                    "capacityPhysicalQueue": 64,
+                    "portWidth": 128
                 },
                 {
                     "sideType": "allocator",
-                    "numVirtualServers": 4,  
+                    "numVirtualServers": 4,
                     "capacityVirtualQueue": 8192,
-                    "capacityPhysicalQueue": 32
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 64
                 },
                 {
                     "sideType": "argumentNotifier",
-                    "numVirtualServers": 16,  
+                    "numVirtualServers": 16,
                     "capacityVirtualQueue": 8192,
-                    "capacityPhysicalQueue": 32
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 64
                 }
             ]
         }
     ],
     "spawnList": {
-        "qsort": ["qsort"]
+        "qsort": [
+            "qsort"
+        ]
     },
     "spawnNextList": {
-        "qsort": ["sync"]
+        "qsort": [
+            "sync"
+        ]
     },
     "sendArgumentList": {
-        "qsort": ["sync"],
-        "sync": ["sync"]
+        "qsort": [
+            "sync"
+        ],
+        "sync": [
+            "sync"
+        ]
     },
-    "widthAddress":64,
-    "widthContCounter":32,
+    "widthAddress": 64,
+    "widthContCounter": 32,
     "targetFrequency": 200
 }

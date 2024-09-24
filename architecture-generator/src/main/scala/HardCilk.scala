@@ -110,7 +110,7 @@ class HardCilk(
           pe.getPort("ap_start").asInstanceOf[Bool] := true.B
         } catch {
           case e: Exception => {
-            println(f"This module has no ap_start. ${e}")
+            //println(f"This module has no ap_start. ${e}")
           }
         }
 
@@ -207,10 +207,7 @@ class HardCilk(
             reduceAxi = reduceAxi
           )
         ))
-        println(f"sync side port width ${task.getPortWidth("argumentNotifier")}")
 
-        // val ArgumentNotifierExport = IO(chiselTypeOf(ArgumentNotifierSeq.last.io)).suggestName(f"${task.name}_argumentNotifier")
-        // ArgumentNotifierExport <> ArgumentNotifierSeq.last.io
 
         // Export the AXI interface of the ArgumentNotifier
         argumentNotifierMap(task.name).axi_full_argRoute.zipWithIndex.foreach {
@@ -238,7 +235,7 @@ class HardCilk(
         memoryAllocatorMap += (task.name -> Module(
           new Allocator(
             addrWidth = fullSysGenDescriptor.widthAddress,
-            peCount = fullSysGenDescriptor.getPortCount("memAlloc", task.name),
+            peCount = fullSysGenDescriptor.getPortCount("mallocIn", task.name),
             vcasCount = task.getNumServers("memoryAllocator"),
             queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),
             pePortWidth = task.getPortWidth("memoryAllocator"),
@@ -246,7 +243,7 @@ class HardCilk(
           )
         ))
 
-        // Export the AXI interface of the ClosureAllocator
+        // Export the AXI interface of the MemoryAllocator
         memoryAllocatorMap(task.name).io_internal.vcas_axi_full.zipWithIndex.foreach {
           case (port, idx) => {
             val name = f"${task.name}_memoryAllocatorAXI_${idx}"
@@ -279,8 +276,6 @@ class HardCilk(
 
     for (connection <- systemConnectionsDescriptor.connections) {
       try {
-        println(connection)
-
         val physicalSourcePort = connection.srcPort.parentType match {
           case "HardCilk" => {
             connection.srcPort.portType match {
