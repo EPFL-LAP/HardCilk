@@ -71,7 +71,7 @@ class HardCilk(
       for (i <- 0 until task.numProcessingElements) {
         val pe = peArray(i)
         val peName = f"${task.name}_${i}"
-        
+
         if (task.hasAXI) {
           val pem_axi_gmem =
             IO(chiselTypeOf(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_gmem")
@@ -110,7 +110,7 @@ class HardCilk(
           pe.getPort("ap_start").asInstanceOf[Bool] := true.B
         } catch {
           case e: Exception => {
-            //println(f"This module has no ap_start. ${e}")
+            // println(f"This module has no ap_start. ${e}")
           }
         }
 
@@ -207,7 +207,6 @@ class HardCilk(
             reduceAxi = reduceAxi
           )
         ))
-
 
         // Export the AXI interface of the ArgumentNotifier
         argumentNotifierMap(task.name).axi_full_argRoute.zipWithIndex.foreach {
@@ -366,6 +365,7 @@ object HardCilkEmitter extends App {
       val tcl_generation: Boolean = false,
       val rtl_generation: Boolean = false,
       val sc_header_generation: Boolean = false,
+      val project_sc_generation: Boolean = false,
       val output_dir: String = ".",
       val json_path: String = ""
   )
@@ -404,13 +404,17 @@ object HardCilkEmitter extends App {
       opt[Unit]('s', "sc-headers")
         .action((_, c) => c.copy(sc_header_generation = true))
         .text("Generates the C++ header for SystemC simulation"),
+      opt[Unit]('p', "project-sc")
+        .action((_, c) => c.copy(project_sc_generation = true))
+        .text("Generates the C++ project for SystemC simulation"),
       opt[Unit]('a', "all")
         .action((_, c) =>
           c.copy(
             cpp_header_generation = true,
             rtl_generation = true,
             tcl_generation = true,
-            sc_header_generation = true
+            sc_header_generation = true,
+            project_sc_generation = true
           )
         )
         .text("Generates all outputs for HardCilk, equivilant to using `-g -c -b -s` flags"),
@@ -439,7 +443,8 @@ object HardCilkEmitter extends App {
       systemDescriptor: FullSysGenDescriptor,
       pathInputJsonFile: String,
       outputDirPathRTL: String,
-      flags: BuilderConfig
+      flags: BuilderConfig,
+      useBramSim: Boolean
   ): Unit = {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
@@ -457,9 +462,9 @@ object HardCilkEmitter extends App {
     val resourcesFiles = new java.io.File(resourcesPath).listFiles()
     resourcesFiles.foreach { file =>
       val fileName = file.getName()
-      if (fileName != "DualPortBRAM_sim.v") {
+      if ((useBramSim && fileName == "DualPortBRAM_sim.v") || (!useBramSim && fileName == "DualPortBRAM_xpm.v")) {
         val fileContent = readFile(file.getAbsolutePath())
-        writeFile(s"$outputDirPathRTL/$fileName", fileContent)
+        writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
       }
     }
 
@@ -515,14 +520,28 @@ object HardCilkEmitter extends App {
       val outputDirPathRTL = s"$pathOutputDir/$outputDirName/rtl"
       val outputDirPathSoftwareHeaders = s"$pathOutputDir/$outputDirName/softwareHeaders"
       val outputDirPathTCL = s"$pathOutputDir/$outputDirName/tcl"
+      val outputDirPathSC = s"$pathOutputDir/$outputDirName/software"
 
       // Create the sytem descriptors
       val systemDescriptor = parseJsonFile[FullSysGenDescriptor](pathInputJsonFile)
 
+      // @TODO: Add a flag to delete the output directory
+      // if any of the flags is true, delete the output directory
+      import sys.process._
+      if (
+        flags.rtl_generation || flags.cpp_header_generation || flags.tcl_generation || flags.sc_header_generation || flags.project_sc_generation
+      ) {
+        val outputDir = new java.io.File(s"$pathOutputDir/$outputDirName")
+        if (outputDir.exists()) {
+          val deleteCommand = s"rm -r $outputDir"
+          deleteCommand.!
+        }
+      }
+
       // Create the directories
       if (flags.rtl_generation) {
         new java.io.File(outputDirPathRTL).mkdirs()
-        generateRTL(systemDescriptor, pathInputJsonFile, outputDirPathRTL, flags)
+        generateRTL(systemDescriptor, pathInputJsonFile, outputDirPathRTL, flags, false)
         dumpJsonFile[FullSysGenDescriptorExtended](
           s"$outputDirPathRTL/${systemDescriptor.name}_descriptor_2.json",
           FullSysGenDescriptorExtended.fromFullSysGenDescriptor(systemDescriptor)
@@ -539,7 +558,64 @@ object HardCilkEmitter extends App {
         new java.io.File(outputDirPathTCL).mkdirs()
         TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL, flags.reduce_axi)
       }
+      if (flags.project_sc_generation) {
+        // Using java.nio copy a folder with all its content (files and subfolders) to another folder, source is "pwd/software_template" and destination is "outputDirPathSC"
+        val source = new java.io.File("software_template")
+        val destination = new java.io.File(outputDirPathSC)
+        java.nio.file.Files
+          .walk(source.toPath)
+          .forEach(sourcePath => {
+            val destinationPath = destination.toPath.resolve(source.toPath.relativize(sourcePath))
+            if (sourcePath.toFile.isDirectory) {
+              java.nio.file.Files.createDirectories(destinationPath)
+            } else {
+              java.nio.file.Files.copy(sourcePath, destinationPath)
+            }
+          })
+
+        // Rename `outputDirPathSC/projects/project_template` to `outputDirPathSC/projects/${jsonName}`
+        val projectTemplate = new java.io.File(s"$outputDirPathSC/projects/project_template")
+        val projectDestination = new java.io.File(s"$outputDirPathSC/projects/${jsonName}")
+        projectTemplate.renameTo(projectDestination)
+
+        // Generate the SystemC project in the `outputDirPathSC/project/${jsonName}/include`
+        new java.io.File(s"$outputDirPathSC/projects/${jsonName}/include").mkdirs()
+        CppHeaderTemplate.generateCppHeader(
+          systemDescriptor,
+          s"$outputDirPathSC/projects/${jsonName}/include",
+          flags.reduce_axi
+        )
+
+        // Generate the SystemC testbench in the `outputDirPathSC/projects/${jsonName}/include`
+        TestBenchHeaderTemplate.generateCppHeader(
+          systemDescriptor,
+          s"$outputDirPathSC/projects/${jsonName}/include",
+          flags.reduce_axi
+        )
+
+        // Generate the HDL in the `outputDirPathSC/projects/${jsonName}/hdl`
+        new java.io.File(s"$outputDirPathSC/projects/${jsonName}/hdl").mkdirs()
+        generateRTL(systemDescriptor, pathInputJsonFile, s"$outputDirPathSC/projects/${jsonName}/hdl", flags, true)
+
+        // Read the `outputDirPathSC/projects/${jsonName}/CMakeLists.txt` and replace the `${project_template}` with the `${jsonName}`
+        val cmakeListsPath = s"$outputDirPathSC/projects/${jsonName}/CMakeLists.txt"
+        val cmakeListsContent = readFile(cmakeListsPath)
+        val newCmakeListsContent = cmakeListsContent.replace("${project_template}", jsonName)
+        writeFile(cmakeListsPath, newCmakeListsContent)
+
+        // Also copy `../software/${jsonName}` to `outputDirPathSC/projects/${jsonName}`
+        val sourceProject = new java.io.File(s"../software/${jsonName}")
+        java.nio.file.Files
+          .walk(sourceProject.toPath)
+          .forEach(sourcePath => {
+            val destinationPath = projectDestination.toPath.resolve(sourceProject.toPath.relativize(sourcePath))
+            if (sourcePath.toFile.isDirectory) {
+              java.nio.file.Files.createDirectories(destinationPath)
+            } else {
+              java.nio.file.Files.copy(sourcePath, destinationPath)
+            }
+          })
+      }
     }
   }
-
 }

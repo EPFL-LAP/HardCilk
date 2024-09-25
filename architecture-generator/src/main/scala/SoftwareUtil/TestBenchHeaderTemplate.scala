@@ -27,7 +27,7 @@ object TestBenchHeaderTemplate {
         |using namespace sc_dt;
         |
         | #include <${descriptor.name}Driver.h>
-        | #include <tlmMemory.h>
+        | #include <memIO_tlm.h>
         |
         |FullSysGenDescriptor helperDescriptor;
         |// A memory of ${descriptor.memorySizeSim} GB

@@ -15,7 +15,7 @@
  * @param base_task_data The data of the root task 
  * @return 0 if the system was initialized successfully, -1 otherwise
 */
-template <typename T> int init_system(std::vector<T> base_task_data){
+template <typename T> int initSystem(std::vector<T> base_task_data){
 
     // Set the return addresses of the driver
     for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){

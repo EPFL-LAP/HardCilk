@@ -1,3 +1,3 @@
-[submodule "software/svm"]
-	path = software/svm
+[submodule "architecture-generator/software_template/svm"]
+	path = architecture-generator/software_template/svm
 	url = git@github.com:jnbrq/svm.git

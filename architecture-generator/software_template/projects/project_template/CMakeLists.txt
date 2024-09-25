@@ -1,4 +1,4 @@
-set(HC_TARGET_NAME "fibonacci")
+set(HC_TARGET_NAME "${project_template}")
 
 if(HC_ENABLE_SYSTEMC_TARGETS)
     add_executable(${HC_TARGET_NAME}_systemc "src/systemc_main.cpp")

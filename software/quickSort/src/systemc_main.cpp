@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <iostream>
 
-static constexpr const char *name = "qsort";
+static constexpr const char *name = "quickSort";
 
 int sc_main(int argc, char **argv)
 {
@@ -23,7 +23,7 @@ int sc_main(int argc, char **argv)
     tfp->open(fmt::format("{}.vcd", name).c_str());
 #endif
 
-    sc_start(1, SC_US);
+    sc_start(10, SC_MS);
     
 #ifdef VERILATED_TRACE_ENABLED
     tfp->close();

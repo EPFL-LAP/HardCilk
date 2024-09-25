@@ -3,7 +3,7 @@
     "taskDescriptors": [
         {
             "name": "fib",
-            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/fib/hdl/verilog",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/fib/hdl/verilog",
             "isRoot": true,
             "isCont": false,
             "dynamicMemAlloc": false,
@@ -23,7 +23,7 @@
         },
         {
             "name": "sum",
-            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/sum/hdl/verilog",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/sum/hdl/verilog",
             "isRoot": false,
             "isCont": true,
             "dynamicMemAlloc": false,

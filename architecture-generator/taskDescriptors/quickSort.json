@@ -3,7 +3,7 @@
     "taskDescriptors": [
         {
             "name": "qsort",
-            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/qsort/hls/syn/verilog",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/qsort/hls/syn/verilog",
             "isRoot": true,
             "isCont": false,
             "dynamicMemAlloc": false,
@@ -21,7 +21,7 @@
         },
         {
             "name": "sync",
-            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/architecture-generator/sync",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/architecture-generator/sync",
             "isRoot": false,
             "isCont": true,
             "dynamicMemAlloc": false,
