@@ -17,6 +17,7 @@ object CppHeaderTemplate {
          |    bool hasAXI;
          |    int numProcessingElements;
          |    int widthTask;
+         |    int widthMalloc;
          |    std::vector<SideConfig> sidesConfigs;
          |    MemSystemDescriptor mgmtBaseAddresses;
          |    std::map<uint64_t,std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
@@ -68,6 +69,7 @@ object CppHeaderTemplate {
          |    ${td.hasAXI},
          |    ${td.numProcessingElements},
          |    ${td.widthTask},
+         |    ${td.widthMalloc},
          |    {${generateSideConfig(td.sidesConfigs)}},
          |    ${generateMemSystemDescriptor(td.mgmtBaseAddresses)}
          |}

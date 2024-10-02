@@ -22,6 +22,7 @@ class ClosureAllocatorPEIO(
   def getPort(name: String, index: Int): axi4s.Interface = {
     name match {
       case "closureOut" => closureOut(index)
+      case "mallocOut" => closureOut(index)
     }
   }
 }

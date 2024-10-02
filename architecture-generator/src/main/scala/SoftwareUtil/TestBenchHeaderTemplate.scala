@@ -116,8 +116,13 @@ object TestBenchHeaderTemplate {
             i += 1
           }
         } else if (side.numVirtualServers > 0 && side.sideType == "argumentNotifier") {
-          for (l <- 0 until 2*n) {
+          for (l <- 0 until 2 * n) {
             connections += s"""        myModule->${task.name}_argumentNotifierAXI_${l}.bind(*iconnectMem_.target_socket(${i}));\n"""
+            i += 1
+          }
+        } else if (side.numVirtualServers > 0 && side.sideType == "memoryAllocator") {
+          for (l <- 0 until n) {
+            connections += s"""        myModule->${task.name}_memoryAllocatorAXI_${l}.bind(*iconnectMem_.target_socket(${i}));\n"""
             i += 1
           }
         }

@@ -261,11 +261,10 @@ class HardCilk(
           }
         }
 
-        for (i <- j until j + task.getNumServers("allocator")) {
+        for (i <- j until j + task.getNumServers("memoryAllocator")) {
           demux.m_axil(i) :=> memoryAllocatorMap(task.name).io_internal.axi_mgmt_vcas(i - j)
         }
         j += task.getNumServers("memoryAllocator")
-
       }
 
     }
@@ -283,6 +282,9 @@ class HardCilk(
                   .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
               case "closureOut" =>
                 closureAllocatorMap(connection.srcPort.parentName).io_export
+                  .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
+              case "mallocOut" =>
+                memoryAllocatorMap(connection.srcPort.parentName).io_export
                   .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
               case "argIn" =>
                 argumentNotifierMap(connection.srcPort.parentName).io_export
@@ -302,6 +304,9 @@ class HardCilk(
                   .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
               case "closureOut" =>
                 closureAllocatorMap(connection.dstPort.parentName).io_export
+                  .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
+              case "mallocOut" =>
+                memoryAllocatorMap(connection.dstPort.parentName).io_export
                   .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
               case "argIn" =>
                 argumentNotifierMap(connection.dstPort.parentName).io_export

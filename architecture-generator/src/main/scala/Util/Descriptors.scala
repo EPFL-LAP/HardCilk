@@ -23,7 +23,7 @@ case class PortDescriptor(
   assert(
     portType == "taskIn" || portType == "taskOut" || portType == "taskInGlobal" || portType == "taskOutGlobal"
       || portType == "argIn" || portType == "argOut" || portType == "closureIn"
-      || portType == "closureOut" || portType == "memIn" || portType == "memOut"
+      || portType == "closureOut" || portType == "mallocIn" || portType == "mallocOut"
   )
   assert(portIndex >= 0)
 
@@ -99,6 +99,7 @@ case class TaskDescriptor(
     dynamicMemAlloc: Boolean,
     numProcessingElements: Int,
     widthTask: Int,
+    widthMalloc: Int,
     sidesConfigs: List[SideConfig],
     mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     hasAXI: Boolean = true
@@ -110,6 +111,8 @@ case class TaskDescriptor(
   assert(getNumServers("scheduler") > 0)
   assert(getCapacityVirtualQueue("scheduler") > 0)
   assert(getCapacityPhysicalQueue("scheduler") > 0)
+
+  assert(dynamicMemAlloc && widthMalloc > 0 || !dynamicMemAlloc && widthMalloc == 0)
 
   if (isCont) {
 
@@ -171,6 +174,7 @@ case class FullSysGenDescriptor(
     val spawnList: Map[String, List[String]],
     val spawnNextList: Map[String, List[String]],
     val sendArgumentList: Map[String, List[String]],
+    val mallocList: Map[String, List[String]],
     val cfgAxiHardCilk: chext.amba.axi4.Config = chext.amba.axi4.Config(),
     val targetFrequency: Int = 250,
     val memorySizeSim: Int = 1 // in GB
@@ -183,6 +187,7 @@ case class FullSysGenDescriptor(
   assert(spawnList.keys.forall(taskDescriptors.map(_.name).contains(_)))
   assert(spawnNextList.keys.forall(taskDescriptors.map(_.name).contains(_)))
   assert(sendArgumentList.keys.forall(taskDescriptors.map(_.name).contains(_)))
+  assert(mallocList.keys.forall(taskDescriptors.map(_.name).contains(_)))
 
   // assert that none of the HardCilk components require a wider buswidth than cfgAxiHardCilk
   // assert(taskDescriptors.map(_.widthTask).max <= cfgAxiHardCilk.wData)
@@ -230,6 +235,7 @@ case class FullSysGenDescriptor(
       case "spawn"        => spawnList
       case "spawnNext"    => spawnNextList
       case "sendArgument" => sendArgumentList
+      case "mallocIn"     => mallocList
       case _              => throw new IllegalArgumentException(s"Invalid port type: $port_type")
     }
 
@@ -258,6 +264,7 @@ case class FullSysGenDescriptor(
     val connections = taskDescriptors.flatMap { task =>
       val spawnedTasks = spawnList.getOrElse(task.name, List())
       val argumentTasks = sendArgumentList.getOrElse(task.name, List())
+      val mallocTasks = mallocList.getOrElse(task.name, List())
       val spawnNextTasks = spawnNextList.getOrElse(task.name, List())
 
       val taskConnections = (0 until task.numProcessingElements).map { i =>
@@ -316,7 +323,20 @@ case class FullSysGenDescriptor(
         }
       }
 
-      taskConnections ++ selfSpawnedConnections ++ spawnedConnections ++ argumentConnections ++ spawnNextConnections
+      val mallocConnections = mallocTasks.zipWithIndex.flatMap { case (mallocTask, j) =>
+        val mallocTaskDescriptor = taskDescriptors.find(_.name == mallocTask).get
+        (0 until task.numProcessingElements).map { i =>
+          aggregatorMapSpawnNext(mallocTask) += 1
+          ConnectionDescriptor(
+            PortDescriptor(f"${mallocTask}", "HardCilk", 0, "mallocOut", aggregatorMapSpawnNext(mallocTask) - 1),
+            PortDescriptor(task.name, "PE", i, "mallocIn", 0),
+            mallocTaskDescriptor.widthTask,
+            "AXIS"
+          )
+        }
+      }
+
+      taskConnections ++ selfSpawnedConnections ++ spawnedConnections ++ argumentConnections ++ spawnNextConnections ++ mallocConnections
     }
 
     SystemConnections(connections)
