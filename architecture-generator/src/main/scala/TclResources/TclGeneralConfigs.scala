@@ -277,7 +277,6 @@ object TclGeneralConfigs {
     // Connect it to the clock wizard and the axi resets of the system
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/locked] [get_bd_pins proc_sys_reset_1/dcm_locked]\n")
     sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out1]\n")
-    sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins hbm_0/AXI_*_ARESET_N]\n")
     sb.append(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_reset] [get_bd_pins ${descriptor.name}_0/reset]\n")
     sb.append(
       "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_clock_converter_0/m_axi_aresetn]\n"
@@ -286,6 +285,11 @@ object TclGeneralConfigs {
       "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_clock_converter_1/m_axi_aresetn]\n"
     )
     
+    // Create the second reset system
+    sb.append("create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_2\n")
+    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/locked] [get_bd_pins proc_sys_reset_2/dcm_locked]\n")
+    sb.append("connect_bd_net [get_bd_pins proc_sys_reset_2/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out2]\n")
+    sb.append("connect_bd_net [get_bd_pins proc_sys_reset_2/peripheral_aresetn] [get_bd_pins hbm_0/AXI_*_ARESET_N]\n")
 
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins smartconnect*/aclk]\n") // for the smartconnects system side
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins smartconnect*/aclk1]\n")
@@ -347,6 +351,7 @@ object TclGeneralConfigs {
     
     sb.append("connect_bd_net [get_bd_ports PCIE_PERST_LS_65] [get_bd_pins util_vector_logic_0/Op2]\n")
     sb.append("connect_bd_net [get_bd_pins util_vector_logic_0/Res] [get_bd_pins proc_sys_reset_1/ext_reset_in]\n")
+    sb.append("connect_bd_net [get_bd_pins util_vector_logic_0/Res] [get_bd_pins proc_sys_reset_2/ext_reset_in]\n")
 
     sb.toString()
   }
