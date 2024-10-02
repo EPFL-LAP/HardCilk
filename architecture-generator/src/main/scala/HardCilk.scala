@@ -467,9 +467,13 @@ object HardCilkEmitter extends App {
     val resourcesFiles = new java.io.File(resourcesPath).listFiles()
     resourcesFiles.foreach { file =>
       val fileName = file.getName()
-      if ((useBramSim && fileName == "DualPortBRAM_sim.v") || (!useBramSim && fileName == "DualPortBRAM_xpm.v")) {
-        val fileContent = readFile(file.getAbsolutePath())
-        writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
+      val fileContent = readFile(file.getAbsolutePath())
+      if (fileName.startsWith("DualPortBRAM")) {
+        if ((useBramSim && fileName == "DualPortBRAM_sim.v") || (!useBramSim && fileName == "DualPortBRAM_xpm.v")) {
+          writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
+        }
+      } else {
+        writeFile(s"$outputDirPathRTL/$fileName", fileContent)
       }
     }
 
