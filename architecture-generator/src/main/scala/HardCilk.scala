@@ -277,7 +277,7 @@ class HardCilk(
         val physicalSourcePort = connection.srcPort.parentType match {
           case "HardCilk" => {
             connection.srcPort.portType match {
-              case "taskIn" | "taskOut" =>
+              case "taskIn" | "taskOut" | "taskInGlobal" =>
                 schedulerMap(connection.srcPort.parentName).io_export
                   .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
               case "closureOut" =>
@@ -299,7 +299,7 @@ class HardCilk(
         val physicalDestinationPort = connection.dstPort.parentType match {
           case "HardCilk" => {
             connection.dstPort.portType match {
-              case "taskIn" | "taskOut" =>
+              case "taskIn" | "taskOut" | "taskInGlobal" =>
                 schedulerMap(connection.dstPort.parentName).io_export
                   .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
               case "closureOut" =>

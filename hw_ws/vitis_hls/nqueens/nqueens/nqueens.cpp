@@ -17,7 +17,7 @@ uint8_t ok(uint8_t n, uint64_t a, void *mem) {
     // p = a[i];
     uint8_t p = MEM_ARR_IN(mem, a, i, uint8_t);
     for (int j = i + 1; j < n; j++) {
-			#pragma HLS PIPELINE off
+#pragma HLS PIPELINE off
       // q = a[j];
       uint8_t q = MEM_ARR_IN(mem, a, j, uint8_t);
       if (q == p || q == p - (j - i) || q == p + (j - i))
@@ -54,12 +54,14 @@ io_section : {
 
 void nqueens(hls::stream<nqueens_args> &taskIn,
              hls::stream<nqueens_args> &taskOut, hls::stream<uint64_t> &argOut,
+             hls::stream<cont_args> &taskOutGlobal,
              hls::stream<uint64_t> &closureIn, hls::stream<uint64_t> &mallocIn,
              void *mem) {
 
 #pragma HLS INTERFACE mode = axis port = taskIn
 #pragma HLS INTERFACE mode = axis port = taskOut
 #pragma HLS INTERFACE mode = axis port = argOut
+#pragma HLS INTERFACE mode = axis port = taskOutGlobal
 #pragma HLS INTERFACE mode = axis port = closureIn
 #pragma HLS INTERFACE mode = axis port = mallocIn
 #pragma HLS INTERFACE mode = m_axi port = mem
@@ -96,7 +98,7 @@ void nqueens(hls::stream<nqueens_args> &taskIn,
     // memcpy(b, a, j * sizeof(uint8_t));
     uint64_t b = mallocIn.read();
     for (int k = 0; k < j; k++) {
-			#pragma HLS PIPELINE off
+#pragma HLS PIPELINE off
       uint8_t tmp = MEM_ARR_IN(mem, a, k, uint8_t);
       MEM_ARR_OUT(mem, b, k, uint8_t, tmp);
     }
@@ -112,17 +114,17 @@ void nqueens(hls::stream<nqueens_args> &taskIn,
   }
   }
 
+  uint64_t cont_addr = closureIn.read();
+  cont_args c_args;
+  c_args.counter = spawn_count;
+  c_args.n = n;
+  c_args.cont = task.cont;
+  c_args.count = count;
+  c_args.ret_addr = task.ret_addr;
   if (spawn_count != 0) {
   io_section1 : {
     // Spawn Next
     // return nqueens_cont(n, count);
-    uint64_t cont_addr = closureIn.read();
-    cont_args c_args;
-    c_args.counter = spawn_count;
-    c_args.n = n;
-    c_args.cont = task.cont;
-    c_args.count = count;
-    c_args.ret_addr = task.ret_addr;
     MEM_OUT(mem, cont_addr, cont_args, c_args);
     ap_wait_until(MEM_IN(mem, cont_addr + offsetof(cont_args, ret_addr),
                          uint64_t) == c_args.ret_addr);
@@ -142,17 +144,6 @@ void nqueens(hls::stream<nqueens_args> &taskIn,
     }
   }
   } else {
-    // Function body of cont
-    uint64_t solNum = 0;
-    for (int i = 0; i < n; i++) {
-      // solNum += count[i];
-      solNum += MEM_ARR_IN(mem, count, i, uint32_t);
-    }
-  // return solNum;
-  io_section : {
-    MEM_OUT(mem, task.ret_addr, uint32_t, solNum);
-    ap_wait_until(MEM_IN(mem, task.ret_addr, uint32_t) == solNum);
-    argOut.write(task.cont);
-  }
+    taskOutGlobal.write(c_args);
   }
 }

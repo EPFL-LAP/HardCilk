@@ -8,7 +8,7 @@
 <unit>ns</unit>
 <ProductFamily>virtexuplusHBM</ProductFamily>
 <Part>xcu55c-fsvh2892-2L-e</Part>
-<TopModelName>nqueens_Pipeline_VITIS_LOOP_86_1</TopModelName>
+<TopModelName>nqueens_Pipeline_VITIS_LOOP_88_1</TopModelName>
 <TargetClockPeriod>3.33</TargetClockPeriod>
 <ClockUncertainty>0.90</ClockUncertainty>
 <FlowTarget>vivado</FlowTarget>
@@ -32,7 +32,7 @@
 <Interval-max>256</Interval-max>
 </SummaryOfOverallLatency>
 <SummaryOfLoopLatency>
-<VITIS_LOOP_86_1>
+<VITIS_LOOP_88_1>
 <Slack>2.43</Slack>
 <TripCount>
 <range>
@@ -56,19 +56,19 @@
 <PipelineDepth>8</PipelineDepth>
 <InstanceList>
 </InstanceList>
-</VITIS_LOOP_86_1>
+</VITIS_LOOP_88_1>
 </SummaryOfLoopLatency>
 <SummaryOfViolations>
 <IssueType>-</IssueType>
 <ViolationType>-</ViolationType>
-<SourceLocation>nqueens.cpp:86</SourceLocation>
+<SourceLocation>nqueens.cpp:88</SourceLocation>
 <SummaryOfLoopViolations>
-<VITIS_LOOP_86_1>
-<Name>VITIS_LOOP_86_1</Name>
+<VITIS_LOOP_88_1>
+<Name>VITIS_LOOP_88_1</Name>
 <IssueType>-</IssueType>
 <ViolationType>-</ViolationType>
-<SourceLocation>nqueens.cpp:86</SourceLocation>
-</VITIS_LOOP_86_1>
+<SourceLocation>nqueens.cpp:88</SourceLocation>
+</VITIS_LOOP_88_1>
 </SummaryOfLoopViolations>
 </SummaryOfViolations>
 </PerformanceEstimates>
@@ -76,7 +76,7 @@
 <AreaEstimates>
 <Resources>
 <FF>100</FF>
-<LUT>186</LUT>
+<LUT>243</LUT>
 <BRAM_18K>0</BRAM_18K>
 <DSP>0</DSP>
 <URAM>0</URAM>
@@ -93,7 +93,7 @@
 <InterfaceSummary>
 <RtlPorts>
 <name>ap_clk</name>
-<Object>nqueens_Pipeline_VITIS_LOOP_86_1</Object>
+<Object>nqueens_Pipeline_VITIS_LOOP_88_1</Object>
 <Type>return value</Type>
 <Scope></Scope>
 <IOProtocol>ap_ctrl_hs</IOProtocol>
@@ -104,7 +104,7 @@
 </RtlPorts>
 <RtlPorts>
 <name>ap_rst</name>
-<Object>nqueens_Pipeline_VITIS_LOOP_86_1</Object>
+<Object>nqueens_Pipeline_VITIS_LOOP_88_1</Object>
 <Type>return value</Type>
 <Scope></Scope>
 <IOProtocol>ap_ctrl_hs</IOProtocol>
@@ -115,7 +115,7 @@
 </RtlPorts>
 <RtlPorts>
 <name>ap_start</name>
-<Object>nqueens_Pipeline_VITIS_LOOP_86_1</Object>
+<Object>nqueens_Pipeline_VITIS_LOOP_88_1</Object>
 <Type>return value</Type>
 <Scope></Scope>
 <IOProtocol>ap_ctrl_hs</IOProtocol>
@@ -126,7 +126,7 @@
 </RtlPorts>
 <RtlPorts>
 <name>ap_done</name>
-<Object>nqueens_Pipeline_VITIS_LOOP_86_1</Object>
+<Object>nqueens_Pipeline_VITIS_LOOP_88_1</Object>
 <Type>return value</Type>
 <Scope></Scope>
 <IOProtocol>ap_ctrl_hs</IOProtocol>
@@ -137,7 +137,7 @@
 </RtlPorts>
 <RtlPorts>
 <name>ap_idle</name>
-<Object>nqueens_Pipeline_VITIS_LOOP_86_1</Object>
+<Object>nqueens_Pipeline_VITIS_LOOP_88_1</Object>
 <Type>return value</Type>
 <Scope></Scope>
 <IOProtocol>ap_ctrl_hs</IOProtocol>
@@ -148,7 +148,7 @@
 </RtlPorts>
 <RtlPorts>
 <name>ap_ready</name>
-<Object>nqueens_Pipeline_VITIS_LOOP_86_1</Object>
+<Object>nqueens_Pipeline_VITIS_LOOP_88_1</Object>
 <Type>return value</Type>
 <Scope></Scope>
 <IOProtocol>ap_ctrl_hs</IOProtocol>
@@ -664,8 +664,8 @@
 <Attribute>unknown</Attribute>
 </RtlPorts>
 <RtlPorts>
-<name>task_n88</name>
-<Object>task_n88</Object>
+<name>task_n66</name>
+<Object>task_n66</Object>
 <Type>scalar</Type>
 <Scope></Scope>
 <IOProtocol>ap_none</IOProtocol>
@@ -675,8 +675,19 @@
 <Attribute>data</Attribute>
 </RtlPorts>
 <RtlPorts>
-<name>add_ln86</name>
-<Object>add_ln86</Object>
+<name>mem</name>
+<Object>mem</Object>
+<Type>scalar</Type>
+<Scope></Scope>
+<IOProtocol>ap_none</IOProtocol>
+<IOConfig></IOConfig>
+<Dir>in</Dir>
+<Bits>64</Bits>
+<Attribute>data</Attribute>
+</RtlPorts>
+<RtlPorts>
+<name>count</name>
+<Object>count</Object>
 <Type>scalar</Type>
 <Scope></Scope>
 <IOProtocol>ap_none</IOProtocol>

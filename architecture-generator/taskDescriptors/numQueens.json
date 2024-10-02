@@ -65,7 +65,7 @@
         }
     ],
     "spawnList": {
-        "nqueens": ["nqueens"]
+        "nqueens": ["nqueens", "cont"]
     },
     "spawnNextList": {
         "nqueens": ["cont"]

@@ -6,7 +6,7 @@
 
 `timescale 1 ns / 1 ps 
 
-module nqueens_nqueens_Pipeline_VITIS_LOOP_86_1 (
+module nqueens_nqueens_Pipeline_VITIS_LOOP_88_1 (
         ap_clk,
         ap_rst,
         ap_start,
@@ -59,8 +59,9 @@ module nqueens_nqueens_Pipeline_VITIS_LOOP_86_1 (
         m_axi_gmem_BRESP,
         m_axi_gmem_BID,
         m_axi_gmem_BUSER,
-        task_n88,
-        add_ln86
+        task_n66,
+        mem,
+        count
 );
 
 parameter    ap_ST_fsm_pp0_stage0 = 1'd1;
@@ -117,8 +118,9 @@ output   m_axi_gmem_BREADY;
 input  [1:0] m_axi_gmem_BRESP;
 input  [0:0] m_axi_gmem_BID;
 input  [0:0] m_axi_gmem_BUSER;
-input  [7:0] task_n88;
-input  [63:0] add_ln86;
+input  [7:0] task_n66;
+input  [63:0] mem;
+input  [63:0] count;
 
 reg ap_idle;
 reg m_axi_gmem_AWVALID;
@@ -138,7 +140,7 @@ reg    ap_enable_reg_pp0_iter7;
 reg    ap_idle_pp0;
 reg    ap_block_state8_pp0_stage0_iter7;
 reg    ap_block_pp0_stage0_subdone;
-wire   [0:0] icmp_ln86_fu_108_p2;
+wire   [0:0] icmp_ln88_fu_116_p2;
 reg    ap_condition_exit_pp0_iter0_stage0;
 wire    ap_loop_exit_ready;
 reg    ap_ready_int;
@@ -147,21 +149,22 @@ wire    ap_block_pp0_stage0;
 reg    gmem_blk_n_W;
 reg    gmem_blk_n_B;
 reg    ap_block_pp0_stage0_11001;
-wire   [7:0] shl_ln87_fu_146_p2;
-reg   [7:0] shl_ln87_reg_188;
-reg   [7:0] shl_ln87_reg_188_pp0_iter1_reg;
-reg   [60:0] trunc_ln87_1_reg_193;
-wire  signed [63:0] sext_ln87_fu_167_p1;
+wire   [7:0] shl_ln89_fu_160_p2;
+reg   [7:0] shl_ln89_reg_202;
+reg   [7:0] shl_ln89_reg_202_pp0_iter1_reg;
+reg   [60:0] trunc_ln89_1_reg_207;
+wire  signed [63:0] sext_ln89_fu_181_p1;
 reg    ap_block_pp0_stage0_01001;
-reg   [7:0] i_fu_68;
-wire   [7:0] add_ln86_1_fu_114_p2;
+reg   [7:0] i_fu_70;
+wire   [7:0] add_ln88_fu_122_p2;
 wire    ap_loop_init;
 reg   [7:0] ap_sig_allocacmp_i_1;
-wire   [9:0] shl_ln_fu_120_p3;
-wire   [63:0] zext_ln87_1_fu_128_p1;
-wire   [63:0] add_ln87_fu_132_p2;
-wire   [2:0] trunc_ln87_fu_138_p1;
-wire   [7:0] zext_ln87_fu_142_p1;
+wire   [9:0] shl_ln_fu_128_p3;
+wire   [63:0] zext_ln89_1_fu_136_p1;
+wire   [63:0] add_ln89_1_fu_140_p2;
+wire   [63:0] add_ln89_fu_146_p2;
+wire   [2:0] trunc_ln89_fu_152_p1;
+wire   [7:0] zext_ln89_fu_156_p1;
 reg    ap_done_reg;
 wire    ap_continue_int;
 reg    ap_done_int;
@@ -188,7 +191,7 @@ initial begin
 #0 ap_enable_reg_pp0_iter5 = 1'b0;
 #0 ap_enable_reg_pp0_iter6 = 1'b0;
 #0 ap_enable_reg_pp0_iter7 = 1'b0;
-#0 i_fu_68 = 8'd0;
+#0 i_fu_70 = 8'd0;
 #0 ap_done_reg = 1'b0;
 end
 
@@ -301,10 +304,10 @@ end
 
 always @ (posedge ap_clk) begin
     if (((1'b1 == ap_CS_fsm_pp0_stage0) & (1'b0 == ap_block_pp0_stage0_11001))) begin
-        if (((ap_enable_reg_pp0_iter0 == 1'b1) & (icmp_ln86_fu_108_p2 == 1'd0))) begin
-            i_fu_68 <= add_ln86_1_fu_114_p2;
+        if (((ap_enable_reg_pp0_iter0 == 1'b1) & (icmp_ln88_fu_116_p2 == 1'd0))) begin
+            i_fu_70 <= add_ln88_fu_122_p2;
         end else if ((ap_loop_init == 1'b1)) begin
-            i_fu_68 <= 8'd0;
+            i_fu_70 <= 8'd0;
         end
     end
 end
@@ -313,9 +316,9 @@ always @ (posedge ap_clk) begin
     if (((1'b1 == ap_CS_fsm_pp0_stage0) & (1'b0 == ap_block_pp0_stage0_11001))) begin
         ap_loop_exit_ready_pp0_iter1_reg <= ap_loop_exit_ready;
         ap_loop_exit_ready_pp0_iter2_reg <= ap_loop_exit_ready_pp0_iter1_reg;
-        shl_ln87_reg_188 <= shl_ln87_fu_146_p2;
-        shl_ln87_reg_188_pp0_iter1_reg <= shl_ln87_reg_188;
-        trunc_ln87_1_reg_193 <= {{add_ln87_fu_132_p2[63:3]}};
+        shl_ln89_reg_202 <= shl_ln89_fu_160_p2;
+        shl_ln89_reg_202_pp0_iter1_reg <= shl_ln89_reg_202;
+        trunc_ln89_1_reg_207 <= {{add_ln89_fu_146_p2[63:3]}};
     end
 end
 
@@ -329,7 +332,7 @@ always @ (posedge ap_clk) begin
 end
 
 always @ (*) begin
-    if (((ap_enable_reg_pp0_iter0 == 1'b1) & (1'b1 == ap_CS_fsm_pp0_stage0) & (icmp_ln86_fu_108_p2 == 1'd1) & (1'b0 == ap_block_pp0_stage0_subdone))) begin
+    if (((ap_enable_reg_pp0_iter0 == 1'b1) & (1'b1 == ap_CS_fsm_pp0_stage0) & (icmp_ln88_fu_116_p2 == 1'd1) & (1'b0 == ap_block_pp0_stage0_subdone))) begin
         ap_condition_exit_pp0_iter0_stage0 = 1'b1;
     end else begin
         ap_condition_exit_pp0_iter0_stage0 = 1'b0;
@@ -372,7 +375,7 @@ always @ (*) begin
     if (((1'b1 == ap_CS_fsm_pp0_stage0) & (ap_loop_init == 1'b1) & (1'b0 == ap_block_pp0_stage0))) begin
         ap_sig_allocacmp_i_1 = 8'd0;
     end else begin
-        ap_sig_allocacmp_i_1 = i_fu_68;
+        ap_sig_allocacmp_i_1 = i_fu_70;
     end
 end
 
@@ -435,9 +438,11 @@ always @ (*) begin
     endcase
 end
 
-assign add_ln86_1_fu_114_p2 = (ap_sig_allocacmp_i_1 + 8'd1);
+assign add_ln88_fu_122_p2 = (ap_sig_allocacmp_i_1 + 8'd1);
 
-assign add_ln87_fu_132_p2 = (zext_ln87_1_fu_128_p1 + add_ln86);
+assign add_ln89_1_fu_140_p2 = (zext_ln89_1_fu_136_p1 + mem);
+
+assign add_ln89_fu_146_p2 = (add_ln89_1_fu_140_p2 + count);
 
 assign ap_CS_fsm_pp0_stage0 = ap_CS_fsm[32'd0];
 
@@ -469,7 +474,7 @@ assign ap_loop_exit_ready = ap_condition_exit_pp0_iter0_stage0;
 
 assign ap_ready = ap_ready_sig;
 
-assign icmp_ln86_fu_108_p2 = ((ap_sig_allocacmp_i_1 == task_n88) ? 1'b1 : 1'b0);
+assign icmp_ln88_fu_116_p2 = ((ap_sig_allocacmp_i_1 == task_n66) ? 1'b1 : 1'b0);
 
 assign m_axi_gmem_ARADDR = 64'd0;
 
@@ -495,7 +500,7 @@ assign m_axi_gmem_ARUSER = 1'd0;
 
 assign m_axi_gmem_ARVALID = 1'b0;
 
-assign m_axi_gmem_AWADDR = sext_ln87_fu_167_p1;
+assign m_axi_gmem_AWADDR = sext_ln89_fu_181_p1;
 
 assign m_axi_gmem_AWBURST = 2'd0;
 
@@ -525,20 +530,20 @@ assign m_axi_gmem_WID = 1'd0;
 
 assign m_axi_gmem_WLAST = 1'b0;
 
-assign m_axi_gmem_WSTRB = shl_ln87_reg_188_pp0_iter1_reg;
+assign m_axi_gmem_WSTRB = shl_ln89_reg_202_pp0_iter1_reg;
 
 assign m_axi_gmem_WUSER = 1'd0;
 
-assign sext_ln87_fu_167_p1 = $signed(trunc_ln87_1_reg_193);
+assign sext_ln89_fu_181_p1 = $signed(trunc_ln89_1_reg_207);
 
-assign shl_ln87_fu_146_p2 = 8'd15 << zext_ln87_fu_142_p1;
+assign shl_ln89_fu_160_p2 = 8'd15 << zext_ln89_fu_156_p1;
 
-assign shl_ln_fu_120_p3 = {{ap_sig_allocacmp_i_1}, {2'd0}};
+assign shl_ln_fu_128_p3 = {{ap_sig_allocacmp_i_1}, {2'd0}};
 
-assign trunc_ln87_fu_138_p1 = add_ln87_fu_132_p2[2:0];
+assign trunc_ln89_fu_152_p1 = add_ln89_fu_146_p2[2:0];
 
-assign zext_ln87_1_fu_128_p1 = shl_ln_fu_120_p3;
+assign zext_ln89_1_fu_136_p1 = shl_ln_fu_128_p3;
 
-assign zext_ln87_fu_142_p1 = trunc_ln87_fu_138_p1;
+assign zext_ln89_fu_156_p1 = trunc_ln89_fu_152_p1;
 
-endmodule //nqueens_nqueens_Pipeline_VITIS_LOOP_86_1
+endmodule //nqueens_nqueens_Pipeline_VITIS_LOOP_88_1
