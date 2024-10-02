@@ -1,0 +1,3 @@
+relativeroot=/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort
+original_argv=--mode hls --package --config /home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/hls_config.cfg --work_dir qsort 
+

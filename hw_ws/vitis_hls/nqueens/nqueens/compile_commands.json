@@ -1,0 +1,14 @@
+[
+  {
+    "directory": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens",
+    "arguments": [
+      "/alpha/tools/Xilinx/Vitis_HLS/2024.1/vcxx/libexec/clang++",
+      "-fhls",
+      "-hls-syn-headers-dir=/alpha/tools/Xilinx/Vitis_HLS/2024.1/common/technology/autopilot",
+      "",
+      "-c",
+      "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens.cpp"
+    ],
+    "file": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens.cpp"
+  }
+]

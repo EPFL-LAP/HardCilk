@@ -1,0 +1,3 @@
+relativeroot=/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/cont
+original_argv=--mode hls --package --config /home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/cont/hls_config.cfg --work_dir cont 
+

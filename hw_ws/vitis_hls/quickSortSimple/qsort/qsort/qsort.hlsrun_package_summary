@@ -1,0 +1,160 @@
+<ENTRY>
+{
+ "thisFile": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/qsort/qsort.hlsrun_package_summary",
+ "connectId": "",
+ "serverToken": "",
+ "timestamp": "0"
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_CmdStep",
+ "dateTimestamp": "Fri Sep 20 18:21:49 2024",
+ "timestampMillis": "1726849309566",
+ "buildStep": {
+  "cmdId": "0c49991c-eb47-4576-a48a-1db75d01b629",
+  "name": "vitis-run",
+  "logFile": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/qsort/logs/qsort.steps.log",
+  "commandLine": "/alpha/tools/Xilinx/Vitis/2024.1/bin/unwrapped/lnx64.o/vitis-run  --mode hls --package --config /home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/hls_config.cfg --work_dir qsort ",
+  "args": [
+   "--mode",
+   "hls",
+   "--package",
+   "--config",
+   "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/hls_config.cfg",
+   "--work_dir",
+   "qsort"
+  ],
+  "iniFiles": [],
+  "cwd": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Fri Sep 20 18:21:49 2024",
+ "timestampMillis": "1726849309566",
+ "status": {
+  "cmdId": "0c49991c-eb47-4576-a48a-1db75d01b629",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_FlowMetaData",
+ "dateTimestamp": "Fri Sep 20 18:21:51 2024",
+ "timestampMillis": "1726849311868",
+ "buildSummary": {
+  "hardwarePlatform": "",
+  "hardwareDsa": "",
+  "platformDirectory": "",
+  "runtime": "",
+  "systemConfig": "",
+  "flow": "BF_RUN",
+  "target": "TT_HLS_IP",
+  "kernels": [
+   {
+    "base": {
+     "type": "KERNEL",
+     "name": "qsort",
+     "file": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/qsort/qsort.zip",
+     "reports": [],
+     "uuid": ""
+    },
+    "sources": [
+     "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/descriptors.h",
+     "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/main.cpp"
+    ],
+    "psSources": [],
+    "cuNames": [],
+    "type": "HLS",
+    "frequency": 0,
+    "freqUnits": ""
+   }
+  ],
+  "toolVersion": "2024.1"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_SubCmdStep",
+ "dateTimestamp": "Fri Sep 20 18:21:51 2024",
+ "timestampMillis": "1726849311869",
+ "buildStep": {
+  "cmdId": "5ec61b98-b146-4256-ac6e-13975679f594",
+  "name": "export_design",
+  "logFile": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort/qsort/hls/hls.log",
+  "commandLine": "export_design -flow none",
+  "args": [
+   "-flow",
+   "none"
+  ],
+  "iniFiles": [],
+  "cwd": "/home/shahawy/repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/quickSortSimple/qsort"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Fri Sep 20 18:21:51 2024",
+ "timestampMillis": "1726849311869",
+ "status": {
+  "cmdId": "5ec61b98-b146-4256-ac6e-13975679f594",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Fri Sep 20 18:22:07 2024",
+ "timestampMillis": "1726849327987",
+ "status": {
+  "cmdId": "5ec61b98-b146-4256-ac6e-13975679f594",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Fri Sep 20 18:22:08 2024",
+ "timestampMillis": "1726849328060",
+ "status": {
+  "cmdId": "0c49991c-eb47-4576-a48a-1db75d01b629",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Fri Sep 20 18:22:08 2024",
+ "timestampMillis": "1726849328061",
+ "report": {
+  "path": "",
+  "name": "",
+  "fileType": "HTML",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Fri Sep 20 18:22:08 2024",
+ "timestampMillis": "1726849328061",
+ "report": {
+  "path": "",
+  "name": "",
+  "fileType": "BINARY_PROTOBUF",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>
