@@ -311,26 +311,26 @@ case class FullSysGenDescriptor(
       }
 
       val spawnNextConnections = spawnNextTasks.zipWithIndex.flatMap { case (spawnNextTask, j) =>
-        val spawnNextTaskDescriptor = taskDescriptors.find(_.name == spawnNextTask).get
+        taskDescriptors.find(_.name == spawnNextTask).get
         (0 until task.numProcessingElements).map { i =>
           aggregatorMapSpawnNext(spawnNextTask) += 1
           ConnectionDescriptor(
             PortDescriptor(f"${spawnNextTask}", "HardCilk", 0, "closureOut", aggregatorMapSpawnNext(spawnNextTask) - 1),
             PortDescriptor(task.name, "PE", i, "closureIn", 0),
-            spawnNextTaskDescriptor.widthTask,
+            widthAddress, // This is only an address disbrutor for now...
             "AXIS"
           )
         }
       }
 
       val mallocConnections = mallocTasks.zipWithIndex.flatMap { case (mallocTask, j) =>
-        val mallocTaskDescriptor = taskDescriptors.find(_.name == mallocTask).get
+        taskDescriptors.find(_.name == mallocTask).get
         (0 until task.numProcessingElements).map { i =>
           aggregatorMapSpawnNext(mallocTask) += 1
           ConnectionDescriptor(
             PortDescriptor(f"${mallocTask}", "HardCilk", 0, "mallocOut", aggregatorMapSpawnNext(mallocTask) - 1),
             PortDescriptor(task.name, "PE", i, "mallocIn", 0),
-            mallocTaskDescriptor.widthTask,
+            widthAddress, // This is only an address distrbutor for now
             "AXIS"
           )
         }
