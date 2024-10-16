@@ -54,7 +54,8 @@ class ArgumentNotifier(
       taskWidth = taskWidth,
       peCount = peCount,
       vasNum = argRouteServersNumber,
-      queueDepth = queueDepth
+      queueDepth = queueDepth,
+      cutCount = 8
     )
   )
 
