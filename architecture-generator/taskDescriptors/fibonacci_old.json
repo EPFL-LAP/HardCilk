@@ -1,0 +1,77 @@
+{
+    "name": "fibonacci",
+    "taskDescriptors": [
+        {
+            "name": "fib",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/fib/hdl/verilog",
+            "isRoot": true,
+            "isCont": false,
+            "dynamicMemAlloc": false,
+
+            "numProcessingElements": 64,
+            "widthTask": 128,
+            "widthMalloc": 0,
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 2,
+                    "capacityVirtualQueue": 2048,
+                    "capacityPhysicalQueue": 64,
+                    "portWidth": 128
+                }
+            ]
+            
+        },
+        {
+            "name": "sum",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/sum/hdl/verilog",
+            "isRoot": false,
+            "isCont": true,
+            "dynamicMemAlloc": false,
+
+            "numProcessingElements": 32,
+            "widthTask": 256,
+            "widthMalloc": 0,
+
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 2,   
+                    "capacityVirtualQueue": 2048,
+                    "capacityPhysicalQueue": 64,
+                    "portWidth": 256
+                },
+                {
+                    "sideType": "allocator",
+                    "numVirtualServers": 4,  
+                    "capacityVirtualQueue": 4096,
+                    "capacityPhysicalQueue": 16,
+                    "portWidth": 64
+                },
+                {
+                    "sideType": "argumentNotifier",
+                    "numVirtualServers": 16,  
+                    "capacityVirtualQueue": 2048,
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 64
+                }
+            ]
+        }
+    ],
+    "spawnList": {
+        "fib": ["fib"]
+    },
+    "spawnNextList": {
+        "fib": ["sum"]
+    },
+    "sendArgumentList": {
+        "fib": ["sum"],
+        "sum": ["sum"]
+    },
+    "mallocList": {
+    },
+    "widthAddress":64,
+    "widthContCounter":32,
+    "memorySizeSim": 16,
+    "targetFrequency": 250
+}

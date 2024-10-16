@@ -2,7 +2,7 @@
 
 ThisBuild / scalaVersion := "2.13.12"
 ThisBuild / version := "0.1.0"
-ThisBuild / organization := "%ORGANIZATION%"
+ThisBuild / organization := "epfl-lap"
 
 val chiselVersion = "6.0.0"
 val chiseltestVersion = "6.0-SNAPSHOT"
@@ -15,7 +15,7 @@ lazy val root = (project in file("."))
       "org.chipsalliance" %% "chisel" % chiselVersion,
       "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
       "com.typesafe.play" %% "play-json" % "2.9.2",
-      "hdlstuff" %% "chext" % "0.1.0",
+      "hdlstuff" %% "chext" % "0.1.1",
       "hdlstuff" %% "hdlinfo" % "0.1.0",
       "com.github.scopt" %% "scopt" % "4.1.0"
     ) ++ Seq(

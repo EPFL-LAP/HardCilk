@@ -15,6 +15,8 @@ object CppHeaderTemplate {
          |    bool isCont;
          |    bool dynamicMemAlloc;
          |    bool hasAXI;
+         |    bool hasSpawnNext;
+         |    bool hasArgOut;
          |    int numProcessingElements;
          |    int widthTask;
          |    int widthMalloc;
@@ -67,6 +69,8 @@ object CppHeaderTemplate {
          |    ${td.isCont},
          |    ${td.dynamicMemAlloc},
          |    ${td.hasAXI},
+         |    ${descriptor.spawnNextList.get(td.name).isDefined},
+         |    ${descriptor.sendArgumentList.get(td.name).isDefined},
          |    ${td.numProcessingElements},
          |    ${td.widthTask},
          |    ${td.widthMalloc},
@@ -128,6 +132,8 @@ object CppHeaderTemplate {
        |
        |            // For each PE of each task there is a master
        |            numMasters += task.hasAXI * task.numProcessingElements;
+       |            numMasters += task.hasSpawnNext * task.numProcessingElements;
+       |            numMasters += task.hasArgOut * task.numProcessingElements;
        |        }
        |        return numMasters;
        |    }

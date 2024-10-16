@@ -24,7 +24,7 @@ class ArgumentServer(
     sysAddressWidth: Int,
     tagBitsShift: Int,
     noContinuations: Boolean = false,
-    bufferQueueDepth: Int = 16
+    bufferQueueDepth: Int = 64
 ) extends Module {
 
   object state extends ChiselEnum {

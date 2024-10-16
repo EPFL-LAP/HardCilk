@@ -1,0 +1,247 @@
+<ENTRY>
+{
+ "thisFile": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/fib.hlscompile_summary",
+ "connectId": "",
+ "serverToken": "",
+ "timestamp": "0"
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_CmdStep",
+ "dateTimestamp": "Wed Oct 16 15:43:18 2024",
+ "timestampMillis": "1729086198669",
+ "buildStep": {
+  "cmdId": "685f3583-0ee2-4b03-8c51-e8ae8ba3228c",
+  "name": "v++",
+  "logFile": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/logs/fib.steps.log",
+  "commandLine": "/alpha/tools/Xilinx/Vitis/2024.1/bin/unwrapped/lnx64.o/v++  -c --mode hls --config /home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/hls_config.cfg --work_dir fib ",
+  "args": [
+   "-c",
+   "--mode",
+   "hls",
+   "--config",
+   "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/hls_config.cfg",
+   "--work_dir",
+   "fib"
+  ],
+  "iniFiles": [
+   {
+    "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/hls_config.cfg",
+    "content": "part=xcu55c-fsvh2892-2L-e\n\n[hls]\nflow_target=vivado\npackage.output.format=ip_catalog\npackage.output.syn=false\nsyn.top=fib\nsyn.file=/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/src/fib.cpp\nsyn.file=/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/src/fib.h\nsyn.file=/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/src/sum.cpp\nclock=300MHz"
+   }
+  ],
+  "cwd": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Wed Oct 16 15:43:18 2024",
+ "timestampMillis": "1729086198669",
+ "status": {
+  "cmdId": "685f3583-0ee2-4b03-8c51-e8ae8ba3228c",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_FlowMetaData",
+ "dateTimestamp": "Wed Oct 16 15:43:20 2024",
+ "timestampMillis": "1729086200974",
+ "buildSummary": {
+  "hardwarePlatform": "",
+  "hardwareDsa": "",
+  "platformDirectory": "",
+  "runtime": "",
+  "systemConfig": "",
+  "flow": "BF_COMPILE",
+  "target": "TT_HW",
+  "kernels": [
+   {
+    "base": {
+     "type": "KERNEL",
+     "name": "fib",
+     "file": "",
+     "reports": [],
+     "uuid": ""
+    },
+    "sources": [
+     "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/src/fib.cpp",
+     "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/src/fib.h",
+     "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/src/sum.cpp"
+    ],
+    "psSources": [],
+    "cuNames": [],
+    "type": "HLS",
+    "frequency": 0,
+    "freqUnits": ""
+   }
+  ],
+  "toolVersion": "2024.1"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_SubCmdStep",
+ "dateTimestamp": "Wed Oct 16 15:43:20 2024",
+ "timestampMillis": "1729086200974",
+ "buildStep": {
+  "cmdId": "aea461a5-8ad9-42ee-b51c-9150a04500eb",
+  "name": "csynth_design",
+  "logFile": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls/hls.log",
+  "commandLine": "csynth_design",
+  "args": [],
+  "iniFiles": [],
+  "cwd": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Wed Oct 16 15:43:20 2024",
+ "timestampMillis": "1729086200974",
+ "status": {
+  "cmdId": "aea461a5-8ad9-42ee-b51c-9150a04500eb",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:20 2024",
+ "timestampMillis": "1729086200974",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls/hls_data.json",
+  "name": "",
+  "fileType": "JSON",
+  "reportType": "HLS_SYNTHESIS",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:20 2024",
+ "timestampMillis": "1729086200974",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls/syn/report/csynth.rpt",
+  "name": "",
+  "fileType": "TEXT",
+  "reportType": "HLS_SYNTHESIS",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:20 2024",
+ "timestampMillis": "1729086200974",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls/syn/report/csynth.xml",
+  "name": "",
+  "fileType": "XML",
+  "reportType": "HLS_SYNTHESIS",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:28 2024",
+ "timestampMillis": "1729086208865",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls",
+  "name": "",
+  "fileType": "DIR",
+  "reportType": "HLS_DATAFLOW",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:28 2024",
+ "timestampMillis": "1729086208865",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls",
+  "name": "",
+  "fileType": "DIR",
+  "reportType": "HLS_FUNCTION_CALL_GRAPH",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:28 2024",
+ "timestampMillis": "1729086208865",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls",
+  "name": "",
+  "fileType": "DIR",
+  "reportType": "HLS_SCHEDULE",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Wed Oct 16 15:43:28 2024",
+ "timestampMillis": "1729086208865",
+ "status": {
+  "cmdId": "aea461a5-8ad9-42ee-b51c-9150a04500eb",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Wed Oct 16 15:43:28 2024",
+ "timestampMillis": "1729086208938",
+ "status": {
+  "cmdId": "685f3583-0ee2-4b03-8c51-e8ae8ba3228c",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:28 2024",
+ "timestampMillis": "1729086208951",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/reports/v++_compile_fib_guidance.html",
+  "name": "",
+  "fileType": "HTML",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Wed Oct 16 15:43:28 2024",
+ "timestampMillis": "1729086208951",
+ "report": {
+  "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/reports/.db/v++_compile_fib_guidance.pb3",
+  "name": "",
+  "fileType": "BINARY_PROTOBUF",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>

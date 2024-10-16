@@ -22,7 +22,7 @@ class ClosureAllocatorPEIO(
   def getPort(name: String, index: Int): axi4s.Interface = {
     name match {
       case "closureOut" => closureOut(index)
-      case "mallocOut" => closureOut(index)
+      case "mallocOut"  => closureOut(index)
     }
   }
 }
@@ -97,7 +97,7 @@ class Allocator(
 
   if (reduceAxi) {
     val mux = Module(
-      new Mux(axiCfgSlave = vcasAxiFullCfg, numSlaves = vcasCount, muxCfg = MuxConfig(slaveBuffers = axi4.BufferConfig.all(2)))
+      new Mux(new MuxConfig(axiSlaveCfg = vcasAxiFullCfg, numSlaves = vcasCount, slaveBuffers = axi4.BufferConfig.all(2)))
     )
     axiFullPorts.zip(mux.s_axi).foreach { case (port, s_axi) => port :=> s_axi }
     mux.m_axi :=> io_internal.vcas_axi_full(0)

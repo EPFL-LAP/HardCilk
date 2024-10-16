@@ -7,20 +7,20 @@
             "isRoot": true,
             "isCont": false,
             "dynamicMemAlloc": true,
-            "numProcessingElements": 32,
+            "numProcessingElements": 64,
             "widthTask": 256,
             "widthMalloc": 512,
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 1,
+                    "numVirtualServers": 2,
                     "capacityVirtualQueue": 2048,
                     "capacityPhysicalQueue": 64,
                     "portWidth": 256
                 },
                 {
                     "sideType": "memoryAllocator",
-                    "numVirtualServers": 1,
+                    "numVirtualServers": 2,
                     "capacityVirtualQueue": 2048,
                     "capacityPhysicalQueue": 64,
                     "portWidth": 64,
@@ -35,7 +35,7 @@
             "isCont": true,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 4,
+            "numProcessingElements": 8,
             "widthTask": 256,
             "widthMalloc": 0,
 
@@ -49,7 +49,7 @@
                 },
                 {
                     "sideType": "allocator",
-                    "numVirtualServers": 1,  
+                    "numVirtualServers": 2,
                     "capacityVirtualQueue": 4096,
                     "capacityPhysicalQueue": 16,
                     "portWidth": 64
@@ -65,7 +65,7 @@
         }
     ],
     "spawnList": {
-        "nqueens": ["nqueens", "cont"]
+        "nqueens": ["nqueens"]
     },
     "spawnNextList": {
         "nqueens": ["cont"]
@@ -80,5 +80,5 @@
     "widthAddress": 64,
     "widthContCounter": 32,
     "memorySizeSim": 16,
-    "targetFrequency": 250
+    "targetFrequency": 175
 }

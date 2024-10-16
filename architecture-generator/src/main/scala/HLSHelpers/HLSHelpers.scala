@@ -6,6 +6,13 @@ import Descriptors._
 
 import hdlinfo.InterfaceRole
 import scala.util.matching.Regex
+import Util._
+import chext.amba.axi4
+import chext.amba.axi4.Ops._
+import chext.amba.axi4s
+import chext.amba.axi4.full.components.ProtocolConverter
+import chext.amba.axi4.full.components.ProtocolConverterConfig
+import chext.amba.axi4.full.components.MuxConfig
 
 trait VitisInterface {
   def name: String
@@ -79,19 +86,127 @@ class VitisModule(cfg: VitisModuleConfig) extends BlackBox {
   )
 }
 
+class VitisWriteBufferModule(
+    cfg: VitisModuleConfig,
+    fullSysGenDescriptor: FullSysGenDescriptor,
+    taskName: String
+) extends Module {
+  override def desiredName: String = cfg.desiredName
+
+  import scala.collection.immutable.SeqMap
+
+  private val wSpawnNext = fullSysGenDescriptor.spawnNextList
+    .get(taskName)
+    .map(_.map(m => fullSysGenDescriptor.taskDescriptors.find(_.name == m).map(_.widthTask)).map(_.get))
+    .map(_.max)
+
+
+  private val pe = Module(new VitisModule(cfg))
+
+  val io = IO(new chisel3.Record {
+    val elements: SeqMap[String, Data] =
+      SeqMap.from(cfg.interfaces.withFilter(x => x.name != "spawnNext" && x.name != "argDataOut").map { interface =>
+        {
+          interface.name -> interface.chiselType
+        }
+      }) ++
+        Seq(
+          if (cfg.is_ap_start) Some("ap_start" -> Input(Bool())) else None,
+          if (cfg.is_ap_done) Some("ap_done" -> Output(Bool())) else None,
+          if (cfg.is_ap_idle) Some("ap_idle" -> Output(Bool())) else None,
+          if (cfg.is_ap_ready) Some("ap_ready" -> Output(Bool())) else None,
+          wSpawnNext.map(w =>
+            "m_axi_spawnNext" -> (axi4.Master(
+              new axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = w)
+            ))
+          ),
+          pe.io.elements.get("argDataOut").map(port => {
+            "m_axi_argOut" -> (axi4.Master(
+              new axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = 64)
+            ))
+          }),
+          Some("ap_clk" -> Input(Clock())),
+          Some("ap_rst_n" -> Input(Bool()))
+        ).flatten
+  })
+
+  def getPort(name: String) = io.elements.getOrElse(
+    name,
+    throw new RuntimeException(f"IO port not found: ${name}")
+  )
+
+  private val peTaskOut = ("taskOut", pe.io.elements.get("taskOut"))
+  private val peTaskOutGlobal = pe.io.elements.filter(_._1.startsWith("taskOutGlobal")).map(x => (x._1, Some(x._2)))
+  private val taskOuts = Seq(peTaskOut) ++ peTaskOutGlobal
+
+  wSpawnNext.foreach(w => {
+    val mWriteBuffer = Module(
+      new WriteBuffer(
+        new WriteBufferConfig(
+          wAddr = fullSysGenDescriptor.widthAddress,
+          wData = w,
+          wAllow = 8,
+          wAllowData = taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
+        )
+      )
+    )
+
+    mWriteBuffer.s_pkg <> pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
+    mWriteBuffer.m_axi <> io.elements.get("m_axi_spawnNext").get.asInstanceOf[axi4.RawInterface]
+
+    var idx = 0
+    for (i <- 0 until taskOuts.length) {
+      taskOuts(i)._2 match {
+        case Some(value) => {
+          value.asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(idx)
+          mWriteBuffer.m_allows(idx) <> getPort(taskOuts(i)._1)
+          idx = idx + 1
+        }
+        case None => {}
+      }
+    }
+  })
+
+  pe.io.elements.get("argDataOut").map(port => {
+    val mWriteBuffer = Module(
+      new WriteBuffer(
+        new WriteBufferConfig(
+          wAddr = fullSysGenDescriptor.widthAddress,
+          wData = 64,
+          wAllow = 8,
+          wAllowData = Seq(fullSysGenDescriptor.widthAddress)
+        )
+      )
+    )
+
+    mWriteBuffer.s_pkg <> pe.getPort("argDataOut").asInstanceOf[axi4s.Interface]
+    mWriteBuffer.m_axi <> io.elements.get("m_axi_argOut").get.asInstanceOf[axi4.RawInterface]
+    pe.getPort("argOut") <> mWriteBuffer.s_allows(0)
+    mWriteBuffer.m_allows(0) <> io.elements.get("argOut").get
+  })
+
+  // Connect buffer to outside //
+
+  // Connect rest of the ports
+  pe.io.elements.withFilter(x => !((Seq("spawnNext", "argDataOut", "argOut") ++ taskOuts.map(_._1)).contains(x._1))).foreach {
+    case (name, port) => {
+      port <> io.elements.get(name).get
+    }
+  }
+}
+
 /** An object with a function that when given a task descriptor, returns an array of VitisModules. The task descriptor has the
   * path to the hdl directory and the name of the module. One function passes the path to another function that parses the
   * <module>.v from the hdl directory and returns a vitisModuleConfig.
   */
 
 object VitisModuleFactory {
-  def apply(taskDescriptor: TaskDescriptor): Seq[VitisModule] = {
+  def apply(taskDescriptor: TaskDescriptor, fullSysGenDescriptor: FullSysGenDescriptor): Seq[VitisWriteBufferModule] = {
     val hdlPath = taskDescriptor.peHDLPath
     val moduleName = taskDescriptor.name
     val blackBoxCount = taskDescriptor.numProcessingElements
     val vitisModuleConfig = parseVitisModule(hdlPath, moduleName)
-    Seq.fill(blackBoxCount)(Module(new VitisModule(vitisModuleConfig)))
-
+    Seq.fill(blackBoxCount)(Module(new VitisWriteBufferModule(vitisModuleConfig, fullSysGenDescriptor, taskDescriptor.name)))
   }
 
   def parseVitisModule(hdlPath: String, moduleName: String): VitisModuleConfig = {
@@ -246,7 +361,8 @@ object VitisModuleFactory {
       }
     }
 
-    val config_seq = (Seq(M_AXI_GMEM_INTERFACE, aximmInterface_s_axi_control).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
+    val config_seq =
+      (Seq(M_AXI_GMEM_INTERFACE, aximmInterface_s_axi_control).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
 
     // Create the config with the interfaces
     VitisModuleConfig(
@@ -257,6 +373,6 @@ object VitisModuleFactory {
       is_ap_idle,
       is_ap_ready
     )
-    
+
   }
 }

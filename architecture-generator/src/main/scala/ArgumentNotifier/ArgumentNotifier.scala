@@ -97,9 +97,7 @@ class ArgumentNotifier(
   if (reduceAxi) {
     val mux = Module(
       new Mux(
-        axiCfgSlave = axiCfgSlave,
-        numSlaves = 2 * argRouteServersNumber,
-        muxCfg = MuxConfig(slaveBuffers = axi4.BufferConfig.all(2))
+        new MuxConfig(axiSlaveCfg = axiCfgSlave, numSlaves = 2 * argRouteServersNumber, slaveBuffers = axi4.BufferConfig.all(2))
       )
     )
     mux.m_axi :=> axi_full_argRoute(0)

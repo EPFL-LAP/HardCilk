@@ -3,18 +3,18 @@
     "taskDescriptors": [
         {
             "name": "fib",
-            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/fib/hdl/verilog",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls/syn/verilog",
             "isRoot": true,
             "isCont": false,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 64,
+            "numProcessingElements": 32,
             "widthTask": 128,
             "widthMalloc": 0,
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 2,
+                    "numVirtualServers": 1,
                     "capacityVirtualQueue": 2048,
                     "capacityPhysicalQueue": 64,
                     "portWidth": 128
@@ -24,7 +24,7 @@
         },
         {
             "name": "sum",
-            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/classical_fib/fib/fib/sum/hdl/verilog",
+            "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/fibonacci/sum/sum/hls/syn/verilog",
             "isRoot": false,
             "isCont": true,
             "dynamicMemAlloc": false,
@@ -36,7 +36,7 @@
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 2,   
+                    "numVirtualServers": 1,   
                     "capacityVirtualQueue": 2048,
                     "capacityPhysicalQueue": 64,
                     "portWidth": 256

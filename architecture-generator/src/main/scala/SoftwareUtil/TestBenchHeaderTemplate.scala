@@ -134,6 +134,18 @@ object TestBenchHeaderTemplate {
           i += 1
           k += 1
         }
+      if (descriptor.spawnNextList.get(task.name).isDefined) {
+        for(j <- 0 until task.numProcessingElements) {
+          connections += s"""        myModule->${task.name}_${j}_m_axi_spawnNext.bind(*iconnectMem_.target_socket(${i}));\n"""
+          i += 1
+        }
+      }
+      if (descriptor.sendArgumentList.get(task.name).isDefined) {
+        for(j <- 0 until task.numProcessingElements) {
+          connections += s"""        myModule->${task.name}_${j}_m_axi_argOut.bind(*iconnectMem_.target_socket(${i}));\n"""
+          i += 1
+        }
+      }
     }
 
     connections

@@ -9,10 +9,10 @@
 <ENTRY>
 {
  "type": "ET_CmdStep",
- "dateTimestamp": "Wed Oct  2 13:31:31 2024",
- "timestampMillis": "1727868691493",
+ "dateTimestamp": "Wed Oct  2 16:08:53 2024",
+ "timestampMillis": "1727878133797",
  "buildStep": {
-  "cmdId": "ed07c467-64d0-4822-885e-72758ec87b86",
+  "cmdId": "55559686-4586-4ae0-abad-d4a046fc5510",
   "name": "v++",
   "logFile": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/logs/nqueens.steps.log",
   "commandLine": "/alpha/tools/Xilinx/Vitis/2024.1/bin/unwrapped/lnx64.o/v++  -c --mode hls --config /home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/hls_config.cfg --work_dir nqueens ",
@@ -38,10 +38,10 @@
 <ENTRY>
 {
  "type": "ET_Status",
- "dateTimestamp": "Wed Oct  2 13:31:31 2024",
- "timestampMillis": "1727868691493",
+ "dateTimestamp": "Wed Oct  2 16:08:53 2024",
+ "timestampMillis": "1727878133797",
  "status": {
-  "cmdId": "ed07c467-64d0-4822-885e-72758ec87b86",
+  "cmdId": "55559686-4586-4ae0-abad-d4a046fc5510",
   "state": "CS_RUNNING"
  }
 }
@@ -49,8 +49,8 @@
 <ENTRY>
 {
  "type": "ET_FlowMetaData",
- "dateTimestamp": "Wed Oct  2 13:31:33 2024",
- "timestampMillis": "1727868693741",
+ "dateTimestamp": "Wed Oct  2 16:08:56 2024",
+ "timestampMillis": "1727878136042",
  "buildSummary": {
   "hardwarePlatform": "",
   "hardwareDsa": "",
@@ -86,10 +86,10 @@
 <ENTRY>
 {
  "type": "ET_SubCmdStep",
- "dateTimestamp": "Wed Oct  2 13:31:33 2024",
- "timestampMillis": "1727868693741",
+ "dateTimestamp": "Wed Oct  2 16:08:56 2024",
+ "timestampMillis": "1727878136042",
  "buildStep": {
-  "cmdId": "14692287-cd84-4c8e-8f24-d37071a1f1d0",
+  "cmdId": "e5d25b90-55ef-4bb3-bc61-17831ad83cd4",
   "name": "csynth_design",
   "logFile": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/hls/hls.log",
   "commandLine": "csynth_design",
@@ -102,10 +102,10 @@
 <ENTRY>
 {
  "type": "ET_Status",
- "dateTimestamp": "Wed Oct  2 13:31:33 2024",
- "timestampMillis": "1727868693742",
+ "dateTimestamp": "Wed Oct  2 16:08:56 2024",
+ "timestampMillis": "1727878136042",
  "status": {
-  "cmdId": "14692287-cd84-4c8e-8f24-d37071a1f1d0",
+  "cmdId": "e5d25b90-55ef-4bb3-bc61-17831ad83cd4",
   "state": "CS_RUNNING"
  }
 }
@@ -113,8 +113,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:33 2024",
- "timestampMillis": "1727868693742",
+ "dateTimestamp": "Wed Oct  2 16:08:56 2024",
+ "timestampMillis": "1727878136042",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/hls/hls_data.json",
   "name": "",
@@ -127,8 +127,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:33 2024",
- "timestampMillis": "1727868693742",
+ "dateTimestamp": "Wed Oct  2 16:08:56 2024",
+ "timestampMillis": "1727878136042",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/hls/syn/report/csynth.rpt",
   "name": "",
@@ -141,8 +141,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:33 2024",
- "timestampMillis": "1727868693742",
+ "dateTimestamp": "Wed Oct  2 16:08:56 2024",
+ "timestampMillis": "1727878136043",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/hls/syn/report/csynth.xml",
   "name": "",
@@ -155,8 +155,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:41 2024",
- "timestampMillis": "1727868701564",
+ "dateTimestamp": "Wed Oct  2 16:09:04 2024",
+ "timestampMillis": "1727878144114",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/hls",
   "name": "",
@@ -169,8 +169,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:41 2024",
- "timestampMillis": "1727868701564",
+ "dateTimestamp": "Wed Oct  2 16:09:04 2024",
+ "timestampMillis": "1727878144115",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/hls",
   "name": "",
@@ -183,8 +183,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:41 2024",
- "timestampMillis": "1727868701564",
+ "dateTimestamp": "Wed Oct  2 16:09:04 2024",
+ "timestampMillis": "1727878144115",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/hls",
   "name": "",
@@ -197,10 +197,10 @@
 <ENTRY>
 {
  "type": "ET_Status",
- "dateTimestamp": "Wed Oct  2 13:31:41 2024",
- "timestampMillis": "1727868701565",
+ "dateTimestamp": "Wed Oct  2 16:09:04 2024",
+ "timestampMillis": "1727878144115",
  "status": {
-  "cmdId": "14692287-cd84-4c8e-8f24-d37071a1f1d0",
+  "cmdId": "e5d25b90-55ef-4bb3-bc61-17831ad83cd4",
   "state": "CS_PASSED"
  }
 }
@@ -208,10 +208,10 @@
 <ENTRY>
 {
  "type": "ET_Status",
- "dateTimestamp": "Wed Oct  2 13:31:41 2024",
- "timestampMillis": "1727868701651",
+ "dateTimestamp": "Wed Oct  2 16:09:04 2024",
+ "timestampMillis": "1727878144234",
  "status": {
-  "cmdId": "ed07c467-64d0-4822-885e-72758ec87b86",
+  "cmdId": "55559686-4586-4ae0-abad-d4a046fc5510",
   "state": "CS_PASSED"
  }
 }
@@ -219,8 +219,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:41 2024",
- "timestampMillis": "1727868701664",
+ "dateTimestamp": "Wed Oct  2 16:09:04 2024",
+ "timestampMillis": "1727878144248",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/reports/v++_compile_nqueens_guidance.html",
   "name": "",
@@ -233,8 +233,8 @@
 <ENTRY>
 {
  "type": "ET_Report",
- "dateTimestamp": "Wed Oct  2 13:31:41 2024",
- "timestampMillis": "1727868701665",
+ "dateTimestamp": "Wed Oct  2 16:09:04 2024",
+ "timestampMillis": "1727878144248",
  "report": {
   "path": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/nqueens/nqueens/nqueens/reports/.db/v++_compile_nqueens_guidance.pb3",
   "name": "",

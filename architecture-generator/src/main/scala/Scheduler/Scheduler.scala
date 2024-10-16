@@ -188,10 +188,10 @@ class Scheduler(
 
   if (reduceAxi) {
     val mux = Module(
-      new Mux(
-        axiCfgSlave = vssAxiFullCfg,
+      new Mux( new MuxConfig(
+        axiSlaveCfg = vssAxiFullCfg,
         numSlaves = virtualAddressServersNumber,
-        muxCfg = MuxConfig(slaveBuffers = axi4.BufferConfig.all(1))
+        slaveBuffers = axi4.BufferConfig.all(1))
       )
     )
     mux.m_axi :=> io_internal.vss_axi_full(0)

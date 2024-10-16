@@ -60,7 +60,7 @@ public:
         base_task_data.cont = addr;
         base_task_data.a = allocateMemFPGA(N * sizeof(uint32_t), sizeof(uint32_t));
         base_task_data.ret_addr = addr + 4;
-        base_task_data.n = 4;
+        base_task_data.n = 7;
         base_task_data.j = 0;
 
         // Create the array

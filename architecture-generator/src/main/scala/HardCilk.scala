@@ -7,8 +7,11 @@ import Descriptors._
 import TclResources._
 import HLSHelpers._
 import SoftwareUtil._
+import Util._
 
 import chext.amba.axi4
+import chext.amba.axi4s
+import chext.amba.axi4s.Casts._
 import axi4.Ops._
 import axi4.lite.components._
 
@@ -33,7 +36,7 @@ class HardCilk(
     val closureAllocatorMap = scala.collection.mutable.Map[String, Allocator]()
     val memoryAllocatorMap = scala.collection.mutable.Map[String, Allocator]()
     val argumentNotifierMap = scala.collection.mutable.Map[String, ArgumentNotifier]()
-    val peMap = scala.collection.mutable.Map[String, Seq[HLSHelpers.VitisModule]]()
+    val peMap = scala.collection.mutable.Map[String, Seq[HLSHelpers.VitisWriteBufferModule]]()
 
     val interfaceBuffer = new ArrayBuffer[hdlinfo.Interface]()
 
@@ -41,7 +44,7 @@ class HardCilk(
     val numMasters = fullSysGenDescriptor.getNumConfigPorts()
     val axiCfgCtrl = axi4.Config(wAddr = numMasters + registerBlockSize, wData = 64, lite = true)
 
-    val demux = Module(new Demux(axiCfgCtrl, numMasters, (x: UInt) => (x >> registerBlockSize.U)))
+    val demux = Module(new Demux(new DemuxConfig(axiCfgCtrl, numMasters, (x: UInt) => (x >> registerBlockSize.U))))
 
     // connect the demux input to the input of the module
     val s_axil_mgmt = IO(axi4.Slave(axiCfgCtrl)).suggestName("s_axil_mgmt_hardcilk")
@@ -63,7 +66,7 @@ class HardCilk(
       println(task.mgmtBaseAddresses)
 
       // Create the black boxes for the task PEs.
-      val peArray = VitisModuleFactory(task)
+      val peArray = VitisModuleFactory(task, fullSysGenDescriptor)
       peMap += (task.name -> peArray)
 
       // Export the PEs m_axi_gmem and s_axi_control interfaces
@@ -71,6 +74,42 @@ class HardCilk(
       for (i <- 0 until task.numProcessingElements) {
         val pe = peArray(i)
         val peName = f"${task.name}_${i}"
+
+        pe.io.elements
+          .get("m_axi_spawnNext")
+          .map(port => {
+            val pem_axi_spawnNext =
+              IO(chiselTypeOf(port.asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_spawnNext")
+            interfaceBuffer.addOne(
+              hdlinfo.Interface(
+                f"${peName}_m_axi_spawnNext",
+                hdlinfo.InterfaceRole.master,
+                hdlinfo.InterfaceKind("axi4"),
+                "clock",
+                "reset",
+                Map("config" -> hdlinfo.TypedObject(pem_axi_spawnNext.cfg))
+              )
+            )
+            port.asInstanceOf[axi4.RawInterface] :=> pem_axi_spawnNext
+          })
+
+        pe.io.elements
+          .get("m_axi_argOut")
+          .map(port => {
+            val pem_axi_argOut =
+              IO(chiselTypeOf(port.asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_argOut")
+            interfaceBuffer.addOne(
+              hdlinfo.Interface(
+                f"${peName}_m_axi_argOut",
+                hdlinfo.InterfaceRole.master,
+                hdlinfo.InterfaceKind("axi4"),
+                "clock",
+                "reset",
+                Map("config" -> hdlinfo.TypedObject(pem_axi_argOut.cfg))
+              )
+            )
+            port.asInstanceOf[axi4.RawInterface] :=> pem_axi_argOut
+          })
 
         if (task.hasAXI) {
           val pem_axi_gmem =
