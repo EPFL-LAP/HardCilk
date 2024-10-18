@@ -18,6 +18,7 @@ import axi4.lite.components._
 import io.circe.syntax._
 import io.circe.generic.auto._
 import scala.collection.mutable.ArrayBuffer
+import chisel3.util.log2Ceil
 
 class HardCilk(
     fullSysGenDescriptor: FullSysGenDescriptor,
@@ -61,6 +62,25 @@ class HardCilk(
       )
     )
 
+    // DEBUG
+    val rCycleCounter = RegInit(0.U(128.W))
+    rCycleCounter := rCycleCounter + 1.U
+
+    def logAxiAddress(name: String, axi: axi4.RawInterface): Unit = {
+      if (debug) {
+        if (axi.cfg.read) {
+          when(axi.asFull.ar.fire) {
+            printf(s"[AR] %d ${name} %x\n", rCycleCounter, axi.asFull.ar.bits.addr >> log2Ceil(256 / 8))
+          }
+        }
+        if (axi.cfg.write) {
+          when(axi.asFull.aw.fire) {
+            printf(s"[AW] %d ${name} %x\n", rCycleCounter, axi.asFull.aw.bits.addr >> log2Ceil(256 / 8))
+          }
+        }
+      }
+    }
+
     var j = 0
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       println(task.mgmtBaseAddresses)
@@ -90,7 +110,12 @@ class HardCilk(
                 Map("config" -> hdlinfo.TypedObject(pem_axi_spawnNext.cfg))
               )
             )
+
             port.asInstanceOf[axi4.RawInterface] :=> pem_axi_spawnNext
+
+            // DEBUG
+            logAxiAddress("spawnNext", pem_axi_spawnNext)
+            // DEBUG
           })
 
         pe.io.elements
@@ -109,6 +134,10 @@ class HardCilk(
               )
             )
             port.asInstanceOf[axi4.RawInterface] :=> pem_axi_argOut
+
+            // DEBUG
+            logAxiAddress("argOut", pem_axi_argOut)
+            // DEBUG
           })
 
         if (task.hasAXI) {
@@ -141,6 +170,10 @@ class HardCilk(
 
           pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface] :=> pem_axi_gmem
           pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+
+          // DEBUG
+          logAxiAddress("gmem", pem_axi_gmem)
+          // DEBUG
         }
 
         pe.getPort("ap_clk").asInstanceOf[Clock] := clock
@@ -188,6 +221,10 @@ class HardCilk(
               Map("config" -> hdlinfo.TypedObject(schedulerAXI.cfg))
             )
           )
+
+          // DEBUG
+          logAxiAddress("scheduler", schedulerAXI)
+          // DEBUG
         }
       }
 
@@ -225,6 +262,10 @@ class HardCilk(
                 Map("config" -> hdlinfo.TypedObject(closureAllocatorAXI.cfg))
               )
             )
+
+            // DEBUG
+            logAxiAddress("closureAllocator", closureAllocatorAXI)
+            // DEBUG
           }
         }
 
@@ -263,6 +304,10 @@ class HardCilk(
                 Map("config" -> hdlinfo.TypedObject(argumentNotifierAXI.cfg))
               )
             )
+
+            // DEBUG
+            logAxiAddress("argumentNotifier", argumentNotifierAXI)
+            // DEBUG
           }
         }
 
@@ -297,6 +342,10 @@ class HardCilk(
                 Map("config" -> hdlinfo.TypedObject(memoryAllocatorAXI.cfg))
               )
             )
+
+            // DEBUG
+            logAxiAddress("memoryAllocator", memoryAllocatorAXI)
+            // DEBUG
           }
         }
 
