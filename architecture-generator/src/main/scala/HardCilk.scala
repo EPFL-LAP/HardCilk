@@ -19,6 +19,7 @@ import io.circe.syntax._
 import io.circe.generic.auto._
 import scala.collection.mutable.ArrayBuffer
 import chisel3.util.log2Ceil
+import AXIHelpers.AxiUserYanker
 
 class HardCilk(
     fullSysGenDescriptor: FullSysGenDescriptor,
@@ -141,15 +142,27 @@ class HardCilk(
           })
 
         if (task.hasAXI) {
-          val pem_axi_gmem =
-            IO(chiselTypeOf(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_gmem")
+          val name = f"${peName}_m_axi_gmem"
+          val gmemCfg = pe
+            .getPort("m_axi_gmem")
+            .asInstanceOf[axi4.RawInterface]
+            .cfg
+            .copy(
+              wUserAR = 0,
+              wUserR = 0,
+              wUserAW = 0,
+              wUserW = 0,
+              wUserB = 0
+            )
+
+          val pem_axi_gmem = IO(axi4.Master(gmemCfg)).suggestName(name)
           val pes_axi_control =
             IO(chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]))
               .suggestName(f"${peName}_s_axi_control")
 
           interfaceBuffer.addOne(
             hdlinfo.Interface(
-              f"${peName}_m_axi_gmem",
+              name,
               hdlinfo.InterfaceRole.master,
               hdlinfo.InterfaceKind("axi4"),
               "clock",
@@ -168,7 +181,7 @@ class HardCilk(
             )
           )
 
-          pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface] :=> pem_axi_gmem
+          AxiUserYanker(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull) :=> pem_axi_gmem.asFull
           pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
 
           // DEBUG
