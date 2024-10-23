@@ -3,7 +3,7 @@ import Descriptors._
 import java.io.PrintWriter
 
 object CppHeaderTemplate {
-  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String, reduceAxi: Boolean): Unit = {
+  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String, reduceAxi: Int): Unit = {
     // Generate TaskDescriptor class
     val taskDescriptorClass =
       s"""
@@ -15,8 +15,6 @@ object CppHeaderTemplate {
          |    bool isCont;
          |    bool dynamicMemAlloc;
          |    bool hasAXI;
-         |    bool hasSpawnNext;
-         |    bool hasArgOut;
          |    int numProcessingElements;
          |    int widthTask;
          |    int widthMalloc;
@@ -68,9 +66,7 @@ object CppHeaderTemplate {
          |    ${td.isRoot},
          |    ${td.isCont},
          |    ${td.dynamicMemAlloc},
-         |    ${td.hasAXI},
-         |    ${descriptor.spawnNextList.get(td.name).isDefined},
-         |    ${descriptor.sendArgumentList.get(td.name).isDefined},
+         |    ${td.hasAXI || descriptor.spawnNextList.get(td.name).isDefined || descriptor.sendArgumentList.get(td.name).isDefined},
          |    ${td.numProcessingElements},
          |    ${td.widthTask},
          |    ${td.widthMalloc},
@@ -121,21 +117,7 @@ object CppHeaderTemplate {
        |    };
        |    int getNumberAxiMasters() const
        |    {
-       |        int numMasters = 0;
-       |        for (const auto &task : taskDescriptors)
-       |        {
-       |            // For each task, each side has a single master if the side exists
-       |            numMasters += ${reduceAxi} ? (task.getNumServers("scheduler") > 0) : task.getNumServers("scheduler");
-       |            numMasters += ${reduceAxi} ? (task.getNumServers("allocator") > 0): task.getNumServers("allocator");
-       |            numMasters += 2*(${reduceAxi} ? (task.getNumServers("argumentNotifier") > 0): task.getNumServers("argumentNotifier"));
-       |            numMasters += ${reduceAxi} ? (task.getNumServers("memoryAllocator") > 0): task.getNumServers("memoryAllocator");
-       |
-       |            // For each PE of each task there is a master
-       |            numMasters += task.hasAXI * task.numProcessingElements;
-       |            numMasters += task.hasSpawnNext * task.numProcessingElements;
-       |            numMasters += task.hasArgOut * task.numProcessingElements;
-       |        }
-       |        return numMasters;
+       |        return ${reduceAxi};
        |    }
        |    int getNumberPEsAXISlaves() const
        |    {

@@ -14,6 +14,7 @@ import chext.amba.axi4.full.components._
 
 import axi4s.Casts._
 import AXIHelpers.AxisDataWidthConverter
+import AXIHelpers.AxiWriteBuffer
 
 class ArgumentNotifierIO(
     pePortWidth: Int,
@@ -39,8 +40,7 @@ class ArgumentNotifier(
     peCount: Int,
     argRouteServersNumber: Int,
     contCounterWidth: Int,
-    pePortWidth: Int,
-    reduceAxi: Boolean
+    pePortWidth: Int
 ) extends Module {
 
   val io_export = IO(new ArgumentNotifierIO(pePortWidth = pePortWidth, peCount = peCount))
@@ -55,7 +55,7 @@ class ArgumentNotifier(
       peCount = peCount,
       vasNum = argRouteServersNumber,
       queueDepth = queueDepth,
-      cutCount = 8
+      cutCount = 1
     )
   )
 
@@ -78,9 +78,9 @@ class ArgumentNotifier(
   )
 
   val axiCfgSlave = axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false, wId = 0)
-  val argRouteAxiFullCfg = axiCfgSlave.copy(wId = axiCfgSlave.wId + (if (reduceAxi) log2Ceil(2 * argRouteServersNumber) else 0))
+  val argRouteAxiFullCfg = axiCfgSlave
 
-  val nAxiPorts = if (reduceAxi) 1 else 2 * argRouteServersNumber
+  val nAxiPorts = 2 * argRouteServersNumber
   val axi_full_argRoute = IO(Vec(nAxiPorts, axi4.full.Master(argRouteAxiFullCfg)))
 
   for (i <- 0 until argRouteServersNumber) {
@@ -95,22 +95,9 @@ class ArgumentNotifier(
     argRouteRvmReadOnly(i).io.read.get.data <> argRouteServers(i).io.read_data_task
   }
 
-  if (reduceAxi) {
-    val mux = Module(
-      new Mux(
-        new MuxConfig(axiSlaveCfg = axiCfgSlave, numSlaves = 2 * argRouteServersNumber, slaveBuffers = axi4.BufferConfig.all(2))
-      )
-    )
-    mux.m_axi :=> axi_full_argRoute(0)
-    for (i <- 0 until argRouteServersNumber) {
-      argRouteRvm(i).axi :=> mux.s_axi(i)
-      argRouteRvmReadOnly(i).axi :=> mux.s_axi(i + argRouteServersNumber)
-    }
-  } else {
-    for (i <- 0 until argRouteServersNumber) {
-      argRouteRvm(i).axi :=> axi_full_argRoute(i)
-      argRouteRvmReadOnly(i).axi :=> axi_full_argRoute(i + argRouteServersNumber)
-    }
+  for (i <- 0 until argRouteServersNumber) {
+    AxiWriteBuffer(argRouteRvm(i).axi) :=> axi_full_argRoute(i)
+    argRouteRvmReadOnly(i).axi :=> axi_full_argRoute(i + argRouteServersNumber)
   }
 
   val axis_stream_converters_in =

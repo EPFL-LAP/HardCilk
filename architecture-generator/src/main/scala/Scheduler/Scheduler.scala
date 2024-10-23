@@ -50,12 +50,10 @@ class SchedulerAxiIO(
     addrWidth: Int,
     taskWidth: Int,
     vssAxiFullCfg: axi4.Config,
-    reduceAxi: Boolean
 ) extends Bundle {
-  val nAxiPorts = if (reduceAxi) 1 else vssCount
-  private val wId = if (reduceAxi) log2Ceil(vssCount) else 0
+  val nAxiPorts = vssCount
 
-  val vss_axi_full = Vec(nAxiPorts, axi4.full.Master(vssAxiFullCfg.copy(wId = vssAxiFullCfg.wId + wId)))
+  val vss_axi_full = Vec(nAxiPorts, axi4.full.Master(vssAxiFullCfg))
   val axi_mgmt_vss = Vec(vssCount, axi4.lite.Slave(axiMgmtCfg))
 }
 
@@ -70,7 +68,6 @@ class Scheduler(
     argRouteServersNumber: Int,
     pePortWidth: Int,
     peType: String,
-    reduceAxi: Boolean,
     debug: Boolean
 ) extends Module {
 
@@ -131,7 +128,6 @@ class Scheduler(
       vssCount = virtualAddressServersNumber,
       axiMgmtCfg = virtualStealServers(0).regBlock.cfgAxi,
       vssAxiFullCfg = vssAxiFullCfg,
-      reduceAxi = reduceAxi
     )
   )
 
@@ -186,19 +182,7 @@ class Scheduler(
     // DEBUG
   }
 
-  if (reduceAxi) {
-    val mux = Module(
-      new Mux( new MuxConfig(
-        axiSlaveCfg = vssAxiFullCfg,
-        numSlaves = virtualAddressServersNumber,
-        slaveBuffers = axi4.BufferConfig.all(1))
-      )
-    )
-    mux.m_axi :=> io_internal.vss_axi_full(0)
-    axiFullPorts.zip(mux.s_axi).foreach { case (vss, s_axi) => AxiWriteBuffer(vss) :=> s_axi }
-  } else {
-    axiFullPorts.zip(io_internal.vss_axi_full).foreach { case (vss, s_axi) => AxiWriteBuffer(vss) :=> s_axi }
-  }
+  axiFullPorts.zip(io_internal.vss_axi_full).foreach { case (vss, s_axi) => AxiWriteBuffer(vss) :=> s_axi }
 
   // DEBUG
   if (debug) {

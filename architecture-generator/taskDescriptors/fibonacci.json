@@ -8,7 +8,7 @@
             "isCont": false,
             "dynamicMemAlloc": false,
 
-            "numProcessingElements": 32,
+            "numProcessingElements": 64,
             "widthTask": 128,
             "widthMalloc": 0,
             "sidesConfigs": [
@@ -73,5 +73,6 @@
     "widthAddress":64,
     "widthContCounter":32,
     "memorySizeSim": 16,
-    "targetFrequency": 250
+    "targetFrequency": 250,
+    "fpgaModel": "ALVEO_U55C"
 }

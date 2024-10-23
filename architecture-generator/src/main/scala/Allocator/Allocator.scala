@@ -30,13 +30,11 @@ class ClosureAllocatorPEIO(
 class ClosureAllocatorAxiIO(
     axiMgmtCfg: axi4.Config,
     vcasCount: Int,
-    vcasAxiFullCfg: axi4.Config,
-    reduceAxi: Boolean
+    vcasAxiFullCfg: axi4.Config
 ) extends Bundle {
-  val nAxiPorts = if (reduceAxi) 1 else vcasCount
-  private val wId = if (reduceAxi) log2Ceil(vcasCount) else 0
+  val nAxiPorts = vcasCount
 
-  val vcas_axi_full = Vec(nAxiPorts, axi4.full.Master(vcasAxiFullCfg.copy(wId = vcasAxiFullCfg.wId + wId)))
+  val vcas_axi_full = Vec(nAxiPorts, axi4.full.Master(vcasAxiFullCfg))
   val axi_mgmt_vcas = Vec(vcasCount, axi4.lite.Slave(axiMgmtCfg))
 }
 
@@ -60,8 +58,7 @@ class Allocator(
     peCount: Int,
     vcasCount: Int,
     queueDepth: Int,
-    pePortWidth: Int,
-    reduceAxi: Boolean
+    pePortWidth: Int
 ) extends Module {
 
   val continuationNetwork = Module(
@@ -81,7 +78,7 @@ class Allocator(
   val vcasAxiFullCfgSlave = vcasAxiFullCfg.copy(wId = vcasAxiFullCfg.wId + vcasCount)
 
   val io_export = IO(new ClosureAllocatorPEIO(pePortWidth = pePortWidth, peCount = peCount))
-  val io_internal = IO(new ClosureAllocatorAxiIO(vcas(0).regBlock.cfgAxi, vcasCount, vcasAxiFullCfgSlave, reduceAxi))
+  val io_internal = IO(new ClosureAllocatorAxiIO(vcas(0).regBlock.cfgAxi, vcasCount, vcasAxiFullCfgSlave))
 
   val vcasRvmRO = Seq.fill(vcasCount)(Module(new RVtoAXIBridge(addrWidth, addrWidth, write = false, burstLength = 15)))
 
@@ -95,15 +92,7 @@ class Allocator(
     vcas(i).io.dataOut <> continuationNetwork.io.connVCAS(i)
   }
 
-  if (reduceAxi) {
-    val mux = Module(
-      new Mux(new MuxConfig(axiSlaveCfg = vcasAxiFullCfg, numSlaves = vcasCount, slaveBuffers = axi4.BufferConfig.all(2)))
-    )
-    axiFullPorts.zip(mux.s_axi).foreach { case (port, s_axi) => port :=> s_axi }
-    mux.m_axi :=> io_internal.vcas_axi_full(0)
-  } else {
-    axiFullPorts.zip(io_internal.vcas_axi_full).foreach { case (port, s_axi) => port :=> s_axi }
-  }
+  axiFullPorts.zip(io_internal.vcas_axi_full).foreach { case (port, s_axi) => port :=> s_axi }
 
   val axis_stream_converters_out =
     Seq.fill(peCount)(Module(new AxisDataWidthConverter(dataWidthIn = addrWidth, dataWidthOut = pePortWidth)))

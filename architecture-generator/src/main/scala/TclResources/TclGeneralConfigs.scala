@@ -120,6 +120,9 @@ object TclGeneralConfigs {
   }
 
   def getHBMConfigTclSyntax(totalAXIPorts: Int): String = {
+    
+    require(totalAXIPorts <= 32)
+    
     val sb = new StringBuilder
 
     sb.append("""
@@ -291,19 +294,15 @@ object TclGeneralConfigs {
     sb.append("connect_bd_net [get_bd_pins proc_sys_reset_2/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out2]\n")
     sb.append("connect_bd_net [get_bd_pins proc_sys_reset_2/peripheral_aresetn] [get_bd_pins hbm_0/AXI_*_ARESET_N]\n")
 
-    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins smartconnect*/aclk]\n") // for the smartconnects system side
-    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins smartconnect*/aclk1]\n")
 
-    sb.append(
-      "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins smartconnect*/*aresetn]\n"
-    ) // for the smartconnects reset
+
 
     sb.append(
       "connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter*/*clk*]\n"
-    ) // for the   smartconnects
+    )
     sb.append(
       "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter*/*aresetn*]\n"
-    ) // for the smartconnects reset
+    ) 
 
     // Reset coming from AXI through the pcie
     sb.append("""

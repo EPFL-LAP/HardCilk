@@ -73,8 +73,6 @@ case class InterconnectDescriptor(
 )
 
 case class MemStats(
-    val numSysAXI: Int,
-    val numPEs: Int,
     val totalAXIPorts: Int,
     val interconnectDescriptors: List[InterconnectDescriptor]
 )
@@ -177,7 +175,8 @@ case class FullSysGenDescriptor(
     val mallocList: Map[String, List[String]],
     val cfgAxiHardCilk: chext.amba.axi4.Config = chext.amba.axi4.Config(),
     val targetFrequency: Int = 250,
-    val memorySizeSim: Int = 1 // in GB
+    val memorySizeSim: Int = 1, // in GB
+    val fpgaModel: String = "ALVEO_U55C",
 ) {
   assert(isPow2(widthAddress) && widthAddress <= 64)
   assert(isPow2(widthContCounter) && widthContCounter <= 64)
@@ -188,6 +187,7 @@ case class FullSysGenDescriptor(
   assert(spawnNextList.keys.forall(taskDescriptors.map(_.name).contains(_)))
   assert(sendArgumentList.keys.forall(taskDescriptors.map(_.name).contains(_)))
   assert(mallocList.keys.forall(taskDescriptors.map(_.name).contains(_)))
+  assert(fpgaModel == "ALVEO_U55C")
 
   // assert that none of the HardCilk components require a wider buswidth than cfgAxiHardCilk
   // assert(taskDescriptors.map(_.widthTask).max <= cfgAxiHardCilk.wData)
@@ -348,71 +348,14 @@ case class FullSysGenDescriptor(
       .sum + taskDescriptors.map(_.getNumServers("allocator")).sum
   }
 
-  def getSystemAXIPortsNames(reduce_axi: Boolean): List[String] = {
-    val schedulerPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("scheduler") > 0)
-        if (reduce_axi)
-          List(f"${task.name}_schedulerAXI_0")
-        else
-          (0 until task.getNumServers("scheduler")).map { i =>
-            f"${task.name}_schedulerAXI_${i}"
-          }
-      else List()
-    }
-
-    val allocatorPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("allocator") > 0)
-        if (reduce_axi)
-          List(f"${task.name}_closureAllocatorAXI_0")
-        else
-          (0 until task.getNumServers("allocator")).map { i =>
-            f"${task.name}_closureAllocatorAXI_${i}"
-          }
-      else List()
-    }
-
-    val argumentNotifierPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("argumentNotifier") > 0)
-        if (reduce_axi)
-          List(f"${task.name}_argumentNotifierAXI_0")
-        else
-          (0 until task.getNumServers("argumentNotifier") * 2).map { i =>
-            f"${task.name}_argumentNotifierAXI_${i}"
-          }
-      else List()
-    }
-
-    val memoryAllocatorPorts = taskDescriptors.flatMap { task =>
-      if (task.getNumServers("memoryAllocator") > 0)
-        if (reduce_axi)
-          List(f"${task.name}_memoryAllocatorAXI_0")
-        else
-          (0 until task.getNumServers("memoryAllocator")).map { i =>
-            f"${task.name}_memoryAllocatorAXI_${i}"
-          }
-      else List()
-    }
-
-    schedulerPorts ++ allocatorPorts ++ argumentNotifierPorts ++ memoryAllocatorPorts
+  def getSystemAXIPortsNames(reduce_axi: Int): List[String] = {
+    Seq.tabulate(reduce_axi)(i => f"m_axi_${i}").toList
   }
 
-  def getMemoryConnectionsStats(reduce_axi: Boolean): MemStats = {
+  def getMemoryConnectionsStats(reduce_axi: Int): MemStats = {
     val interconnectDescriptors = ListBuffer[InterconnectDescriptor]()
 
-    val numSysAXI = taskDescriptors.map { descriptor =>
-      if (reduce_axi) descriptor.sidesConfigs.length
-      else
-        descriptor.getNumServers("scheduler") + descriptor.getNumServers("memoryAllocator") + descriptor.getNumServers(
-          "allocator"
-        ) + descriptor.getNumServers("argumentNotifier") * 2
-    }.sum
-
-    val numPEs = taskDescriptors
-      .filter(_.hasAXI) // Assuming `hasAXI` is a method or property that checks for AXI presence
-      .map(_.numProcessingElements)
-      .sum
-
-    val totalAXIPorts = numSysAXI + numPEs + 1
+    val totalAXIPorts = reduce_axi
 
     var optimizer = totalAXIPorts
 
@@ -435,7 +378,7 @@ case class FullSysGenDescriptor(
 
     assert(interconnectDescriptorsAggregated.map(_.count).sum <= 32)
 
-    MemStats(numSysAXI, numPEs, totalAXIPorts, interconnectDescriptorsAggregated)
+    MemStats(totalAXIPorts, interconnectDescriptorsAggregated)
   }
 
 }
@@ -472,7 +415,7 @@ object FullSysGenDescriptor {
 object FullSysGenDescriptorExtended {
   def fromFullSysGenDescriptor(fullSysGenDescriptor: FullSysGenDescriptor): FullSysGenDescriptorExtended = {
     val systemConnections = fullSysGenDescriptor.getSystemConnectionsDescriptor()
-    val memStats = fullSysGenDescriptor.getMemoryConnectionsStats(true)
+    val memStats = fullSysGenDescriptor.getMemoryConnectionsStats(32)
     FullSysGenDescriptorExtended(fullSysGenDescriptor, systemConnections, memStats)
   }
 

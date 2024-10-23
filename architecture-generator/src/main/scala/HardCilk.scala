@@ -14,6 +14,7 @@ import chext.amba.axi4s
 import chext.amba.axi4s.Casts._
 import axi4.Ops._
 import axi4.lite.components._
+import chict.ict_segm._
 
 import io.circe.syntax._
 import io.circe.generic.auto._
@@ -25,7 +26,9 @@ class HardCilk(
     fullSysGenDescriptor: FullSysGenDescriptor,
     outputDirPathRTL: String,
     debug: Boolean,
-    reduceAxi: Boolean
+    reduceAxi: Int,
+    unitedHbm: Boolean,
+    isSimulation: Boolean
 ) extends Module {
 
   override def desiredName: String =
@@ -46,7 +49,22 @@ class HardCilk(
     val numMasters = fullSysGenDescriptor.getNumConfigPorts()
     val axiCfgCtrl = axi4.Config(wAddr = numMasters + registerBlockSize, wData = 64, lite = true)
 
-    val demux = Module(new Demux(new DemuxConfig(axiCfgCtrl, numMasters, (x: UInt) => (x >> registerBlockSize.U))))
+    val demux = Module(
+      new axi4.lite.components.Demux(new DemuxConfig(axiCfgCtrl, numMasters, (x: UInt) => (x >> registerBlockSize.U)))
+    )
+
+    // HBM Configuration
+    val cfgAxi4HBM = axi4.Config(
+      wId = 0,
+      wAddr = 34,
+      wData = 256,
+      wUserAR = 0,
+      wUserR = 0,
+      wUserAW = 0,
+      wUserW = 0,
+      wUserB = 0
+    )
+    val cfgXDMA = axi4.Config(wId = 4, wAddr = 64, wData = 512)
 
     // connect the demux input to the input of the module
     val s_axil_mgmt = IO(axi4.Slave(axiCfgCtrl)).suggestName("s_axil_mgmt_hardcilk")
@@ -81,7 +99,13 @@ class HardCilk(
         }
       }
     }
+    // Debug
 
+    val interfacesPE = new ArrayBuffer[axi4.full.Interface]()
+    val interfacesScheduler = new ArrayBuffer[axi4.full.Interface]()
+    val interfacesClosureAllocator = new ArrayBuffer[axi4.full.Interface]()
+    val interfacesArgumentNotifier = new ArrayBuffer[axi4.full.Interface]()
+    val interfacesMemoryAllocator = new ArrayBuffer[axi4.full.Interface]()
     var j = 0
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       println(task.mgmtBaseAddresses)
@@ -99,77 +123,20 @@ class HardCilk(
         pe.io.elements
           .get("m_axi_spawnNext")
           .map(port => {
-            val pem_axi_spawnNext =
-              IO(chiselTypeOf(port.asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_spawnNext")
-            interfaceBuffer.addOne(
-              hdlinfo.Interface(
-                f"${peName}_m_axi_spawnNext",
-                hdlinfo.InterfaceRole.master,
-                hdlinfo.InterfaceKind("axi4"),
-                "clock",
-                "reset",
-                Map("config" -> hdlinfo.TypedObject(pem_axi_spawnNext.cfg))
-              )
-            )
-
-            port.asInstanceOf[axi4.RawInterface] :=> pem_axi_spawnNext
-
-            // DEBUG
-            logAxiAddress("spawnNext", pem_axi_spawnNext)
-            // DEBUG
+            interfacesPE.addOne(port.asInstanceOf[axi4.RawInterface].asFull)
           })
 
         pe.io.elements
           .get("m_axi_argOut")
           .map(port => {
-            val pem_axi_argOut =
-              IO(chiselTypeOf(port.asInstanceOf[axi4.RawInterface])).suggestName(f"${peName}_m_axi_argOut")
-            interfaceBuffer.addOne(
-              hdlinfo.Interface(
-                f"${peName}_m_axi_argOut",
-                hdlinfo.InterfaceRole.master,
-                hdlinfo.InterfaceKind("axi4"),
-                "clock",
-                "reset",
-                Map("config" -> hdlinfo.TypedObject(pem_axi_argOut.cfg))
-              )
-            )
-            port.asInstanceOf[axi4.RawInterface] :=> pem_axi_argOut
-
-            // DEBUG
-            logAxiAddress("argOut", pem_axi_argOut)
-            // DEBUG
+            interfacesPE.addOne(port.asInstanceOf[axi4.RawInterface].asFull)
           })
 
         if (task.hasAXI) {
-          val name = f"${peName}_m_axi_gmem"
-          val gmemCfg = pe
-            .getPort("m_axi_gmem")
-            .asInstanceOf[axi4.RawInterface]
-            .cfg
-            .copy(
-              wUserAR = 0,
-              wUserR = 0,
-              wUserAW = 0,
-              wUserW = 0,
-              wUserB = 0
-            )
+          interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
+          val pes_axi_control = IO(chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]))
+            .suggestName(f"${peName}_s_axi_control")
 
-          val pem_axi_gmem = IO(axi4.Master(gmemCfg)).suggestName(name)
-          val pes_axi_control =
-            IO(chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]))
-              .suggestName(f"${peName}_s_axi_control")
-
-          interfaceBuffer.addOne(
-            hdlinfo.Interface(
-              name,
-              hdlinfo.InterfaceRole.master,
-              hdlinfo.InterfaceKind("axi4"),
-              "clock",
-              "reset",
-              Map("config" -> hdlinfo.TypedObject(pem_axi_gmem.cfg))
-            )
-          )
           interfaceBuffer.addOne(
             hdlinfo.Interface(
               f"${peName}_s_axi_control",
@@ -181,14 +148,10 @@ class HardCilk(
             )
           )
 
-          AxiUserYanker(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull) :=> pem_axi_gmem.asFull
           pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
-
-          // DEBUG
-          logAxiAddress("gmem", pem_axi_gmem)
-          // DEBUG
         }
 
+        // Connect the ap signals
         pe.getPort("ap_clk").asInstanceOf[Clock] := clock
         pe.getPort("ap_rst_n").asInstanceOf[Bool] := ~reset.asBool
         try {
@@ -213,33 +176,12 @@ class HardCilk(
           virtualAddressServersNumber = task.getNumServers("scheduler"),
           pePortWidth = task.getPortWidth("scheduler"),
           peType = task.name,
-          reduceAxi = reduceAxi,
           debug = debug
         )
       ))
 
       // Export the AXI interface of the Scheduler
-      schedulerMap(task.name).io_internal.vss_axi_full.zipWithIndex.foreach {
-        case (port, idx) => {
-          val name = f"${task.name}_schedulerAXI_${idx}"
-          val schedulerAXI = IO(axi4.Master(port.cfg)).suggestName(name)
-          port :=> schedulerAXI.asFull
-          interfaceBuffer.addOne(
-            hdlinfo.Interface(
-              name,
-              hdlinfo.InterfaceRole.master,
-              hdlinfo.InterfaceKind("axi4"),
-              "clock",
-              "reset",
-              Map("config" -> hdlinfo.TypedObject(schedulerAXI.cfg))
-            )
-          )
-
-          // DEBUG
-          logAxiAddress("scheduler", schedulerAXI)
-          // DEBUG
-        }
-      }
+      interfacesScheduler.addAll(schedulerMap(task.name).io_internal.vss_axi_full)
 
       // Connect the Scheduler Management to the management demux
       for (i <- j until j + task.getNumServers("scheduler")) {
@@ -254,33 +196,12 @@ class HardCilk(
             peCount = fullSysGenDescriptor.getPortCount("spawnNext", task.name),
             vcasCount = task.getNumServers("allocator"),
             queueDepth = task.getCapacityPhysicalQueue("allocator"),
-            pePortWidth = task.getPortWidth("allocator"),
-            reduceAxi = reduceAxi
+            pePortWidth = task.getPortWidth("allocator")
           )
         ))
 
         // Export the AXI interface of the ClosureAllocator
-        closureAllocatorMap(task.name).io_internal.vcas_axi_full.zipWithIndex.foreach {
-          case (port, idx) => {
-            val name = f"${task.name}_closureAllocatorAXI_${idx}"
-            val closureAllocatorAXI = IO(axi4.Master(port.cfg)).suggestName(name)
-            port :=> closureAllocatorAXI.asFull
-            interfaceBuffer.addOne(
-              hdlinfo.Interface(
-                name,
-                hdlinfo.InterfaceRole.master,
-                hdlinfo.InterfaceKind("axi4"),
-                "clock",
-                "reset",
-                Map("config" -> hdlinfo.TypedObject(closureAllocatorAXI.cfg))
-              )
-            )
-
-            // DEBUG
-            logAxiAddress("closureAllocator", closureAllocatorAXI)
-            // DEBUG
-          }
-        }
+        interfacesClosureAllocator.addAll(closureAllocatorMap(task.name).io_internal.vcas_axi_full)
 
         // Connect the ClosureAllocator Management to the management demux
         for (i <- j until j + task.getNumServers("allocator")) {
@@ -296,33 +217,12 @@ class HardCilk(
             peCount = fullSysGenDescriptor.getPortCount("sendArgument", task.name),
             argRouteServersNumber = task.getNumServers("argumentNotifier"),
             contCounterWidth = fullSysGenDescriptor.widthContCounter,
-            pePortWidth = task.getPortWidth("argumentNotifier"),
-            reduceAxi = reduceAxi
+            pePortWidth = task.getPortWidth("argumentNotifier")
           )
         ))
 
         // Export the AXI interface of the ArgumentNotifier
-        argumentNotifierMap(task.name).axi_full_argRoute.zipWithIndex.foreach {
-          case (port, idx) => {
-            val name = f"${task.name}_argumentNotifierAXI_${idx}"
-            val argumentNotifierAXI = IO(axi4.Master(port.cfg)).suggestName(name)
-            port :=> argumentNotifierAXI.asFull
-            interfaceBuffer.addOne(
-              hdlinfo.Interface(
-                name,
-                hdlinfo.InterfaceRole.master,
-                hdlinfo.InterfaceKind("axi4"),
-                "clock",
-                "reset",
-                Map("config" -> hdlinfo.TypedObject(argumentNotifierAXI.cfg))
-              )
-            )
-
-            // DEBUG
-            logAxiAddress("argumentNotifier", argumentNotifierAXI)
-            // DEBUG
-          }
-        }
+        interfacesArgumentNotifier.addAll(argumentNotifierMap(task.name).axi_full_argRoute)
 
         schedulerMap(task.name).connArgumentNotifier <> argumentNotifierMap(task.name).connStealNtw
       }
@@ -334,40 +234,171 @@ class HardCilk(
             peCount = fullSysGenDescriptor.getPortCount("mallocIn", task.name),
             vcasCount = task.getNumServers("memoryAllocator"),
             queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),
-            pePortWidth = task.getPortWidth("memoryAllocator"),
-            reduceAxi = reduceAxi
+            pePortWidth = task.getPortWidth("memoryAllocator")
           )
         ))
 
         // Export the AXI interface of the MemoryAllocator
-        memoryAllocatorMap(task.name).io_internal.vcas_axi_full.zipWithIndex.foreach {
-          case (port, idx) => {
-            val name = f"${task.name}_memoryAllocatorAXI_${idx}"
-            val memoryAllocatorAXI = IO(axi4.Master(port.cfg)).suggestName(name)
-            port :=> memoryAllocatorAXI.asFull
-            interfaceBuffer.addOne(
-              hdlinfo.Interface(
-                name,
-                hdlinfo.InterfaceRole.master,
-                hdlinfo.InterfaceKind("axi4"),
-                "clock",
-                "reset",
-                Map("config" -> hdlinfo.TypedObject(memoryAllocatorAXI.cfg))
-              )
-            )
-
-            // DEBUG
-            logAxiAddress("memoryAllocator", memoryAllocatorAXI)
-            // DEBUG
-          }
-        }
+        interfacesMemoryAllocator.addAll(memoryAllocatorMap(task.name).io_internal.vcas_axi_full)
 
         for (i <- j until j + task.getNumServers("memoryAllocator")) {
           demux.m_axil(i) :=> memoryAllocatorMap(task.name).io_internal.axi_mgmt_vcas(i - j)
         }
         j += task.getNumServers("memoryAllocator")
       }
+    }
 
+    // Connect the Interconnect
+    val numHBMPorts = reduceAxi
+    val log2k = 2
+    val hbmSlaves = scala.collection.mutable.Map[Int, ArrayBuffer[axi4.full.Interface]]()
+    for (i <- 0 until numHBMPorts) {
+      hbmSlaves += (i -> new ArrayBuffer[axi4.full.Interface]())
+    }
+
+    interfacesPE.zipWithIndex
+      .groupBy(x => (x._2.toDouble / (1.0 * interfacesPE.length / numHBMPorts)).toInt)
+      .foreach(x => {
+        hbmSlaves(x._1).addAll(x._2.map(_._1))
+      })
+    interfacesMemoryAllocator.zipWithIndex
+      .groupBy(x => (x._2.toDouble / (1.0 * interfacesMemoryAllocator.length / numHBMPorts)).toInt)
+      .foreach(x => {
+        hbmSlaves(x._1).addAll(x._2.map(_._1))
+      })
+    interfacesScheduler.zipWithIndex
+      .groupBy(x => (x._2.toDouble / (1.0 * interfacesScheduler.length / numHBMPorts)).toInt)
+      .foreach(x => {
+        hbmSlaves(x._1).addAll(x._2.map(_._1))
+      })
+    interfacesClosureAllocator.zipWithIndex
+      .groupBy(x => (x._2.toDouble / (1.0 * interfacesClosureAllocator.length / numHBMPorts)).toInt)
+      .foreach(x => {
+        hbmSlaves(x._1).addAll(x._2.map(_._1))
+      })
+    interfacesArgumentNotifier.zipWithIndex
+      .groupBy(x => (x._2.toDouble / (1.0 * interfacesArgumentNotifier.length / numHBMPorts)).toInt)
+      .foreach(x => {
+        hbmSlaves(x._1).addAll(x._2.map(_._1))
+      })
+
+    if (!isSimulation) {
+      val xdma_axi = IO(axi4.Slave(cfgXDMA)).suggestName("s_axi_xdma")
+      hbmSlaves(numHBMPorts - 1).addOne(axi4.full.SlaveBuffer(xdma_axi.asFull, axi4.BufferConfig.all(8)))
+
+      interfaceBuffer.addOne(
+        hdlinfo.Interface(
+          "s_axi_xdma",
+          hdlinfo.InterfaceRole.slave,
+          hdlinfo.InterfaceKind("axi4"),
+          "clock",
+          "reset",
+          Map("config" -> hdlinfo.TypedObject(cfgXDMA))
+        )
+      )
+    }
+
+    if (unitedHbm) {
+      // Create the interconnect
+      // TODO: Calculate the id or add ID serializer
+      // TODO: Drive the empty signals
+      val ict = Module(
+        new IctSegm(
+          new IctSegmConfig(
+            cfgAxi4HBM.copy(wId = 4),
+            log2Ceil(numHBMPorts),
+            log2k
+          )
+        )
+      )
+
+      ict.s_axi.zipWithIndex.foreach { case (port, i) =>
+        // Mux the interfaces
+        val mux = Module(
+          new axi4.full.components.Mux(
+            new axi4.full.components.MuxConfig(
+              axiSlaveCfg = cfgAxi4HBM,
+              numSlaves = hbmSlaves(i).length
+            )
+          )
+        )
+        mux.s_axi.zip(hbmSlaves(i)).foreach { case (muxPort, slavePort) =>
+          val protocolConverter = Module(
+            new axi4.full.components.ProtocolConverter(
+              new axi4.full.components.ProtocolConverterConfig(
+                axiSlaveCfg = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+                axiMasterCfg = muxPort.cfg
+              )
+            )
+          )
+          axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
+          protocolConverter.m_axi :=> muxPort
+        }
+        mux.m_axi :=> port
+      }
+
+      // Connect the outputs of the interconnect to the IO through protocol converters to make it axi3 compatible
+      ict.m_axi.zipWithIndex.foreach { case (port, i) =>
+        val protocolConverter = Module(
+          new axi4.full.components.ProtocolConverter(
+            new axi4.full.components.ProtocolConverterConfig(
+              axiSlaveCfg = port.cfg,
+              axiMasterCfg = cfgAxi4HBM.copy(axi3Compat = true)
+            )
+          )
+        )
+        port :=> protocolConverter.s_axi
+        val axiOut = IO(axi4.Master(protocolConverter.m_axi.cfg)).suggestName(f"m_axi_${i}")
+        protocolConverter.m_axi :=> axiOut.asFull
+        interfaceBuffer.addOne(
+          hdlinfo.Interface(
+            f"m_axi_${i}",
+            hdlinfo.InterfaceRole.master,
+            hdlinfo.InterfaceKind("axi4"),
+            "clock",
+            "reset",
+            Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+          )
+        )
+      }
+    } else {
+      for (i <- 0 until numHBMPorts) {
+        // Mux the interfaces
+        val mux = Module(
+          new axi4.full.components.Mux(
+            new axi4.full.components.MuxConfig(
+              axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = true),
+              numSlaves = hbmSlaves(i).length
+            )
+          )
+        )
+
+        mux.s_axi.zip(hbmSlaves(i)).foreach { case (muxPort, slavePort) =>
+          val protocolConverter = Module(
+            new axi4.full.components.ProtocolConverter(
+              new axi4.full.components.ProtocolConverterConfig(
+                axiSlaveCfg = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+                axiMasterCfg = muxPort.cfg
+              )
+            )
+          )
+          axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> protocolConverter.s_axi
+          protocolConverter.m_axi :=> muxPort
+        }
+
+        val axiOut = IO(axi4.Master(mux.m_axi.cfg)).suggestName(f"m_axi_${i}")
+        mux.m_axi :=> axiOut.asFull
+        interfaceBuffer.addOne(
+          hdlinfo.Interface(
+            f"m_axi_${i}",
+            hdlinfo.InterfaceRole.master,
+            hdlinfo.InterfaceKind("axi4"),
+            "clock",
+            "reset",
+            Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+          )
+        )
+      }
     }
 
     // Connet the PEs to the system based on the connection descriptor
@@ -465,7 +496,7 @@ object HardCilkEmitter extends App {
   // Handling argument parsing
   case class BuilderConfig(
       val debug: Boolean = false,
-      val reduce_axi: Boolean = false,
+      val reduce_axi: Int = 32,
       val timestamped: Boolean = false,
       val cpp_header_generation: Boolean = false,
       val tcl_generation: Boolean = false,
@@ -492,8 +523,8 @@ object HardCilkEmitter extends App {
       opt[Unit]('d', "debug")
         .action((_, c) => c.copy(debug = true))
         .text("enable debug hardware counters and simulation logging"),
-      opt[Unit]('r', "reduce-axi")
-        .action((_, c) => c.copy(reduce_axi = true))
+      opt[Int]('r', "reduce-axi")
+        .action((x, c) => c.copy(reduce_axi = x))
         .text("enable AXI port reduction to HBM capacity"),
       opt[Unit]('t', "timestamped")
         .action((_, c) => c.copy(timestamped = true))
@@ -550,7 +581,7 @@ object HardCilkEmitter extends App {
       pathInputJsonFile: String,
       outputDirPathRTL: String,
       flags: BuilderConfig,
-      useBramSim: Boolean
+      isSimulation: Boolean
   ): Unit = {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
@@ -570,7 +601,7 @@ object HardCilkEmitter extends App {
       val fileName = file.getName()
       val fileContent = readFile(file.getAbsolutePath())
       if (fileName.startsWith("DualPortBRAM")) {
-        if ((useBramSim && fileName == "DualPortBRAM_sim.v") || (!useBramSim && fileName == "DualPortBRAM_xpm.v")) {
+        if ((isSimulation && fileName == "DualPortBRAM_sim.v") || (!isSimulation && fileName == "DualPortBRAM_xpm.v")) {
           writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
         }
       } else {
@@ -580,7 +611,14 @@ object HardCilkEmitter extends App {
 
     ChiselStage.emitSystemVerilogFile(
       {
-        val module = new HardCilk(systemDescriptor, outputDirPathRTL, flags.debug, flags.reduce_axi)
+        val module = new HardCilk(
+          fullSysGenDescriptor = systemDescriptor,
+          outputDirPathRTL = outputDirPathRTL,
+          debug = flags.debug,
+          reduceAxi = flags.reduce_axi,
+          unitedHbm = false,
+          isSimulation = isSimulation
+        )
         module
       },
       Array(f"--target-dir=${outputDirPathRTL}"),
