@@ -10,7 +10,7 @@ import chext.amba.axi4.Ops._
 
 class AxiWriteBuffer(
     cfg: Config,
-    maxInflightWrite: Int = 3
+    maxInflightWrite: Int = 1
 ) extends Module {
 
   val s_axi = IO(full.Slave(cfg))

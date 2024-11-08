@@ -12,6 +12,7 @@ class AllocatorServerIO(dataWidth: Int, regBlock: RegisterBlock, sysAddressWidth
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
   val read_address = DecoupledIO(UInt(sysAddressWidth.W))
   val read_data = Flipped(DecoupledIO(UInt(dataWidth.W)))
+  val paused = Output(Bool())
 }
 
 class AllocatorServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int) extends Module {
@@ -46,6 +47,7 @@ class AllocatorServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int) ex
   regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
   regBlock.reg(rAddr, read = true, write = true, desc = "Base address of virtual continuation FIFO")
   regBlock.reg(avaialbleSize, read = true, write = true, desc = "Availble address FIFO size")
+  io.paused := rPause
 
   when(stateReg === state.init) {
     when(avaialbleSize >= (burstLength + 1).U) {

@@ -11,6 +11,7 @@ import chext.amba.axi4.Ops._
 class AxiUserYanker(
     val cfgSlave: axi4.Config
 ) extends Module {
+  suggestName("AxiUserYanker")
   val cfgMaster = cfgSlave.copy(
     wUserAR = 0,
     wUserR = 0,
@@ -33,12 +34,12 @@ class AxiUserYanker(
   if (cfgSlave.wUserB != 0)
     assert(!s_axi.b.valid || s_axi.b.bits.user.asUInt === 0.U)
 
-  if(cfgSlave.read) {
+  if (cfgSlave.read) {
     s_axi.ar :=> m_axi.ar
     m_axi.r :=> s_axi.r
   }
 
-  if(cfgSlave.write) {
+  if (cfgSlave.write) {
     s_axi.aw :=> m_axi.aw
     s_axi.w :=> m_axi.w
     m_axi.b :=> s_axi.b
@@ -50,5 +51,9 @@ object AxiUserYanker {
     val yanker = Module(new AxiUserYanker(s_axi.cfg))
     s_axi :=> yanker.s_axi
     yanker.m_axi
+  }
+
+  implicit class UserYankedConfig(cfg: axi4.Config) {
+    def userDataStripped = cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0)
   }
 }

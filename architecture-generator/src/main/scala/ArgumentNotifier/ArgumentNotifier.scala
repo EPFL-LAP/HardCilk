@@ -10,7 +10,6 @@ import chext.amba.axi4
 import chext.amba.axi4s
 
 import axi4.Ops._
-import chext.amba.axi4.full.components._
 
 import axi4s.Casts._
 import AXIHelpers.AxisDataWidthConverter
@@ -24,6 +23,7 @@ class ArgumentNotifierIO(
   implicit val axisCfgAddress: axi4s.Config = axi4s.Config(wData = pePortWidth, onlyRV = true)
 
   val argIn = Vec(peCount, axi4s.Slave(axisCfgAddress))
+  val done = Output(Bool())
 
   // a getter function for the port with name and index
   def getPort(name: String, index: Int): axi4s.Interface = {
@@ -40,7 +40,8 @@ class ArgumentNotifier(
     peCount: Int,
     argRouteServersNumber: Int,
     contCounterWidth: Int,
-    pePortWidth: Int
+    pePortWidth: Int,
+    cutCount: Int
 ) extends Module {
 
   val io_export = IO(new ArgumentNotifierIO(pePortWidth = pePortWidth, peCount = peCount))
@@ -55,7 +56,7 @@ class ArgumentNotifier(
       peCount = peCount,
       vasNum = argRouteServersNumber,
       queueDepth = queueDepth,
-      cutCount = 1
+      cutCount = cutCount
     )
   )
 
@@ -71,6 +72,8 @@ class ArgumentNotifier(
       )
     )
   }
+
+  io_export.done := argRouteServers.map(_.io.done).reduce(_ || _)
 
   val argRouteRvm = Seq.fill(argRouteServersNumber)(Module(new RVtoAXIBridge(contCounterWidth, addrWidth)))
   val argRouteRvmReadOnly = Seq.fill(argRouteServersNumber)(
@@ -96,7 +99,7 @@ class ArgumentNotifier(
   }
 
   for (i <- 0 until argRouteServersNumber) {
-    AxiWriteBuffer(argRouteRvm(i).axi) :=> axi_full_argRoute(i)
+    axi4.full.SlaveBuffer(AxiWriteBuffer(argRouteRvm(i).axi), axi4.BufferConfig(b = 2)) :=> axi_full_argRoute(i)
     argRouteRvmReadOnly(i).axi :=> axi_full_argRoute(i + argRouteServersNumber)
   }
 

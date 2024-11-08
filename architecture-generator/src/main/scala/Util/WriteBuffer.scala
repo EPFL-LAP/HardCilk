@@ -69,7 +69,7 @@ class WriteBuffer(
   val m_allows = cfgAxisAllows.map(c => IO(axi4s.Master(c)))
 
   // Implementation
-  private val m_axi_ = m_axi.asFull
+  private val m_axi_ = axi4.full.MasterBuffer(m_axi.asFull, axi4.BufferConfig(b = 8))
   private val s_pkg_ = elastic.SourceBuffer(s_pkg.lite, 4)
   private val s_allows_ = s_allows.map(p => elastic.SourceBuffer(p.lite, 8))
   private val m_allows_ = m_allows.map(p => elastic.SinkBuffer(p.lite, 8))

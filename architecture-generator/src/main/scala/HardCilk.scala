@@ -1,3 +1,5 @@
+package HardCilk
+
 import chisel3._
 
 import Scheduler._
@@ -7,11 +9,8 @@ import Descriptors._
 import TclResources._
 import HLSHelpers._
 import SoftwareUtil._
-import Util._
 
 import chext.amba.axi4
-import chext.amba.axi4s
-import chext.amba.axi4s.Casts._
 import axi4.Ops._
 import axi4.lite.components._
 import chict.ict_segm._
@@ -20,7 +19,7 @@ import io.circe.syntax._
 import io.circe.generic.auto._
 import scala.collection.mutable.ArrayBuffer
 import chisel3.util.log2Ceil
-import AXIHelpers.AxiUserYanker
+import AXIHelpers._
 
 class HardCilk(
     fullSysGenDescriptor: FullSysGenDescriptor,
@@ -28,8 +27,16 @@ class HardCilk(
     debug: Boolean,
     reduceAxi: Int,
     unitedHbm: Boolean,
-    isSimulation: Boolean
+    isSimulation: Boolean,
+    argumentNotifierCutCount: Int
 ) extends Module {
+
+  val axiOuts = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
+  val axiXDMA = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
+  val interfacesAxiControl = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
+  val interfacesAxiManagement = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
+  val paused = IO(Output(Bool())).suggestName("paused")
+  val done = IO(Output(Bool())).suggestName("done")
 
   override def desiredName: String =
     if (fullSysGenDescriptor.name.isEmpty) "fullSysGen"
@@ -81,25 +88,7 @@ class HardCilk(
       )
     )
 
-    // DEBUG
-    val rCycleCounter = RegInit(0.U(128.W))
-    rCycleCounter := rCycleCounter + 1.U
-
-    def logAxiAddress(name: String, axi: axi4.RawInterface): Unit = {
-      if (debug) {
-        if (axi.cfg.read) {
-          when(axi.asFull.ar.fire) {
-            printf(s"[AR] %d ${name} %x\n", rCycleCounter, axi.asFull.ar.bits.addr >> log2Ceil(256 / 8))
-          }
-        }
-        if (axi.cfg.write) {
-          when(axi.asFull.aw.fire) {
-            printf(s"[AW] %d ${name} %x\n", rCycleCounter, axi.asFull.aw.bits.addr >> log2Ceil(256 / 8))
-          }
-        }
-      }
-    }
-    // Debug
+    interfacesAxiManagement.addOne(s_axil_mgmt)
 
     val interfacesPE = new ArrayBuffer[axi4.full.Interface]()
     val interfacesScheduler = new ArrayBuffer[axi4.full.Interface]()
@@ -149,6 +138,7 @@ class HardCilk(
           )
 
           pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+          interfacesAxiControl.addOne(pes_axi_control)
         }
 
         // Connect the ap signals
@@ -217,7 +207,8 @@ class HardCilk(
             peCount = fullSysGenDescriptor.getPortCount("sendArgument", task.name),
             argRouteServersNumber = task.getNumServers("argumentNotifier"),
             contCounterWidth = fullSysGenDescriptor.widthContCounter,
-            pePortWidth = task.getPortWidth("argumentNotifier")
+            pePortWidth = task.getPortWidth("argumentNotifier"),
+            cutCount = argumentNotifierCutCount
           )
         ))
 
@@ -247,6 +238,15 @@ class HardCilk(
         j += task.getNumServers("memoryAllocator")
       }
     }
+
+    // Connect paused and done signals
+    val schedulerPaused = if (schedulerMap.isEmpty) false.B else schedulerMap.map(_._2.io_paused).reduce(_ || _)
+    val closureAllocatorPaused =
+      if (closureAllocatorMap.isEmpty) false.B else closureAllocatorMap.map(_._2.io_paused).reduce(_ || _)
+    val memoryAllocatorPaused =
+      if (memoryAllocatorMap.isEmpty) false.B else memoryAllocatorMap.map(_._2.io_paused).reduce(_ || _)
+    paused := schedulerPaused || closureAllocatorPaused || memoryAllocatorPaused
+    done := argumentNotifierMap.map(_._2.io_export.done).reduce(_ || _)
 
     // Connect the Interconnect
     val numHBMPorts = reduceAxi
@@ -282,23 +282,25 @@ class HardCilk(
         hbmSlaves(x._1).addAll(x._2.map(_._1))
       })
 
-    if (!isSimulation) {
-      val xdma_axi = IO(axi4.Slave(cfgXDMA)).suggestName("s_axi_xdma")
-      hbmSlaves(numHBMPorts - 1).addOne(axi4.full.SlaveBuffer(xdma_axi.asFull, axi4.BufferConfig.all(8)))
+    // if (!isSimulation) {
+    val xdma_axi = IO(axi4.Slave(cfgXDMA)).suggestName("s_axi_xdma")
+    hbmSlaves(numHBMPorts - 1).addOne(axi4.full.SlaveBuffer(xdma_axi.asFull, axi4.BufferConfig.all(8)))
 
-      interfaceBuffer.addOne(
-        hdlinfo.Interface(
-          "s_axi_xdma",
-          hdlinfo.InterfaceRole.slave,
-          hdlinfo.InterfaceKind("axi4"),
-          "clock",
-          "reset",
-          Map("config" -> hdlinfo.TypedObject(cfgXDMA))
-        )
+    interfaceBuffer.addOne(
+      hdlinfo.Interface(
+        "s_axi_xdma",
+        hdlinfo.InterfaceRole.slave,
+        hdlinfo.InterfaceKind("axi4"),
+        "clock",
+        "reset",
+        Map("config" -> hdlinfo.TypedObject(cfgXDMA))
       )
-    }
+    )
 
-    if (unitedHbm) {
+    axiXDMA.addOne(xdma_axi)
+    // }
+
+    if (!unitedHbm) {
       // Create the interconnect
       // TODO: Calculate the id or add ID serializer
       // TODO: Drive the empty signals
@@ -317,7 +319,7 @@ class HardCilk(
         val mux = Module(
           new axi4.full.components.Mux(
             new axi4.full.components.MuxConfig(
-              axiSlaveCfg = cfgAxi4HBM,
+              axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = true),
               numSlaves = hbmSlaves(i).length
             )
           )
@@ -332,9 +334,9 @@ class HardCilk(
             )
           )
           axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
-          protocolConverter.m_axi :=> muxPort
+          AxiStriper(protocolConverter.m_axi) :=> muxPort
         }
-        mux.m_axi :=> port
+        axi4.full.SlaveBuffer(mux.m_axi, axi4.BufferConfig(2)) :=> port
       }
 
       // Connect the outputs of the interconnect to the IO through protocol converters to make it axi3 compatible
@@ -360,8 +362,10 @@ class HardCilk(
             Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
           )
         )
+        axiOuts.addOne(axiOut)
       }
-    } else {
+    }
+    else {
       for (i <- 0 until numHBMPorts) {
         // Mux the interfaces
         val mux = Module(
@@ -398,6 +402,7 @@ class HardCilk(
             Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
           )
         )
+        axiOuts.addOne(axiOut)
       }
     }
 
@@ -475,6 +480,16 @@ class HardCilk(
             PortKind.reset,
             PortSensitivity.resetActiveHigh,
             associatedClock = "clock"
+          ),
+          Port(
+            "paused",
+            PortDirection.output,
+            PortKind.data
+          ),
+          Port(
+            "done",
+            PortDirection.output,
+            PortKind.data
           )
         ),
         interfaceBuffer.toSeq
@@ -617,7 +632,8 @@ object HardCilkEmitter extends App {
           debug = flags.debug,
           reduceAxi = flags.reduce_axi,
           unitedHbm = false,
-          isSimulation = isSimulation
+          isSimulation = isSimulation,
+          argumentNotifierCutCount = 4
         )
         module
       },

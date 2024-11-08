@@ -40,7 +40,7 @@ object TestBenchHeaderTemplate {
         |    TestBench(const sc_module_name& name = "TestBench")
         |        : sc_module(name)
         |        , memory_("memory", sc_time(0, SC_NS), memorySize, 0, nullptr)
-        |        , iconnectMem_("iconnectMem", helperDescriptor.getNumberAxiMasters() + 1, 1)
+        |        , iconnectMem_("iconnectMem", helperDescriptor.getNumberAxiMasters(), 1)
         |        , iconnectPEMgmt_("iconnectPEMgmt", 1, helperDescriptor.getNumberPEsAXISlaves())
         |        , memoryDriverMemory_("memoryDriverMemory")
         |        , memoryDriverManagement_("memoryDriverManagement")
@@ -52,8 +52,10 @@ object TestBenchHeaderTemplate {
         |        myModule = new ${descriptor.name}("myModule");
         |        myModule->reset(reset_);
         |        myModule->clock(clock_);
+        |        myModule->paused(paused_);
+        |        myModule->done(done_);
         |
-        |        memoryDriverMemory_.socket.bind(*iconnectMem_.target_socket(0));
+        |        memoryDriverMemory_.socket.bind(myModule->s_axi_xdma);
         |        peMgmtDriver_.socket.bind(*iconnectPEMgmt_.target_socket(0));
         |
         |        (*iconnectMem_.initiator_socket(0)).bind(memory_.socket);
@@ -87,6 +89,8 @@ object TestBenchHeaderTemplate {
         |    TlmMemory mem_;
         |    sc_signal<bool> reset_;
         |    sc_clock clock_;
+        |    sc_signal<bool> paused_;
+        |    sc_signal<bool> done_;
         |    ${descriptor.name}Driver driver_;
         |};
         |
@@ -100,7 +104,7 @@ object TestBenchHeaderTemplate {
 
   def generateAXIConnections(descriptor: FullSysGenDescriptor, reduceAxi: Int): String = {
     var connections = ""
-    var i = 1 // for the memory interconnect
+    var i = 0 // for the memory interconnect
     var k = 0 // for the unused PE mgmt interconnect
     for (j <- 0 until reduceAxi) {
       connections += s"""        myModule->m_axi_${j}.bind(*iconnectMem_.target_socket(${i}));\n"""

@@ -79,6 +79,8 @@ class Allocator(
 
   val io_export = IO(new ClosureAllocatorPEIO(pePortWidth = pePortWidth, peCount = peCount))
   val io_internal = IO(new ClosureAllocatorAxiIO(vcas(0).regBlock.cfgAxi, vcasCount, vcasAxiFullCfgSlave))
+  val io_paused = IO(Output(Bool()))
+  io_paused := vcas.map(_.io.paused).reduce(_ || _)
 
   val vcasRvmRO = Seq.fill(vcasCount)(Module(new RVtoAXIBridge(addrWidth, addrWidth, write = false, burstLength = 15)))
 

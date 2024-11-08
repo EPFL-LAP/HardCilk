@@ -20,6 +20,7 @@ class SchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth
   val write_burst_len = Output(UInt(4.W))
   val write_last = Output(UInt(1.W))
   val ntwDataUnitOccupancy = Input(Bool())
+  val paused = Output(Bool())
 }
 
 // N.B: For correct execution
@@ -87,6 +88,8 @@ class SchedulerServer(
   regBlock.reg(fifoHeadReg, read = true, write = true, desc = "The head register of the FIFO")
   regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
   regBlock.reg(currLen, read = true, write = true, desc = "A register that holds the current length of the FIFO")
+
+  io.paused := rPause
 
   // Contention Counter FSM
   if (ignoreRequestSignals) {

@@ -131,6 +131,9 @@ class Scheduler(
     )
   )
 
+  val io_paused = IO(Output(Bool()))
+  io_paused := virtualStealServers.map(_.io.paused).reduce(_ || _)
+
   // DEBUG
   private val rCycleCounter = RegInit(0.U(128.W))
   rCycleCounter := rCycleCounter + 1.U

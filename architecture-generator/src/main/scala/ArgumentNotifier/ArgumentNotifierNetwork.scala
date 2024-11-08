@@ -72,7 +72,7 @@ class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasN
   // Cut the network in `cutCount` parts
   assert(cutCount <= peCount)
 
-  val arbs = io.connVAS.map(x => Module(new elastic.Arbiter(chiselTypeOf(x.bits), cutCount, chooserFn = elastic.Chooser.rr)))
+  val arbs = io.connVAS.map(x => Module(new elastic.BasicArbiter(chiselTypeOf(x.bits), cutCount, chooserFn = elastic.Chooser.rr)))
   arbs.zip(io.connVAS).map(x => x._1.io.sink <> x._2)
 
   val nElemsInLine = math.ceil(peCount.toDouble / cutCount.toDouble).toInt

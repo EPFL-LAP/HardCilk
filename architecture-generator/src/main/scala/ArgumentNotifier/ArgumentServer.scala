@@ -16,6 +16,8 @@ class ArgumentServerIO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int) 
 
   val read_address_task = DecoupledIO(UInt(sysAddressWidth.W))
   val read_data_task = Flipped(DecoupledIO(UInt(counterWidth.W)))
+
+  val done = Output(Bool())
 }
 
 class ArgumentServer(
@@ -51,6 +53,8 @@ class ArgumentServer(
 
   val addressesOfReadyTasks = Module(new Queue(UInt(), bufferQueueDepth))
   val readyTasksQueue = Module(new Queue(UInt(), bufferQueueDepth))
+  val rDone = RegInit(false.B)
+  io.done := rDone
 
   addrNtwInQueue.io.enq <> io.connNetwork
 
@@ -110,14 +114,17 @@ class ArgumentServer(
       counterStateReg := state.readCounterRData
     }
   }.elsewhen(counterStateReg === state.readCounterRData) {
-    when(io.read_data.valid && io.read_data.bits === 1.U) {
-      // taskRegisters(readDataCount-1.U) := io.read_data.bits
-      // readDataCount := readDataCount - 1.U
-      currReadAddr := counterAddr + (counterWidth / 8).U
-      counterStateReg := state.pushTaskAddress
-    }.elsewhen(io.read_data.valid) {
-      counterReg := io.read_data.bits - 1.U
-      counterStateReg := state.writeCounterWAddr
+    when(io.read_data.valid) {
+      when(io.read_data.bits === 1.U) {
+        // taskRegisters(readDataCount-1.U) := io.read_data.bits
+        // readDataCount := readDataCount - 1.U
+        currReadAddr := counterAddr + (counterWidth / 8).U
+        counterStateReg := state.pushTaskAddress
+      }.otherwise {
+        counterReg := io.read_data.bits - 1.U
+        counterStateReg := state.writeCounterWAddr
+        rDone := io.read_data.bits === 0.U
+      }
     }
   }.elsewhen(counterStateReg === state.writeCounterWAddr) {
     when(io.write_address.ready) {
