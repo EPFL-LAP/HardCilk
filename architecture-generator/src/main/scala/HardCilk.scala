@@ -613,16 +613,27 @@ object HardCilkEmitter extends App {
 
     // Copy all the files in the src/main/resources/ to the outputDirRTL except the DualPortBRAM_sim.v
     val resourcesPath = "src/main/resources/"
+    val synthDirectory = f"${outputDirPathRTL}/synth"
+    val questaDirectory = f"${outputDirPathRTL}/questa" 
+    new java.io.File(synthDirectory).mkdirs()
+    new java.io.File(questaDirectory).mkdirs()
+    
     val resourcesFiles = new java.io.File(resourcesPath).listFiles()
+    val listOfFilesForRTL = List("DualPortBRAM_sim.v", "DualPortBRAM_xpm.v", "top.v", "u55c.xdc")
+    val listOfFilesForQuesta = List("top_sim.sv", "main_sim.sv")
+    writeFile(s"$outputDirPathRTL/empty.vh", "")
     resourcesFiles.foreach { file =>
       val fileName = file.getName()
       val fileContent = readFile(file.getAbsolutePath())
+      
       if (fileName.startsWith("DualPortBRAM")) {
         if ((isSimulation && fileName == "DualPortBRAM_sim.v") || (!isSimulation && fileName == "DualPortBRAM_xpm.v")) {
           writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
         }
+      } else if (listOfFilesForQuesta.contains(fileName)) {
+        writeFile(s"$questaDirectory/$fileName", fileContent)
       } else {
-        writeFile(s"$outputDirPathRTL/$fileName", fileContent)
+        writeFile(s"$synthDirectory/$fileName", fileContent)
       }
     }
 
@@ -723,6 +734,7 @@ object HardCilkEmitter extends App {
       if (flags.tcl_generation) {
         new java.io.File(outputDirPathTCL).mkdirs()
         TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL, flags.reduce_axi)
+        TclQuestaSim.generate(systemDescriptor, outputDirPathTCL, flags.reduce_axi)
       }
       if (flags.project_sc_generation) {
         // Using java.nio copy a folder with all its content (files and subfolders) to another folder, source is "pwd/software_template" and destination is "outputDirPathSC"

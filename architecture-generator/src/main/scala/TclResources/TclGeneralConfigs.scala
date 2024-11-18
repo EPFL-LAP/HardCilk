@@ -4,7 +4,7 @@ import Descriptors._
 
 object TclGeneralConfigs {
 
-  def getProjectWrapperTCLSyntax(functionalTcl: String, descriptor: FullSysGenDescriptor): String = {
+  def getProjectWrapperTCLSyntax(functionalTcl: String, descriptor: FullSysGenDescriptor, isQuestaSim: Boolean = false): String = {
     val sb = new StringBuilder
 
     sb.append(
@@ -50,7 +50,7 @@ object TclGeneralConfigs {
     
     sb.append(f"create_project project_1 ${descriptor.name}_vivado_project -part xcu55c-fsvh2892-2L-e -force\n") 
 
-    sb.append("""       
+    sb.append("""
         set_property BOARD_PART xilinx.com:au55c:part0:1.0 [current_project]
         variable design_name
         set design_name design_1
@@ -59,17 +59,34 @@ object TclGeneralConfigs {
         set nRet 0
         set cur_design [current_bd_design -quiet]
         set list_cells [get_bd_cells -quiet]
+    """)
+    if(!isQuestaSim)
+      sb.append("""
+          ################################################################
+          # Include the verilog modules and constraints
+          ################################################################
 
-        ################################################################
-        # Include the verilog modules and constraints
-        ################################################################
+          add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
+          import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
 
-        add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
-        import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
+          add_files -fileset sources_1 [glob ../rtl/synth/*.v] 
+          import_files -fileset sources_1 [glob ../rtl/synth/*.v] 
 
-        add_files -fileset constrs_1 -norecurse ../rtl/u55c.xdc
-        import_files -fileset constrs_1 ../rtl/u55c.xdc
+          add_files -fileset constrs_1 -norecurse ../rtl/synth/u55c.xdc
+          import_files -fileset constrs_1 ../rtl/synth/u55c.xdc
+      """)
+    else 
+      sb.append(
+        """
+          add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
+          import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
 
+          add_files -fileset sources_1 [glob ../rtl/questa/*.sv] 
+          import_files -fileset sources_1 [glob ../rtl/questa/*.sv] 
+        """
+      )
+
+    sb.append("""
         ################################################################
         # Create the root design
         ################################################################
@@ -110,11 +127,17 @@ object TclGeneralConfigs {
                 save_bd_design
             }
 
-            create_root_design ""
-
-            set_property top top_pcie [current_fileset]
-            update_compile_order -fileset sources_1
+            create_root_design ""            
           """)
+
+    if(!isQuestaSim)
+      sb.append("            set_property top top_pcie [current_fileset]\n")
+    else 
+      sb.append("            set_property top main_sim [get_filesets sim_1]\n set_property top_lib xil_defaultlib [get_filesets sim_1]\n")
+
+    sb.append("""
+      update_compile_order -fileset sources_1
+    """)
 
     sb.toString()
   }
@@ -235,7 +258,7 @@ object TclGeneralConfigs {
         """
   }
 
-  def getSytstemClockingAndResetConfigTclSyntax(descriptor: FullSysGenDescriptor): String = {
+  def getSytstemClockingAndResetConfigTclSyntax(descriptor: FullSysGenDescriptor, isQuestaSim: Boolean = false): String = {
     val sb = new StringBuilder
 
     // Create and configure the clock wizard
@@ -327,35 +350,95 @@ object TclGeneralConfigs {
           CONFIG.NUM_MI {2} \
           CONFIG.NUM_SI {1} \
         ] [get_bd_cells smartconnect_32]
-
         
+        """
 
-        # Connect the axi full of the xdma to the axi clock converter
-        connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]
-        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_0/s_axi_aclk]
-        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_0/s_axi_aresetn]
+    )
 
-        # Connect the xdma axi lite to the axi clock converters and the axi gpio through the smartconnect
-        connect_bd_intf_net [get_bd_intf_pins smartconnect_32/S00_AXI] [get_bd_intf_pins xdma_0/M_AXI_LITE]
-        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_1/s_axi_aclk]
-        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_1/s_axi_aresetn]
+    if(!isQuestaSim) {
+      sb.append(     
+          """
+          # Connect the axi full of the xdma to the axi clock converter
+          connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]
+          connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_0/s_axi_aclk]
+          connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_0/s_axi_aresetn]
+
+          # Connect the xdma axi lite to the axi clock converters and the axi gpio through the smartconnect
+          connect_bd_intf_net [get_bd_intf_pins smartconnect_32/S00_AXI] [get_bd_intf_pins xdma_0/M_AXI_LITE]
+          connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_clock_converter_1/s_axi_aclk]
+          connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_clock_converter_1/s_axi_aresetn]
+          connect_bd_intf_net [get_bd_intf_pins smartconnect_32/M01_AXI] [get_bd_intf_pins axi_gpio_0/S_AXI]
+          connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/S_AXI] [get_bd_intf_pins smartconnect_32/M00_AXI]
+          connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins smartconnect_32/aclk]
+          connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins smartconnect_32/aresetn]
+          connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_gpio_0/s_axi_aclk]
+          connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_gpio_0/s_axi_aresetn]
+          
+      """)
+    } else {
+      sb.append("""
+        # Connect the axi_vip_1 to the samrtconnect 32
+        connect_bd_intf_net [get_bd_intf_pins smartconnect_32/S00_AXI] [get_bd_intf_pins axi_vip_1/M_AXI]
+        # Connect master 0 of the smartconnect to the axi clock converter 1
+        connect_bd_intf_net [get_bd_intf_pins smartconnect_32/M00_AXI] [get_bd_intf_pins axi_clock_converter_1/S_AXI]
+        # Connecy master 1 of the smartconnect to the axi gpio 0
         connect_bd_intf_net [get_bd_intf_pins smartconnect_32/M01_AXI] [get_bd_intf_pins axi_gpio_0/S_AXI]
-        connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/S_AXI] [get_bd_intf_pins smartconnect_32/M00_AXI]
-        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins smartconnect_32/aclk]
-        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins smartconnect_32/aresetn]
-        connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_gpio_0/s_axi_aclk]
-        connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_gpio_0/s_axi_aresetn]
-        connect_bd_net [get_bd_pins axi_gpio_0/gpio_io_o] [get_bd_pins util_vector_logic_0/Op1]
-    """)
+
+        connect_bd_net [get_bd_pins axi_vip_clk] [get_bd_pins smartconnect_32/aclk]
+        connect_bd_net [get_bd_pins axi_vip_aresetn] [get_bd_pins smartconnect_32/aresetn]
+        connect_bd_net [get_bd_pins axi_vip_clk] [get_bd_pins axi_gpio_0/s_axi_aclk]
+        connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_gpio_0/s_axi_aresetn]
+
+      """)
+    }
+
     
     sb.append("connect_bd_net [get_bd_ports PCIE_PERST_LS_65] [get_bd_pins util_vector_logic_0/Op2]\n")
     sb.append("connect_bd_net [get_bd_pins util_vector_logic_0/Res] [get_bd_pins proc_sys_reset_1/ext_reset_in]\n")
     sb.append("connect_bd_net [get_bd_pins util_vector_logic_0/Res] [get_bd_pins proc_sys_reset_2/ext_reset_in]\n")
+    sb.append("connect_bd_net [get_bd_pins axi_gpio_0/gpio_io_o] [get_bd_pins util_vector_logic_0/Op1]\n")
 
     sb.toString()
   }
 
   def getMastersAddressMapTcl(): String = {
     ""
+  }
+
+  def getAxiVipConfig(): String = {
+    """
+    create_bd_port -dir I -type clk -freq_hz 250000000 axi_vip_clk
+    create_bd_port -dir I axi_vip_aresetn
+
+    create_bd_cell -type ip -vlnv xilinx.com:ip:axi_vip:1.1 axi_vip_0
+    create_bd_cell -type ip -vlnv xilinx.com:ip:axi_vip:1.1 axi_vip_1
+    
+    set_property -dict [list \
+      CONFIG.ADDR_WIDTH {64} \
+      CONFIG.DATA_WIDTH {32} \
+      CONFIG.INTERFACE_MODE {MASTER} \
+    ] [get_bd_cells axi_vip_1]
+
+    set_property -dict [list \
+      CONFIG.ADDR_WIDTH {64} \
+      CONFIG.DATA_WIDTH {128} \
+      CONFIG.INTERFACE_MODE {MASTER} \
+    ] [get_bd_cells axi_vip_0]
+
+    # Connect the axi vip to the clock and reset
+    connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_vip_1/aclk]
+    connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_vip_0/aclk]
+    connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_vip_1/aresetn]
+    connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_vip_0/aresetn]
+
+    # Make AXI domain clock converter for the xdma memory access
+    create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 axi_clock_converter_0
+
+    # Make AXI domain clock converter for the xdma management access
+    create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 axi_clock_converter_1
+
+    # Create the xdma reset port for other components that need it
+    create_bd_port -dir I PCIE_PERST_LS_65
+    """
   }
 }
