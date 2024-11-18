@@ -87,7 +87,11 @@ class WriteBuffer(
 
   // private val s_pkg_payload = s_pkg_.bits.asTypeOf(wb_t)
   // when(s_pkg_.fire) {
-  //   printf("WriteBuffer: addr = %x, data = %x, size = %x, allow = %x\n", s_pkg_payload.addr, s_pkg_payload.data, s_pkg_payload.size, s_pkg_payload.allow.asUInt)
+  //   printf("WriteBuffer: addr = %x, data = %x, size = %x, allow = ", s_pkg_payload.addr, s_pkg_payload.data, s_pkg_payload.size)
+  //   for (i <- 0 until nAllow) {
+  //     printf(" %x", s_pkg_payload.allow(i))
+  //   }
+  //   printf("\n")
   // }
 
   new elastic.Fork(s_pkg_) {

@@ -1,0 +1,87 @@
+{
+  "name": "bfs",
+  "taskDescriptors": [
+      {
+          "name": "edgeMap",
+          "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/bfs/edgeMap/edgeMap/hls/syn/verilog",
+          "isRoot": true,
+          "isCont": true,
+          "dynamicMemAlloc": true,
+
+          "numProcessingElements": 1,
+          "widthTask": 512,
+          "widthMalloc": 4096,
+          "sidesConfigs": [
+              {
+                  "sideType": "scheduler",
+                  "numVirtualServers": 1,
+                  "capacityVirtualQueue": 128,
+                  "capacityPhysicalQueue": 64,
+                  "portWidth": 512
+              },
+              {
+                  "sideType": "allocator",
+                  "numVirtualServers": 1,  
+                  "capacityVirtualQueue": 128,
+                  "capacityPhysicalQueue": 16,
+                  "portWidth": 64
+              },
+              {
+                  "sideType": "argumentNotifier",
+                  "numVirtualServers": 16,  
+                  "capacityVirtualQueue": 128,
+                  "capacityPhysicalQueue": 32,
+                  "portWidth": 64
+              },
+              {
+                  "sideType": "memoryAllocator",
+                  "numVirtualServers": 1,
+                  "capacityVirtualQueue": 128,
+                  "capacityPhysicalQueue": 64,
+                  "portWidth": 64,
+                  "virtualEntrtyWidth": 4096
+              }
+          ]
+          
+      },
+      {
+          "name": "edgeMapParallel",
+          "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/bfs/edgeMapParallel/edgeMapParallel/hls/syn/verilog",
+          "isRoot": false,
+          "isCont": false,
+          "dynamicMemAlloc": false,
+
+          "numProcessingElements": 16,
+          "widthTask": 512,
+          "widthMalloc": 0,
+
+          "sidesConfigs": [
+              {
+                  "sideType": "scheduler",
+                  "numVirtualServers": 1,   
+                  "capacityVirtualQueue": 128,
+                  "capacityPhysicalQueue": 64,
+                  "portWidth": 512
+              }
+          ]
+      }
+  ],
+  "spawnList": {
+      "edgeMap": ["edgeMapParallel"]
+  },
+  "spawnNextList": {
+      "edgeMap": ["edgeMap"]
+  },
+  "sendArgumentList": {
+      "edgeMap": ["edgeMap"],
+      "edgeMapParallel": ["edgeMap"]
+  },
+  "mallocList": {
+    "edgeMap": ["edgeMap"]
+  },
+  "widthAddress":64,
+  "widthContCounter":32,
+  "memorySizeSim": 16,
+  "targetFrequency": 225,
+  "fpgaModel": "ALVEO_U55C"
+}

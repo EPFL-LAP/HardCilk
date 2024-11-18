@@ -100,7 +100,6 @@ class VitisWriteBufferModule(
     .map(_.map(m => fullSysGenDescriptor.taskDescriptors.find(_.name == m).map(_.widthTask)).map(_.get))
     .map(_.max)
 
-
   private val pe = Module(new VitisModule(cfg))
 
   val io = IO(new chisel3.Record {
@@ -120,11 +119,13 @@ class VitisWriteBufferModule(
               new axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = w)
             ))
           ),
-          pe.io.elements.get("argDataOut").map(port => {
-            "m_axi_argOut" -> (axi4.Master(
-              new axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = 64)
-            ))
-          }),
+          pe.io.elements
+            .get("argDataOut")
+            .map(port => {
+              "m_axi_argOut" -> (axi4.Master(
+                new axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = 64)
+              ))
+            }),
           Some("ap_clk" -> Input(Clock())),
           Some("ap_rst_n" -> Input(Bool()))
         ).flatten
@@ -137,7 +138,7 @@ class VitisWriteBufferModule(
 
   private val peTaskOut = ("taskOut", pe.io.elements.get("taskOut"))
   private val peTaskOutGlobal = pe.io.elements.filter(_._1.startsWith("taskOutGlobal")).map(x => (x._1, Some(x._2)))
-  private val taskOuts = Seq(peTaskOut) ++ peTaskOutGlobal
+  private val taskOuts = (Seq(peTaskOut) ++ peTaskOutGlobal.toSeq).filterNot(_._2.isEmpty)
 
   wSpawnNext.foreach(w => {
     val mWriteBuffer = Module(
@@ -167,23 +168,33 @@ class VitisWriteBufferModule(
     }
   })
 
-  pe.io.elements.get("argDataOut").map(port => {
-    val mWriteBuffer = Module(
-      new WriteBuffer(
-        new WriteBufferConfig(
-          wAddr = fullSysGenDescriptor.widthAddress,
-          wData = 64,
-          wAllow = 8,
-          wAllowData = Seq(fullSysGenDescriptor.widthAddress)
+  if (pe.io.elements.get("argDataOut").isDefined) {
+    pe.io.elements
+      .get("argDataOut")
+      .map(port => {
+        val mWriteBuffer = Module(
+          new WriteBuffer(
+            new WriteBufferConfig(
+              wAddr = fullSysGenDescriptor.widthAddress,
+              wData = 64,
+              wAllow = 8,
+              wAllowData = Seq(fullSysGenDescriptor.widthAddress)
+            )
+          )
         )
-      )
-    )
 
-    mWriteBuffer.s_pkg <> pe.getPort("argDataOut").asInstanceOf[axi4s.Interface]
-    mWriteBuffer.m_axi <> io.elements.get("m_axi_argOut").get.asInstanceOf[axi4.RawInterface]
-    pe.getPort("argOut") <> mWriteBuffer.s_allows(0)
-    mWriteBuffer.m_allows(0) <> io.elements.get("argOut").get
-  })
+        mWriteBuffer.s_pkg <> pe.getPort("argDataOut").asInstanceOf[axi4s.Interface]
+        mWriteBuffer.m_axi <> io.elements.get("m_axi_argOut").get.asInstanceOf[axi4.RawInterface]
+        pe.getPort("argOut") <> mWriteBuffer.s_allows(0)
+        mWriteBuffer.m_allows(0) <> io.elements.get("argOut").get
+      })
+  } else {
+    pe.io.elements
+      .get("argOut")
+      .map(port => {
+        port <> io.elements.get("argOut").get
+      })
+  }
 
   // Connect buffer to outside //
 

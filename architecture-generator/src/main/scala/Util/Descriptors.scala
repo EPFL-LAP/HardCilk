@@ -260,6 +260,7 @@ case class FullSysGenDescriptor(
     // mutable map of aggregators from string to int initialized to zero
     val aggregatorMapSendArg = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSpawnNext = mutable.Map[String, Int]().withDefaultValue(0)
+    val aggregatorMapMalloc = mutable.Map[String, Int]().withDefaultValue(0)
 
     val connections = taskDescriptors.flatMap { task =>
       val spawnedTasks = spawnList.getOrElse(task.name, List())
@@ -326,9 +327,9 @@ case class FullSysGenDescriptor(
       val mallocConnections = mallocTasks.zipWithIndex.flatMap { case (mallocTask, j) =>
         taskDescriptors.find(_.name == mallocTask).get
         (0 until task.numProcessingElements).map { i =>
-          aggregatorMapSpawnNext(mallocTask) += 1
+          aggregatorMapMalloc(mallocTask) += 1
           ConnectionDescriptor(
-            PortDescriptor(f"${mallocTask}", "HardCilk", 0, "mallocOut", aggregatorMapSpawnNext(mallocTask) - 1),
+            PortDescriptor(f"${mallocTask}", "HardCilk", 0, "mallocOut", aggregatorMapMalloc(mallocTask) - 1),
             PortDescriptor(task.name, "PE", i, "mallocIn", 0),
             widthAddress, // This is only an address distrbutor for now
             "AXIS"

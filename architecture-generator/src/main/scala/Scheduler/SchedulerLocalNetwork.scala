@@ -44,10 +44,10 @@ class SchedulerLocalNetwork(
 
   var maxLengthThresh = max((0.7 * queueMaxLength).asInstanceOf[Int], 1)
 
-  if (!spawnsItself) {
-    minLengthThresh = (0.8 * queueMaxLength).asInstanceOf[Int]
-    maxLengthThresh = queueMaxLength - 1
-  }
+  // if (!spawnsItself) {
+  //   minLengthThresh = (0.8 * queueMaxLength).asInstanceOf[Int]
+  //   maxLengthThresh = queueMaxLength - 1
+  // }
 
   assert(minLengthThresh < queueMaxLength)
   assert(maxLengthThresh <= queueMaxLength)

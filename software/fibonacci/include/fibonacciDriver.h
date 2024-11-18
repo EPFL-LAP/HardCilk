@@ -43,12 +43,12 @@ class fibonacciDriver: public hardCilkDriver
     fibonacciDriver(Memory * memory): hardCilkDriver(memory) {}
 
     int run_test_bench() override {
-        sum_args sum_args_0 = {2, 0, 0, 0, 0, 0};
+        sum_args sum_args_0 = {0, 0, 0, 0, 0, 0};
         uint64_t addr = allocateMemFPGA(sizeof(sum_args_0), sizeof(sum_args_0));
         memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(&sum_args_0), sizeof(sum_args_0));
 
         // Create the fib base task using fib args
-        fib_args args = {addr+0x4, 20 };
+        fib_args args = {addr+0x4, 10 };
 
         std::vector<fib_args> base_task_data = {args};
         

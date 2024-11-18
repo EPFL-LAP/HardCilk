@@ -300,6 +300,7 @@ class HardCilk(
     axiXDMA.addOne(xdma_axi)
     // }
 
+    def SlaveBuffer(axi: axi4.full.Interface) = axi4.full.SlaveBuffer(axi, axi4.BufferConfig.all(2))
     if (!unitedHbm) {
       // Create the interconnect
       // TODO: Calculate the id or add ID serializer
@@ -333,7 +334,7 @@ class HardCilk(
               )
             )
           )
-          axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
+          SlaveBuffer(SlaveBuffer(SlaveBuffer(AxiUserYanker(slavePort)))) :=> protocolConverter.s_axi
           AxiStriper(protocolConverter.m_axi) :=> muxPort
         }
         axi4.full.SlaveBuffer(mux.m_axi, axi4.BufferConfig(2)) :=> port
@@ -351,7 +352,8 @@ class HardCilk(
         )
         port :=> protocolConverter.s_axi
         val axiOut = IO(axi4.Master(protocolConverter.m_axi.cfg)).suggestName(f"m_axi_${i}")
-        protocolConverter.m_axi :=> axiOut.asFull
+
+        SlaveBuffer(SlaveBuffer(SlaveBuffer(protocolConverter.m_axi))) :=> axiOut.asFull
         interfaceBuffer.addOne(
           hdlinfo.Interface(
             f"m_axi_${i}",
@@ -364,8 +366,7 @@ class HardCilk(
         )
         axiOuts.addOne(axiOut)
       }
-    }
-    else {
+    } else {
       for (i <- 0 until numHBMPorts) {
         // Mux the interfaces
         val mux = Module(
@@ -410,6 +411,7 @@ class HardCilk(
     val systemConnectionsDescriptor = fullSysGenDescriptor.getSystemConnectionsDescriptor()
 
     for (connection <- systemConnectionsDescriptor.connections) {
+      println(connection)
       try {
         val physicalSourcePort = connection.srcPort.parentType match {
           case "HardCilk" => {
@@ -631,9 +633,9 @@ object HardCilkEmitter extends App {
           outputDirPathRTL = outputDirPathRTL,
           debug = flags.debug,
           reduceAxi = flags.reduce_axi,
-          unitedHbm = false,
+          unitedHbm = true,
           isSimulation = isSimulation,
-          argumentNotifierCutCount = 4
+          argumentNotifierCutCount = 1
         )
         module
       },
