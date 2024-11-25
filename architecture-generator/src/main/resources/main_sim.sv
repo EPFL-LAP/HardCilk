@@ -128,8 +128,9 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
   // use explicit casting to avoid warnings
   xil_axi_uint id = xil_axi_uint'(0);
   xil_axi_data_beat 	[255:0] 	wuser = xil_axi_data_beat'(0);
-  xil_axi_size_t burst_length;
+  xil_axi_len_t burst_length;
   xil_axi_size_t burst_size = xil_axi_size_t'(2); // 4 bytes
+  xil_axi_size_t burst_size_mem; // 4 bytes
   xil_axi_burst_t burstType = xil_axi_burst_t'(2'b01);
   xil_axi_resp_t [255:0] resp;
   xil_axi_data_beat 	[255:0] 	ruser;
@@ -140,15 +141,15 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
 
 
 
-  task S_AXI_READ_MEM(input xil_axi_ulong Addr, output bit [4096-1:0] RData, input int size_in_bytes);
+  task S_AXI_READ_MEM(input xil_axi_ulong Addr, output bit [32768-1:0] RData, input int burst_length_, input int burst_size_);
   begin
-    assert (size_in_bytes <= 4096);
-    burst_length = xil_axi_size_t'(size_in_bytes/4 - 1);
+    burst_length = xil_axi_len_t'(burst_length_);
+    burst_size_mem = xil_axi_size_t'(burst_size_);
     mst_agent_0_mem.AXI4_READ_BURST (
             id,
             Addr,
             burst_length,
-            burst_size,
+            burst_size_mem,
             burstType,
             xil_axi_lock_t'(0),
             xil_axi_cache_t'(0),
@@ -164,15 +165,15 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
   endtask
 
 
-  task S_AXI_WRITE_MEM(input xil_axi_ulong Addr, input bit [4096-1:0] WData, input int size_in_bytes);
+  task S_AXI_WRITE_MEM(input xil_axi_ulong Addr, input bit [32768-1:0] WData, input int burst_length_, input int burst_size_);
     begin
-    assert (size_in_bytes <= 4096);
-    burst_length = xil_axi_size_t'(size_in_bytes/4 - 1);
+    burst_length = xil_axi_len_t'(burst_length_);
+    burst_size_mem = xil_axi_size_t'(burst_size_);
     mst_agent_0_mem.AXI4_WRITE_BURST(
             id,
             Addr,
             burst_length,
-            burst_size,
+            burst_size_mem,
             burstType,
             xil_axi_lock_t'(0),
             xil_axi_cache_t'(0),

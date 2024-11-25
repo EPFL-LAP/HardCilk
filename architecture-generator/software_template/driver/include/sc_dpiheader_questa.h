@@ -14,37 +14,33 @@
 #define INCLUDED_SC_DPIHEADER
 
 #ifdef __cplusplus
-#define DPI_LINK_DECL  extern "C" 
+#define DPI_LINK_DECL extern "C"
 #else
-#define DPI_LINK_DECL 
+#define DPI_LINK_DECL
 #endif
 
 #include "svdpi.h"
 
-
-
-int
-S_AXI_READ_MEM(
+int S_AXI_READ_MEM(
     uint64_t Addr,
-    svBitVecVal* RData,
+    svBitVecVal *RData,
+    int burst_length_,
+    int burst_size_);
+
+int S_AXI_READ_REG(
+    uint64_t Addr,
+    svBitVecVal *RData,
     int size_in_bytes);
 
-int
-S_AXI_READ_REG(
+int S_AXI_WRITE_MEM(
     uint64_t Addr,
-    svBitVecVal* RData,
+    const svBitVecVal *WData,
+    int burst_length_,
+    int burst_size_);
+
+int S_AXI_WRITE_REG(
+    uint64_t Addr,
+    const svBitVecVal *WData,
     int size_in_bytes);
 
-int
-S_AXI_WRITE_MEM(
-    uint64_t Addr,
-    const svBitVecVal* WData,
-    int size_in_bytes);
-
-int
-S_AXI_WRITE_REG(
-    uint64_t Addr,
-    const svBitVecVal* WData,
-    int size_in_bytes);
-
-#endif 
+#endif

@@ -315,7 +315,7 @@ uint64_t hardCilkDriver::allocateMemFPGA(uint64_t size, uint64_t alignment /** a
             throw("invalid allocation");
         }
     }
-    trackMalloc.push_back(std::pair(addr, addr + size));
+    trackMalloc.push_back(std::pair<uint64_t, uint64_t>(addr, addr + size));
 
     return addr;
 }

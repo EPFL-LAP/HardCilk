@@ -421,7 +421,7 @@ object TclGeneralConfigs {
 
     set_property -dict [list \
       CONFIG.ADDR_WIDTH {64} \
-      CONFIG.DATA_WIDTH {128} \
+      CONFIG.DATA_WIDTH {512} \
       CONFIG.INTERFACE_MODE {MASTER} \
     ] [get_bd_cells axi_vip_0]
 
