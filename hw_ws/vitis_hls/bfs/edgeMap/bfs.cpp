@@ -1,6 +1,7 @@
 #include "../descriptors.h"
 #include <cstddef>
 #include <cstdint>
+#include <etc/autopilot_ssdm_op.h>
 
 void set_insert(void *mem, Addr set, uint32_t val) {
 #pragma HLS INTERFACE mode = m_axi port = mem
@@ -42,13 +43,11 @@ bool update(void *mem, Addr flag_visited, uint32_t neighbor, uint32_t d,
   return false;
 }
 
-void edgeMapParallel(void *mem, hls::stream<task_args> &taskIn,
-                     hls::stream<uint64_t> &argOut) {
-#pragma HLS INTERFACE mode = axis port = taskIn
-#pragma HLS INTERFACE mode = axis port = argOut
-#pragma HLS INTERFACE mode = m_axi port = mem
+uint64_t edgeMapParallelPart1(void *mem, hls::stream<task_args> &taskIn,
+                              volatile uint32_t &loop_done, uint32_t &gSize) {
   // The arguments
   auto task = taskIn.read();
+  gSize = task.g_size;
   uint32_t g_size = task.g_size;
   uint32_t vertex = task.vertex;
   uint16_t round = task.round;
@@ -74,9 +73,32 @@ void edgeMapParallel(void *mem, hls::stream<task_args> &taskIn,
           update(mem, flag_visited, neighbor, d, round))
         set_insert(mem, set, neighbor);
     }
+    loop_done += 1;
   }
+  loop_done += 1;
+  return cont;
+}
 
+void edgeMapParallelPart2(void *mem, hls::stream<uint64_t> &argOut,
+                          uint64_t cont, volatile uint32_t &loop_done,
+                          uint32_t &gSize) {
+  while (loop_done < gSize) {
+  }
   argOut.write(cont);
+}
+
+void edgeMapParallel(void *mem, hls::stream<task_args> &taskIn,
+                     hls::stream<uint64_t> &argOut) {
+#pragma HLS INTERFACE mode = axis port = taskIn
+#pragma HLS INTERFACE mode = axis port = argOut
+#pragma HLS INTERFACE mode = m_axi port = mem
+#pragma HLS PIPELINE off
+
+  volatile uint32_t loop_done = 0;
+  uint32_t gSize;
+
+  auto cont = edgeMapParallelPart1(mem, taskIn, loop_done, gSize);
+  edgeMapParallelPart2(mem, argOut, cont, loop_done, gSize);
 }
 
 void edgeMap(void *mem, hls::stream<uint64_t> &mallocIn,
@@ -91,6 +113,8 @@ void edgeMap(void *mem, hls::stream<uint64_t> &mallocIn,
 #pragma HLS INTERFACE mode = axis port = closureIn
 #pragma HLS INTERFACE mode = axis port = argOut
 #pragma HLS INTERFACE mode = m_axi port = mem
+#pragma HLS PIPELINE off
+
   auto task = taskIn.read();
   Addr g_edges = task.g_edges;
   Addr f = task.f;
@@ -102,10 +126,11 @@ void edgeMap(void *mem, hls::stream<uint64_t> &mallocIn,
   uint32_t size = task.size;
   uint8_t is_sync = task.is_sync;
 
+  volatile uint32_t memoryDependencyVar1 = 0;
+
   if (is_sync) {
     // f.clear();
     MEM_ARR_OUT(mem, f, 0, uint32_t, 0);
-    uint32_t f_count = 0;
 
     for (int i = 0; i < size; i++) {
       Addr set_i = MEM_ARR_IN(mem, sets, i, Addr);
@@ -114,17 +139,19 @@ void edgeMap(void *mem, hls::stream<uint64_t> &mallocIn,
         // f.insert((*sets[i])[j]);
         uint32_t set_i_j = MEM_ARR_IN(mem, set_i, j + 1, uint32_t);
         set_insert(mem, f, set_i_j);
-        f_count++;
       }
+      memoryDependencyVar1++;
     }
 
-    if (f_count == 0) {
+    while (memoryDependencyVar1 < size) {
+    }
+    if (MEM_ARR_IN(mem, f, 0, uint32_t) == 0) {
       argOut.write(task.cont);
-      return;
     } else {
       round++;
       is_sync = 0;
     }
+    
   }
 
   if (!is_sync) {
@@ -151,7 +178,8 @@ void edgeMap(void *mem, hls::stream<uint64_t> &mallocIn,
     sn0.data = edgemap_args0;
     sn0.allow = f_size;
     sn0.size = 6;
-    spawnNext.write(sn0);
+
+    uint8_t memoryDependencyVar = 0;
 
     for (uint32_t i = 0; i < f_size; i++) {
       // new_sets[i] = new Set();
@@ -173,7 +201,12 @@ void edgeMap(void *mem, hls::stream<uint64_t> &mallocIn,
       task_args0.set = new_sets_i;
       task_args0.cont = sn0.addr;
       taskOutGlobal.write(task_args0);
+      memoryDependencyVar++;
     }
+    sn0.allow = memoryDependencyVar;
+
+    spawnNext.write(sn0);
+
     /*cilk_sync;*/
   }
 }
