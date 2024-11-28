@@ -107,7 +107,8 @@ object TestBenchHeaderTemplate {
     var i = 0 // for the memory interconnect
     var k = 0 // for the unused PE mgmt interconnect
     for (j <- 0 until reduceAxi) {
-      connections += s"""        myModule->m_axi_${j}.bind(*iconnectMem_.target_socket(${i}));\n"""
+      val portName = f"m_axi_${j}%02d"
+      connections += s"""        myModule->${portName}.bind(*iconnectMem_.target_socket(${i}));\n"""
       i += 1
     }
     for (task <- descriptor.taskDescriptors) {

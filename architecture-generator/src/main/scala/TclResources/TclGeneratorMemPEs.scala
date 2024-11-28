@@ -44,7 +44,8 @@ object TclGeneratorMemPEs {
     // Connect the smart connect masters to the HBM
     // [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${systemAXIPort}]
     for (i <- 0 until reduce_axi) {
-      tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/m_axi_${i}] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
+      val portName = f"m_axi_${i}%02d"
+      tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${portName}] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
     }
 
     // Create the clocking wizard and reset for the system

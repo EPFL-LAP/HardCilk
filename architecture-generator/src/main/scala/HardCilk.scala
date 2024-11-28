@@ -37,6 +37,7 @@ class HardCilk(
   val interfacesAxiManagement = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
   val paused = IO(Output(Bool())).suggestName("paused")
   val done = IO(Output(Bool())).suggestName("done")
+  var numHbmPortExports = reduceAxi
 
   override def desiredName: String =
     if (fullSysGenDescriptor.name.isEmpty) "fullSysGen"
@@ -256,28 +257,34 @@ class HardCilk(
       hbmSlaves += (i -> new ArrayBuffer[axi4.full.Interface]())
     }
 
+    val totalPorts =
+      interfacesPE.length + interfacesMemoryAllocator.length + interfacesScheduler.length + interfacesClosureAllocator.length + interfacesArgumentNotifier.length
+    val numPortsPerMux = totalPorts.toDouble / numHBMPorts.toDouble
+    val peMux = math.ceil(1.0 * interfacesPE.length / numPortsPerMux).toInt
+    val serverMux = numHBMPorts - peMux
+
     interfacesPE.zipWithIndex
-      .groupBy(x => (x._2.toDouble / (1.0 * interfacesPE.length / numHBMPorts)).toInt)
+      .groupBy(x => (x._2.toDouble / (1.0 * interfacesPE.length / peMux)).toInt)
       .foreach(x => {
         hbmSlaves(x._1).addAll(x._2.map(_._1))
       })
     interfacesMemoryAllocator.zipWithIndex
-      .groupBy(x => (x._2.toDouble / (1.0 * interfacesMemoryAllocator.length / numHBMPorts)).toInt)
+      .groupBy(x => peMux + (x._2.toDouble / (1.0 * interfacesMemoryAllocator.length / serverMux)).toInt)
       .foreach(x => {
         hbmSlaves(x._1).addAll(x._2.map(_._1))
       })
     interfacesScheduler.zipWithIndex
-      .groupBy(x => (x._2.toDouble / (1.0 * interfacesScheduler.length / numHBMPorts)).toInt)
+      .groupBy(x => peMux + (x._2.toDouble / (1.0 * interfacesScheduler.length / serverMux)).toInt)
       .foreach(x => {
         hbmSlaves(x._1).addAll(x._2.map(_._1))
       })
     interfacesClosureAllocator.zipWithIndex
-      .groupBy(x => (x._2.toDouble / (1.0 * interfacesClosureAllocator.length / numHBMPorts)).toInt)
+      .groupBy(x => peMux + (x._2.toDouble / (1.0 * interfacesClosureAllocator.length / serverMux)).toInt)
       .foreach(x => {
         hbmSlaves(x._1).addAll(x._2.map(_._1))
       })
     interfacesArgumentNotifier.zipWithIndex
-      .groupBy(x => (x._2.toDouble / (1.0 * interfacesArgumentNotifier.length / numHBMPorts)).toInt)
+      .groupBy(x => peMux + (x._2.toDouble / (1.0 * interfacesArgumentNotifier.length / serverMux)).toInt)
       .foreach(x => {
         hbmSlaves(x._1).addAll(x._2.map(_._1))
       })
@@ -351,12 +358,12 @@ class HardCilk(
           )
         )
         port :=> protocolConverter.s_axi
-        val axiOut = IO(axi4.Master(protocolConverter.m_axi.cfg)).suggestName(f"m_axi_${i}")
+        val axiOut = IO(axi4.Master(protocolConverter.m_axi.cfg)).suggestName(f"m_axi_${i}%02d")
 
         SlaveBuffer(SlaveBuffer(SlaveBuffer(protocolConverter.m_axi))) :=> axiOut.asFull
         interfaceBuffer.addOne(
           hdlinfo.Interface(
-            f"m_axi_${i}",
+            f"m_axi_${i}%02d",
             hdlinfo.InterfaceRole.master,
             hdlinfo.InterfaceKind("axi4"),
             "clock",
@@ -367,43 +374,48 @@ class HardCilk(
         axiOuts.addOne(axiOut)
       }
     } else {
-      for (i <- 0 until numHBMPorts) {
-        // Mux the interfaces
-        val mux = Module(
-          new axi4.full.components.Mux(
-            new axi4.full.components.MuxConfig(
-              axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = true),
-              numSlaves = hbmSlaves(i).length
-            )
-          )
-        )
-
-        mux.s_axi.zip(hbmSlaves(i)).foreach { case (muxPort, slavePort) =>
-          val protocolConverter = Module(
-            new axi4.full.components.ProtocolConverter(
-              new axi4.full.components.ProtocolConverterConfig(
-                axiSlaveCfg = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
-                axiMasterCfg = muxPort.cfg
+      numHbmPortExports = hbmSlaves.filter(_._2.length > 0).size
+      hbmSlaves.filter(_._2.length > 0).zipWithIndex.map {
+        case (hbmSlaves_i, i) => {
+          val hbmSlave = hbmSlaves_i._2
+          // Mux the interfaces
+          val mux = Module(
+            new axi4.full.components.Mux(
+              new axi4.full.components.MuxConfig(
+                axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = true),
+                numSlaves = hbmSlave.length
               )
             )
           )
-          axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> protocolConverter.s_axi
-          protocolConverter.m_axi :=> muxPort
-        }
 
-        val axiOut = IO(axi4.Master(mux.m_axi.cfg)).suggestName(f"m_axi_${i}")
-        mux.m_axi :=> axiOut.asFull
-        interfaceBuffer.addOne(
-          hdlinfo.Interface(
-            f"m_axi_${i}",
-            hdlinfo.InterfaceRole.master,
-            hdlinfo.InterfaceKind("axi4"),
-            "clock",
-            "reset",
-            Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+          mux.s_axi.zip(hbmSlave).foreach { case (muxPort, slavePort) =>
+            val protocolConverter = Module(
+              new axi4.full.components.ProtocolConverter(
+                new axi4.full.components.ProtocolConverterConfig(
+                  axiSlaveCfg = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+                  axiMasterCfg = muxPort.cfg
+                )
+              )
+            )
+            axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> protocolConverter.s_axi
+            protocolConverter.m_axi :=> muxPort
+          }
+
+          println(f"m_axi_${i}%02d")
+          val axiOut = IO(axi4.Master(mux.m_axi.cfg)).suggestName(f"m_axi_${i}%02d")
+          mux.m_axi :=> axiOut.asFull
+          interfaceBuffer.addOne(
+            hdlinfo.Interface(
+              f"m_axi_${i}%02d",
+              hdlinfo.InterfaceRole.master,
+              hdlinfo.InterfaceKind("axi4"),
+              "clock",
+              "reset",
+              Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+            )
           )
-        )
-        axiOuts.addOne(axiOut)
+          axiOuts.addOne(axiOut)
+        }
       }
     }
 
@@ -599,7 +611,7 @@ object HardCilkEmitter extends App {
       outputDirPathRTL: String,
       flags: BuilderConfig,
       isSimulation: Boolean
-  ): Unit = {
+  ): Int = {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
       val peHDLPath = task.peHDLPath
@@ -614,10 +626,10 @@ object HardCilkEmitter extends App {
     // Copy all the files in the src/main/resources/ to the outputDirRTL except the DualPortBRAM_sim.v
     val resourcesPath = "src/main/resources/"
     val synthDirectory = f"${outputDirPathRTL}/synth"
-    val questaDirectory = f"${outputDirPathRTL}/questa" 
+    val questaDirectory = f"${outputDirPathRTL}/questa"
     new java.io.File(synthDirectory).mkdirs()
     new java.io.File(questaDirectory).mkdirs()
-    
+
     val resourcesFiles = new java.io.File(resourcesPath).listFiles()
     val listOfFilesForRTL = List("DualPortBRAM_sim.v", "DualPortBRAM_xpm.v", "top.v", "u55c.xdc")
     val listOfFilesForQuesta = List("top_sim.sv", "main_sim.sv")
@@ -625,7 +637,7 @@ object HardCilkEmitter extends App {
     resourcesFiles.foreach { file =>
       val fileName = file.getName()
       val fileContent = readFile(file.getAbsolutePath())
-      
+
       if (fileName.startsWith("DualPortBRAM")) {
         if ((isSimulation && fileName == "DualPortBRAM_sim.v") || (!isSimulation && fileName == "DualPortBRAM_xpm.v")) {
           writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
@@ -637,6 +649,7 @@ object HardCilkEmitter extends App {
       }
     }
 
+    var numHbmPortExports = 0
     ChiselStage.emitSystemVerilogFile(
       {
         val module = new HardCilk(
@@ -648,6 +661,7 @@ object HardCilkEmitter extends App {
           isSimulation = isSimulation,
           argumentNotifierCutCount = 1
         )
+        numHbmPortExports = module.numHbmPortExports
         module
       },
       Array(f"--target-dir=${outputDirPathRTL}"),
@@ -674,6 +688,8 @@ object HardCilkEmitter extends App {
     } else {
       println(s"Error: File $svFilePath does not exist.")
     }
+
+    numHbmPortExports
   }
 
   // Main body
@@ -716,26 +732,7 @@ object HardCilkEmitter extends App {
       }
 
       // Create the directories
-      if (flags.rtl_generation) {
-        new java.io.File(outputDirPathRTL).mkdirs()
-        generateRTL(systemDescriptor, pathInputJsonFile, outputDirPathRTL, flags, false)
-        dumpJsonFile[FullSysGenDescriptorExtended](
-          s"$outputDirPathRTL/${systemDescriptor.name}_descriptor_2.json",
-          FullSysGenDescriptorExtended.fromFullSysGenDescriptor(systemDescriptor)
-        )
-      }
-      if (flags.cpp_header_generation || flags.sc_header_generation) {
-        new java.io.File(outputDirPathSoftwareHeaders).mkdirs()
-        if (flags.cpp_header_generation)
-          CppHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders, flags.reduce_axi)
-        if (flags.sc_header_generation)
-          TestBenchHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders, flags.reduce_axi)
-      }
-      if (flags.tcl_generation) {
-        new java.io.File(outputDirPathTCL).mkdirs()
-        TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL, flags.reduce_axi)
-        TclQuestaSim.generate(systemDescriptor, outputDirPathTCL, flags.reduce_axi)
-      }
+      var numHbmPortExports = flags.reduce_axi
       if (flags.project_sc_generation) {
         // Using java.nio copy a folder with all its content (files and subfolders) to another folder, source is "pwd/software_template" and destination is "outputDirPathSC"
         val source = new java.io.File("software_template")
@@ -756,24 +753,24 @@ object HardCilkEmitter extends App {
         val projectDestination = new java.io.File(s"$outputDirPathSC/projects/${jsonName}")
         projectTemplate.renameTo(projectDestination)
 
+        // Generate the HDL in the `outputDirPathSC/projects/${jsonName}/hdl`
+        new java.io.File(s"$outputDirPathSC/projects/${jsonName}/hdl").mkdirs()
+        numHbmPortExports = generateRTL(systemDescriptor, pathInputJsonFile, s"$outputDirPathSC/projects/${jsonName}/hdl", flags, true)
+
         // Generate the SystemC project in the `outputDirPathSC/project/${jsonName}/include`
         new java.io.File(s"$outputDirPathSC/projects/${jsonName}/include").mkdirs()
         CppHeaderTemplate.generateCppHeader(
           systemDescriptor,
           s"$outputDirPathSC/projects/${jsonName}/include",
-          flags.reduce_axi
+          numHbmPortExports
         )
 
         // Generate the SystemC testbench in the `outputDirPathSC/projects/${jsonName}/include`
         TestBenchHeaderTemplate.generateCppHeader(
           systemDescriptor,
           s"$outputDirPathSC/projects/${jsonName}/include",
-          flags.reduce_axi
+          numHbmPortExports
         )
-
-        // Generate the HDL in the `outputDirPathSC/projects/${jsonName}/hdl`
-        new java.io.File(s"$outputDirPathSC/projects/${jsonName}/hdl").mkdirs()
-        generateRTL(systemDescriptor, pathInputJsonFile, s"$outputDirPathSC/projects/${jsonName}/hdl", flags, true)
 
         // Read the `outputDirPathSC/projects/${jsonName}/CMakeLists.txt` and replace the `${project_template}` with the `${jsonName}`
         val cmakeListsPath = s"$outputDirPathSC/projects/${jsonName}/CMakeLists.txt"
@@ -793,6 +790,26 @@ object HardCilkEmitter extends App {
               java.nio.file.Files.copy(sourcePath, destinationPath)
             }
           })
+      }
+      if (flags.rtl_generation) {
+        new java.io.File(outputDirPathRTL).mkdirs()
+        numHbmPortExports = generateRTL(systemDescriptor, pathInputJsonFile, outputDirPathRTL, flags, false)
+        dumpJsonFile[FullSysGenDescriptorExtended](
+          s"$outputDirPathRTL/${systemDescriptor.name}_descriptor_2.json",
+          FullSysGenDescriptorExtended.fromFullSysGenDescriptor(systemDescriptor)
+        )
+      }
+      if (flags.cpp_header_generation || flags.sc_header_generation) {
+        new java.io.File(outputDirPathSoftwareHeaders).mkdirs()
+        if (flags.cpp_header_generation)
+          CppHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders, numHbmPortExports)
+        if (flags.sc_header_generation)
+          TestBenchHeaderTemplate.generateCppHeader(systemDescriptor, outputDirPathSoftwareHeaders, numHbmPortExports)
+      }
+      if (flags.tcl_generation) {
+        new java.io.File(outputDirPathTCL).mkdirs()
+        TclGeneratorMemPEs.generate(systemDescriptor, outputDirPathTCL, numHbmPortExports)
+        TclQuestaSim.generate(systemDescriptor, outputDirPathTCL, numHbmPortExports)
       }
     }
   }

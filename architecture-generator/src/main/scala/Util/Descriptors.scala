@@ -350,7 +350,7 @@ case class FullSysGenDescriptor(
   }
 
   def getSystemAXIPortsNames(reduce_axi: Int): List[String] = {
-    Seq.tabulate(reduce_axi)(i => f"m_axi_${i}").toList
+    Seq.tabulate(reduce_axi)(i => f"m_axi_${i}%02d").toList
   }
 
   def getMemoryConnectionsStats(reduce_axi: Int): MemStats = {
