@@ -5,7 +5,7 @@
 #include <vector>
 #include <utility>
 #include <systemc.h>
-
+#include<cmath>
 struct questaMemory : Memory
 {
     questaMemory()
@@ -115,13 +115,14 @@ struct questaMemory : Memory
         for (auto transaction : transactions)
         {
             uint32_t transaction_size = std::get<1>(transaction);
-
+            uint64_t offset = 0;
+            
             for (uint32_t i = 6; i >= 0; i--)
             {
                 // burst length is byte size of the transaction divide by 2^burst_size
-                uint32_t offset = 0;
-                uint32_t burst_length = (transaction_size / (1 << i)) - 1;
-                uint32_t remaining_bytes = transaction_size % (1 << i);
+                
+                const uint32_t burst_length = (transaction_size / (1<<i)) - 1;
+                uint32_t remaining_bytes = transaction_size % (1<<i);
 
                 if (burst_length == -1 && remaining_bytes > 0)
                 {
@@ -142,9 +143,15 @@ struct questaMemory : Memory
                     std::cout << "remaining_bytes: " << remaining_bytes << std::endl;
                 }
 
+                // Print the details of the transaction
+                uint64_t fpga_address = std::get<0>(transaction) + offset;
+                uint64_t cpu_address = (uint64_t)std::get<2>(transaction) + offset;
+
+                //std::cout << "Transaction Address to FPGA: " << std::hex << fpga_address << ", Size: " << transaction_size << ", Data address from the CPU: " << std::hex << cpu_address << std::endl << std::dec;
+                
                 S_AXI_WRITE_MEM(
-                    std::get<0>(transaction) + offset,
-                    reinterpret_cast<svBitVecVal *>(std::get<2>(transaction) + offset),
+                    fpga_address,
+                    reinterpret_cast<svBitVecVal *>(cpu_address),
                     burst_length,
                     i);
 
@@ -154,8 +161,9 @@ struct questaMemory : Memory
                 }
                 else
                 {
-                    offset += burst_length * (1 << i);
+                    offset += (burst_length + 1) * (1 << i);
                     transaction_size = remaining_bytes;
+                    //std::cout << "Remaining bytes: " << remaining_bytes << ", new offset: " << offset << std::endl;
                 }
             }
         }
@@ -199,7 +207,7 @@ struct questaMemory : Memory
         {
             transactions.push_back(std::make_tuple(src_addr, size, data));
         }
-
+        size_t offset = 0;
         for (int j = 0; j < transactions.size(); j++)
         {
             auto transaction = transactions[j];
@@ -232,10 +240,10 @@ struct questaMemory : Memory
                 burst_length,
                 6);
 
-            memcpy(data + j * 4096, transaction_holder, transaction_size);
+            memcpy(data + offset, transaction_holder, transaction_size);
             // std::cout << "Copied transaction to address: " << (uint64_t)std::get<2>(transaction) << std::endl;
             delete[] transaction_holder;
-
+            offset += transaction_size;
             // // Log the std::get<2>(transaction) address
             // std::cout << "Address CPU: " << (uint64_t)std::get<2>(transaction) << std::endl;
             // std::cout << "Data Address: " << (uint64_t)data << std::endl;

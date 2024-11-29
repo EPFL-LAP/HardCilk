@@ -401,7 +401,6 @@ class HardCilk(
             protocolConverter.m_axi :=> muxPort
           }
 
-          println(f"m_axi_${i}%02d")
           val axiOut = IO(axi4.Master(mux.m_axi.cfg)).suggestName(f"m_axi_${i}%02d")
           mux.m_axi :=> axiOut.asFull
           interfaceBuffer.addOne(
@@ -423,7 +422,6 @@ class HardCilk(
     val systemConnectionsDescriptor = fullSysGenDescriptor.getSystemConnectionsDescriptor()
 
     for (connection <- systemConnectionsDescriptor.connections) {
-      println(connection)
       try {
         val physicalSourcePort = connection.srcPort.parentType match {
           case "HardCilk" => {
