@@ -68,39 +68,24 @@ class ArgumentNotifier(
         counterWidth = contCounterWidth,
         sysAddressWidth = addrWidth,
         tagBitsShift = log2Ceil(taskWidth / 8),
-        noContinuations = false
+        wId = 5
       )
     )
   }
 
   io_export.done := argRouteServers.map(_.io.done).reduce(_ || _)
 
-  val argRouteRvm = Seq.fill(argRouteServersNumber)(Module(new RVtoAXIBridge(contCounterWidth, addrWidth)))
-  val argRouteRvmReadOnly = Seq.fill(argRouteServersNumber)(
-    Module(new RVtoAXIBridge(contCounterWidth, addrWidth, write = false, burstLength = (taskWidth / contCounterWidth) - 2))
-  )
-
-  val axiCfgSlave = axi4.Config(wAddr = addrWidth, wData = contCounterWidth, lite = false, wId = 0)
-  val argRouteAxiFullCfg = axiCfgSlave
-
   val nAxiPorts = 2 * argRouteServersNumber
-  val axi_full_argRoute = IO(Vec(nAxiPorts, axi4.full.Master(argRouteAxiFullCfg)))
+  val axi_full_argRoute = IO(Vec(nAxiPorts, axi4.full.Master(argRouteServers.head.io.m_axi_counter.cfg)))
 
   for (i <- 0 until argRouteServersNumber) {
-    argRouteRvm(i).io.read.get.address <> argRouteServers(i).io.read_address
-    argRouteRvm(i).io.read.get.data <> argRouteServers(i).io.read_data
-    argRouteRvm(i).io.write.get.address <> argRouteServers(i).io.write_address
-    argRouteRvm(i).io.write.get.data <> argRouteServers(i).io.write_data
     argRouteServers(i).io.connNetwork <> argSide.io.connVAS(i)
     argRouteServers(i).io.connStealNtw <> connStealNtw(i)
-
-    argRouteRvmReadOnly(i).io.read.get.address <> argRouteServers(i).io.read_address_task
-    argRouteRvmReadOnly(i).io.read.get.data <> argRouteServers(i).io.read_data_task
   }
 
   for (i <- 0 until argRouteServersNumber) {
-    axi4.full.SlaveBuffer(AxiWriteBuffer(argRouteRvm(i).axi), axi4.BufferConfig(b = 2)) :=> axi_full_argRoute(i)
-    argRouteRvmReadOnly(i).axi :=> axi_full_argRoute(i + argRouteServersNumber)
+    argRouteServers(i).io.m_axi_counter :=> axi_full_argRoute(i)
+    argRouteServers(i).io.m_axi_task :=> axi_full_argRoute(i + argRouteServersNumber)
   }
 
   val axis_stream_converters_in =

@@ -2,20 +2,19 @@ package ArgumentNotifier
 
 import chisel3._
 import chisel3.util._
-import chisel3.ChiselEnum
+import chisel3.experimental.prefix
+
+import chext.amba.axi4
+import chext.elastic
+
 import Util._
 
-class ArgumentServerIO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int) extends Bundle {
+class ArgumentServerIO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int, wId: Int) extends Bundle {
   val connNetwork = Flipped(DecoupledIO(UInt(sysAddressWidth.W)))
   val connStealNtw = Flipped(new SchedulerNetworkClientIO(taskWidth))
 
-  val read_address = DecoupledIO(UInt(sysAddressWidth.W))
-  val read_data = Flipped(DecoupledIO(UInt(counterWidth.W)))
-  val write_address = DecoupledIO(UInt(sysAddressWidth.W))
-  val write_data = DecoupledIO(UInt(counterWidth.W))
-
-  val read_address_task = DecoupledIO(UInt(sysAddressWidth.W))
-  val read_data_task = Flipped(DecoupledIO(UInt(counterWidth.W)))
+  val m_axi_counter = axi4.full.Master(cfg = axi4.Config(wId, sysAddressWidth, taskWidth))
+  val m_axi_task = axi4.full.Master(cfg = axi4.Config(wId, sysAddressWidth, taskWidth))
 
   val done = Output(Bool())
 }
@@ -25,278 +24,266 @@ class ArgumentServer(
     counterWidth: Int,
     sysAddressWidth: Int,
     tagBitsShift: Int,
-    noContinuations: Boolean = false,
-    bufferQueueDepth: Int = 64
+    wId: Int,
 ) extends Module {
 
-  object state extends ChiselEnum {
-    val readNetwork = Value(1.U)
-    val readCounterWAddr = Value(2.U)
-    val readCounterRData = Value(3.U)
-    val writeCounterWAddr = Value(4.U)
-    val writeCounterWData = Value(5.U)
-    val readTaskAddress = Value(6.U)
-    val pushTaskAddress = Value(7.U)
-    val pushTaskAddresstoMem = Value(8.U)
-    val readTask = Value(9.U)
-    val writeTaskToLocalQ = Value(10.U)
-    val readTaskFromLocalQ = Value(11.U)
-    val writeTaskNtw = Value(12.U)
+  val io = IO(new ArgumentServerIO(taskWidth, counterWidth, sysAddressWidth, wId))
+
+  // Implementation
+  io.m_axi_task.aw.noenq()
+  io.m_axi_task.w.noenq()
+  io.m_axi_task.b.nodeq()
+  
+  private val nInflight = 1 << wId
+  private val bufferQueueDepth = 2 * nInflight
+
+  private val regDone = RegInit(false.B)
+  io.done := regDone
+
+  object InflightStage extends ChiselEnum {
+    val cnt_rd, cnt_wd = Value
   }
 
-  val io = IO(new ArgumentServerIO(taskWidth, counterWidth, sysAddressWidth))
-
-  val addrNtwInQueue = Module(new Queue(UInt(), bufferQueueDepth))
-
-  // val readableCounterAddressesQueue = Module(new Queue(UInt(), bufferQueueDepth))
-  // val writableCounterAddressesAndValueQueue = Module(new Queue(UInt(), bufferQueueDepth))
-
-  val addressesOfReadyTasks = Module(new Queue(UInt(), bufferQueueDepth))
-  val readyTasksQueue = Module(new Queue(UInt(), bufferQueueDepth))
-  val rDone = RegInit(false.B)
-  io.done := rDone
-
-  addrNtwInQueue.io.enq <> io.connNetwork
-
-  /*
-   *  Read an address from the network and feed it to the read counter if the address is not in the writable counter queue
-   */
-  // when(counterInStateReg === state.readNetwork){
-  //     when(addrNtwInQueue.io.deq.valid) {
-  //         counterInStateReg  := state.readCounterWAddr
-  //         counterAddrIn      := addrNtwInQueue.io.deq.bits & addrMask
-  //     }
-  // }
-
-  /*
-   *  Counter State Machine: reading and updating the counter atomically
-   *  Ready tasks are written to internal queue to be read by another FSM
-   */
-
-  // Counter related registers
-  private val counterStateReg = RegInit(state.readNetwork)
-  private val counterReg = RegInit(0.U(64.W))
-  private val currReadAddr = RegInit(0.U(64.W))
-  private val counterAddr = RegInit(0.U(64.W))
-  private val addrMask = RegInit(0.U(64.W))
-  private val helpGarbageCollector = RegInit(0.U)
-  addrMask := ((~(0.U(64.W))) << tagBitsShift.U)
-
-  // Init the io of the queue that takes addresses from the network and feeds them to the counter checker state machine
-  addrNtwInQueue.io.deq.ready := false.B
-
-  addressesOfReadyTasks.io.enq.valid := false.B
-  addressesOfReadyTasks.io.enq.bits := currReadAddr
-
-  // Init the io realated to reading and writing the counter
-  io.read_address.bits := counterAddr
-  io.write_address.bits := counterAddr
-
-  when(helpGarbageCollector === 1.U) {
-    io.write_data.bits := 0x1000000.U
-  }.otherwise {
-    io.write_data.bits := counterReg
+  class InflightArgument extends Bundle {
+    val addr = UInt(sysAddressWidth.W)
+    val stage = InflightStage()
+    val decrement = UInt((wId+1).W)
   }
 
-  io.read_address.valid := false.B
-  io.write_address.valid := false.B
-  io.write_data.valid := false.B
-  io.read_data.ready := false.B
+  private val memInflightValid = RegInit(VecInit.fill(nInflight)(false.B))
+  private val memInflight = Reg(Vec(nInflight, new InflightArgument()))
 
-  // Transitions
-  when(counterStateReg === state.readNetwork) {
-    when(addrNtwInQueue.io.deq.valid) {
-      counterStateReg := state.readCounterWAddr
-      counterAddr := addrNtwInQueue.io.deq.bits & addrMask
+  prefix("input") {
+    val addrMask = ((~(0.U(64.W))) << tagBitsShift.U)
+
+    val arbInput = Module(new elastic.BasicArbiter(chiselTypeOf(io.connNetwork.bits), 2, chooserFn = elastic.Chooser.rr))
+    new elastic.Transform(io.connNetwork, arbInput.io.sources(0)) {
+      protected def onTransform: Unit =
+        out := (in & addrMask)
     }
-  }.elsewhen(counterStateReg === state.readCounterWAddr) {
-    when(io.read_address.ready) {
-      counterStateReg := state.readCounterRData
+
+    arbInput.io.select.nodeq()
+    when(arbInput.io.select.valid) {
+      arbInput.io.select.deq()
     }
-  }.elsewhen(counterStateReg === state.readCounterRData) {
-    when(io.read_data.valid) {
-      when(io.read_data.bits === 1.U) {
-        // taskRegisters(readDataCount-1.U) := io.read_data.bits
-        // readDataCount := readDataCount - 1.U
-        currReadAddr := counterAddr + (counterWidth / 8).U
-        counterStateReg := state.pushTaskAddress
-      }.otherwise {
-        counterReg := io.read_data.bits - 1.U
-        counterStateReg := state.writeCounterWAddr
-        rDone := io.read_data.bits === 0.U
+
+    val dmuxInput = Module(
+      new elastic.Demux(
+        new Bundle {
+          val addr = chiselTypeOf(io.connNetwork.bits)
+          val id = UInt(wId.W)
+        },
+        2
+      )
+    )
+    new elastic.Transform(elastic.SourceBuffer(dmuxInput.io.sinks(1)), arbInput.io.sources(1)) {
+      protected def onTransform: Unit = {
+        out := in.addr
       }
     }
-  }.elsewhen(counterStateReg === state.writeCounterWAddr) {
-    when(io.write_address.ready) {
-      counterStateReg := state.writeCounterWData
-    }
-  }.elsewhen(counterStateReg === state.writeCounterWData) {
-    when(io.write_data.ready) {
-      counterStateReg := state.readNetwork
-      helpGarbageCollector := 0.U
-    }
-  }.elsewhen(counterStateReg === state.pushTaskAddress) {
-    when(addressesOfReadyTasks.io.enq.ready) {
-      counterStateReg := state.writeCounterWAddr
-      helpGarbageCollector := 1.U
-    }
-  }
 
-  // Output
-  when(counterStateReg === state.readNetwork) {
-    addrNtwInQueue.io.deq.ready := true.B
-  }.elsewhen(counterStateReg === state.readCounterWAddr) {
-    io.read_address.valid := true.B
-  }.elsewhen(counterStateReg === state.readCounterRData) {
-    io.read_data.ready := true.B
-  }.elsewhen(counterStateReg === state.writeCounterWAddr) {
-    io.write_address.valid := true.B
-  }.elsewhen(counterStateReg === state.writeCounterWData) {
-    io.write_data.valid := true.B
-  }.elsewhen(counterStateReg === state.pushTaskAddress) {
-    addressesOfReadyTasks.io.enq.valid := true.B
-  }
+    val dmuxInputDataSel = Wire(new DecoupledIO(new Bundle {
+      val addr = chiselTypeOf(io.connNetwork.bits)
+      val id = UInt(wId.W)
+      val sel = UInt(1.W)
+    }))
 
-  /** End of Counter State Machine */
-
-  /*
-   * Ready Addresses State Machine: read the addresses from the local queue and feed them to the memory interface
-   */
-
-  // Ready Addresses related registers
-  private val taskReadAddressStateReg = RegInit(state.readTaskAddress)
-  private val taskAddr = RegInit(0.U(64.W))
-  // private val taskReadAddressCount = RegInit(((taskWidth / counterWidth) - 1).U)
-
-  // Init the io of the queue that takes addresses of ready tasks and feeds them to the memory interface
-  addressesOfReadyTasks.io.deq.ready := false.B
-
-  // Init the readAddress memory interface
-  io.read_address_task.bits := 0.U
-  io.read_address_task.valid := false.B
-
-  when(taskReadAddressStateReg === state.readTaskAddress) {
-    when(addressesOfReadyTasks.io.deq.valid) {
-      taskReadAddressStateReg := state.pushTaskAddresstoMem
-      taskAddr := addressesOfReadyTasks.io.deq.bits
-      // taskReadAddressCount := ((taskWidth / counterWidth)-1).U
-    }
-  }.elsewhen(taskReadAddressStateReg === state.pushTaskAddresstoMem) {
-    /*when(io.read_address_task.ready && taskReadAddressCount > 0.U){
-            taskAddr := taskAddr + (counterWidth/8).U
-            taskReadAddressCount := taskReadAddressCount - 1.U
+    // Check Inflights
+    new elastic.Arrival(elastic.SourceBuffer(arbInput.io.sink, bufferQueueDepth), elastic.SinkBuffer(dmuxInputDataSel)) {
+      protected def onArrival: Unit = {
+        val matchList = memInflightValid.zip(memInflight).map { case (valid, inflight) =>
+          valid && (inflight.addr === in)
         }
 
-        when(taskReadAddressCount === 1.U && io.read_address_task.ready){
-            taskReadAddressStateReg         := state.readTaskAddress
-        }*/
+        val matchAddr = PriorityEncoder(matchList)
+        val matchValid = matchList.reduce(_ || _)
 
-    when(io.read_address_task.ready) {
-      taskReadAddressStateReg := state.readTaskAddress
+        val firstEmpty = PriorityEncoder(~memInflightValid.asUInt)
+        val isFull = memInflightValid.asUInt.andR
+
+        out := DontCare
+        when(matchValid) {
+          // If there is any match, collapse operations if possible
+          when(memInflight(matchAddr).stage === InflightStage.cnt_rd) {
+            // Collapse two operations to one
+            // memInflight(matchAddr).decrement := memInflight(matchAddr).decrement + 1.U
+            // drop()
+          }.otherwise {
+            // Wait for the previous operation to complete
+            out.addr := in
+            out.sel := 1.U
+            accept()
+          }
+        }.otherwise {
+          // If there are no matches, try to put it to the inflight operations. If it is full, wait for a previous operation to complete
+          when(~isFull) {
+            memInflightValid(firstEmpty) := true.B
+            memInflight(firstEmpty).addr := in
+            memInflight(firstEmpty).stage := InflightStage.cnt_rd
+            memInflight(firstEmpty).decrement := 1.U
+            out.addr := in
+            out.id := firstEmpty
+            out.sel := 0.U
+            accept()
+          }.otherwise {
+            out.addr := in
+            out.sel := 1.U
+            accept()
+          }
+        }
+      }
+    }
+
+    // Connect the demux to the inflight operations and axi.ar
+    new elastic.Fork(dmuxInputDataSel) {
+      protected def onFork: Unit = {
+        new elastic.Transform(fork(), dmuxInput.io.source) {
+          protected def onTransform: Unit = {
+            out.addr := in.addr
+            out.id := in.id
+          }
+        }
+
+        new elastic.Transform(fork(), dmuxInput.io.select) {
+          protected def onTransform: Unit = {
+            out := in.sel
+          }
+        }
+      }
+    }
+
+    // Connect the inflight operations to the axi.ar
+    new elastic.Transform(dmuxInput.io.sinks(0), io.m_axi_counter.ar) {
+      protected def onTransform: Unit = {
+        out := 0.U.asTypeOf(out)
+        out.addr := memInflight(in.id).addr
+        out.id := in.id
+        out.len := 0.U
+        out.size := log2Ceil(counterWidth / 8).U
+      }
     }
   }
 
-  when(taskReadAddressStateReg === state.readTaskAddress) {
-    addressesOfReadyTasks.io.deq.ready := true.B
-  }.elsewhen(taskReadAddressStateReg === state.pushTaskAddresstoMem) {
-    io.read_address_task.valid := true.B
-    io.read_address_task.bits := taskAddr
-  }
+  prefix("update") {
+    val dmux = Module(
+      new elastic.Demux(
+        new Bundle {
+          val id = UInt(wId.W)
+          val addr = UInt(sysAddressWidth.W)
+          val data = UInt(taskWidth.W)
+        },
+        2
+      )
+    )
 
-  /** End of Ready Addresses State Machine */
+    val dmuxDataSel = Wire(DecoupledIO(new Bundle {
+      val id = UInt(wId.W)
+      val addr = UInt(sysAddressWidth.W)
+      val data = UInt(taskWidth.W)
+      val sel = UInt(1.W)
+    }))
 
-  /*
-   * ReadTask State Machine: read the task from the memory and send it to the network
-   */
+    new elastic.Arrival(io.m_axi_counter.r, dmuxDataSel) {
+      protected def onArrival: Unit = {
+        val inflight = memInflight(in.id)
+        out.id := in.id
+        out.addr := inflight.addr
+        out.data := in.data(counterWidth - 1, 0) - inflight.decrement
+        out.sel := !((in.data(counterWidth - 1, 0) > inflight.decrement) || (in.data(counterWidth - 1, 0) === 0.U)).asUInt 
+        regDone := in.data(counterWidth - 1, 0) === 0.U
 
-  // Tasks related registers
-  private val taskReadStateReg = RegInit(state.readTask)
-  private val taskReadCount = RegInit(((taskWidth / counterWidth) - 1).U)
-  private val taskRegisters = RegInit(VecInit(Seq.fill(taskWidth / counterWidth)(0.U(counterWidth.W))))
+        memInflight(in.id).stage := InflightStage.cnt_wd
 
-  // Init the io of the queue that takes ready tasks and feeds them to the steal network
-  readyTasksQueue.io.enq.valid := false.B
-  readyTasksQueue.io.enq.bits := taskRegisters.reduce(Cat(_, _))
-
-  // Init the readTask memory interface
-  io.read_data_task.ready := false.B
-
-  when(taskReadStateReg === state.readTask) {
-
-    when(io.read_data_task.valid) {
-      taskRegisters(taskReadCount - 1.U) := io.read_data_task.bits
-      taskReadCount := taskReadCount - 1.U
+        accept()
+      }
     }
 
-    when(taskReadCount === 1.U && io.read_data_task.valid) {
-      taskReadStateReg := state.writeTaskToLocalQ
+    new elastic.Fork(dmuxDataSel) {
+      protected def onFork: Unit = {
+        new elastic.Transform(fork(), dmux.io.source) {
+          protected def onTransform: Unit = {
+            out.id := in.id
+            out.addr := in.addr
+            out.data := in.data
+          }
+        }
+
+        new elastic.Transform(fork(), dmux.io.select) {
+          protected def onTransform: Unit = {
+            out := in.sel
+          }
+        }
+      }
     }
 
-  }.elsewhen(taskReadStateReg === state.writeTaskToLocalQ) {
-    when(readyTasksQueue.io.enq.ready) {
-      taskReadStateReg := state.readTask
-      taskReadCount := ((taskWidth / counterWidth) - 1).U
+    new elastic.Fork(dmux.io.sinks(0)) {
+      protected def onFork: Unit = {
+        new elastic.Transform(fork(), io.m_axi_counter.aw) {
+          protected def onTransform: Unit = {
+            out := 0.U.asTypeOf(out)
+            out.addr := in.addr
+            out.id := in.id
+          }
+        }
+
+        new elastic.Transform(fork(), io.m_axi_counter.w) {
+          protected def onTransform: Unit = {
+            out.data := in.data
+            out.last := true.B
+            out.strb := ~(0.U((counterWidth / 8).W))
+            out.user := 0.U
+          }
+        }
+      }
     }
-  }
 
-  when(taskReadStateReg === state.readTask) {
-    io.read_data_task.ready := true.B
-  }.elsewhen(taskReadStateReg === state.writeTaskToLocalQ) {
-    readyTasksQueue.io.enq.valid := true.B
-  }
+    new elastic.Arrival(dmux.io.sinks(1), io.m_axi_task.ar) {
+      protected def onArrival: Unit = {
+        memInflightValid(in.id) := false.B
 
-  /** End of ReadTask State Machine */
+        out := 0.U.asTypeOf(out)
+        out.id := in.id
+        out.addr := in.addr
+        out.size := log2Ceil(taskWidth / 8).U
+        out.len := 0.U
 
-  /*
-   *  Feeding the data network of the steal side with ready tasks
-   */
-  // registers related to feeding the data network of the steal side with ready tasks
-  private val tasksGivenAwayCount = RegInit(0.U(32.W))
-  private val taskReg = RegInit(0.U(taskWidth.W))
-  private val taskWriteStateReg = RegInit(state.readTaskFromLocalQ)
-
-  readyTasksQueue.io.deq.ready := false.B
-
-  // Init the steal network data-network outputs
-  io.connStealNtw.data.qOutTask.bits := taskReg
-  io.connStealNtw.data.availableTask.ready := false.B
-  io.connStealNtw.data.qOutTask.valid := false.B
-
-  when(taskWriteStateReg === state.readTaskFromLocalQ) {
-    when(readyTasksQueue.io.deq.valid) {
-      taskWriteStateReg := state.writeTaskNtw
-      taskReg := readyTasksQueue.io.deq.bits
-    }
-  }.elsewhen(taskWriteStateReg === state.writeTaskNtw) {
-    when(io.connStealNtw.data.qOutTask.ready) {
-      taskWriteStateReg := state.readTaskFromLocalQ
-      tasksGivenAwayCount := tasksGivenAwayCount + 1.U
-    }
-  }
-
-  when(taskWriteStateReg === state.readTaskFromLocalQ) {
-    readyTasksQueue.io.deq.ready := true.B
-  }.elsewhen(taskWriteStateReg === state.writeTaskNtw) {
-    io.connStealNtw.data.qOutTask.valid := true.B
-  }
-
-  /** End of Feeding the data network of the steal side with ready tasks */
-
-  /*
-   * Handling the ctrl network of the steal side
-   */
-
-  // Init the steal network ctrl-network outputs
-  io.connStealNtw.ctrl.stealReq.valid := false.B
-  io.connStealNtw.ctrl.serveStealReq.valid := false.B
-
-  when(tasksGivenAwayCount > 0.U && taskWriteStateReg =/= state.writeTaskNtw) {
-    io.connStealNtw.ctrl.serveStealReq.valid := true.B
-    when(io.connStealNtw.ctrl.serveStealReq.ready) {
-      tasksGivenAwayCount := tasksGivenAwayCount - 1.U
+        accept()
+      }
     }
   }
 
-  /** End handling the ctrl network */
+  prefix("writeResponse") {
+    io.m_axi_counter.b.nodeq()
+    when(io.m_axi_counter.b.valid) {
+      val b = io.m_axi_counter.b.deq()
+      memInflightValid(b.id) := false.B
+    }
+  }
 
+  prefix("spawn") {
+    io.connStealNtw.data.availableTask.nodeq()
+
+    val rTaskCount = Module(new chext.util.Counter(1 << 16))
+    rTaskCount.noInc()
+    rTaskCount.noDec()
+    new elastic.Arrival(io.m_axi_task.r, io.connStealNtw.data.qOutTask) {
+      protected def onArrival: Unit = {
+        when(rTaskCount.notFull) {
+          rTaskCount.inc()
+          out := in.data
+          accept()
+        }
+      }
+    }
+
+    io.connStealNtw.ctrl.serveStealReq.valid := false.B
+
+    io.connStealNtw.ctrl.stealReq.valid := false.B
+    when(rTaskCount.notZero) {
+      io.connStealNtw.ctrl.stealReq.valid := true.B
+      when(io.connStealNtw.ctrl.stealReq.ready) {
+        rTaskCount.dec()
+      }
+    }
+  }
 }
