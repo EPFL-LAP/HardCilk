@@ -6,6 +6,7 @@ import chisel3.experimental.prefix
 
 import chext.amba.axi4
 import chext.elastic
+import chext.elastic.ConnectOp._
 
 import Util._
 
@@ -24,7 +25,7 @@ class ArgumentServer(
     counterWidth: Int,
     sysAddressWidth: Int,
     tagBitsShift: Int,
-    wId: Int,
+    wId: Int
 ) extends Module {
 
   val io = IO(new ArgumentServerIO(taskWidth, counterWidth, sysAddressWidth, wId))
@@ -33,7 +34,7 @@ class ArgumentServer(
   io.m_axi_task.aw.noenq()
   io.m_axi_task.w.noenq()
   io.m_axi_task.b.nodeq()
-  
+
   private val nInflight = 1 << wId
   private val bufferQueueDepth = 2 * nInflight
 
@@ -47,7 +48,7 @@ class ArgumentServer(
   class InflightArgument extends Bundle {
     val addr = UInt(sysAddressWidth.W)
     val stage = InflightStage()
-    val decrement = UInt((wId+1).W)
+    val decrement = UInt((wId + 1).W)
   }
 
   private val memInflightValid = RegInit(VecInit.fill(nInflight)(false.B))
@@ -76,7 +77,11 @@ class ArgumentServer(
         2
       )
     )
-    new elastic.Transform(elastic.SourceBuffer(dmuxInput.io.sinks(1)), arbInput.io.sources(1)) {
+
+    val qFeedback = Module(new Queue(chiselTypeOf(dmuxInput.io.sinks(1).bits), 4))
+    dmuxInput.io.sinks(1) :=> qFeedback.io.enq
+
+    new elastic.Transform(elastic.SourceBuffer(qFeedback.io.deq), arbInput.io.sources(1)) {
       protected def onTransform: Unit = {
         out := in.addr
       }
@@ -114,6 +119,11 @@ class ArgumentServer(
           //   out.sel := 1.U
           //   accept()
           // }
+          when(qFeedback.io.count =/= 3.U) {
+            out.addr := in
+            out.sel := 1.U
+            accept()
+          }
         }.otherwise {
           // If there are no matches, try to put it to the inflight operations. If it is full, wait for a previous operation to complete
           when(~isFull) {
@@ -126,9 +136,11 @@ class ArgumentServer(
             out.sel := 0.U
             accept()
           }.otherwise {
-            // out.addr := in
-            // out.sel := 1.U
-            // accept()
+            when(qFeedback.io.count =/= 3.U) {
+              out.addr := in
+              out.sel := 1.U
+              accept()
+            }
           }
         }
       }
@@ -186,11 +198,13 @@ class ArgumentServer(
     new elastic.Arrival(io.m_axi_counter.r, dmuxDataSel) {
       protected def onArrival: Unit = {
         val inflight = memInflight(in.id)
+        val decrement = WireInit(UInt(counterWidth.W), inflight.decrement)
+        val counter = in.data(counterWidth - 1, 0)
         out.id := in.id
         out.addr := inflight.addr
-        out.data := in.data(counterWidth - 1, 0) - inflight.decrement
-        out.sel := !((in.data(counterWidth - 1, 0) > inflight.decrement) || (in.data(counterWidth - 1, 0) === 0.U)).asUInt 
-        regDone := in.data(counterWidth - 1, 0) === 0.U
+        out.data := counter - decrement
+        out.sel := !((counter > decrement) || (counter === 0.U)).asUInt
+        regDone := counter === 0.U
 
         memInflight(in.id).stage := InflightStage.cnt_wd
 
@@ -223,7 +237,7 @@ class ArgumentServer(
             out := 0.U.asTypeOf(out)
             out.addr := in.addr
             out.id := in.id
-            out.size := log2Ceil(counterWidth/8).U
+            out.size := log2Ceil(counterWidth / 8).U
           }
         }
 
