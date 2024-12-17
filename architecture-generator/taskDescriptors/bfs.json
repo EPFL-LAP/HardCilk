@@ -3,7 +3,7 @@
   "taskDescriptors": [
       {
           "name": "edgeMap",
-          "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/bfs/edgeMap/edgeMap/hls/syn/verilog",
+          "peHDLPath": "/home/shahawy/vitis_ws/edgeMap/edgeMap/hls/syn/verilog",
           "isRoot": true,
           "isCont": true,
           "dynamicMemAlloc": true,
@@ -46,12 +46,12 @@
       },
       {
           "name": "edgeMapParallel",
-          "peHDLPath": "/home/cembelentepe/Documents/Repos/EPFL-LAP/HardCilk/hw_ws/vitis_hls/bfs/edgeMapParallel/edgeMapParallel/hls/syn/verilog",
+          "peHDLPath": "/home/shahawy/vitis_ws/edgeMapParallel/edgeMapParallel/hls/syn/verilog",
           "isRoot": false,
           "isCont": false,
           "dynamicMemAlloc": false,
 
-          "numProcessingElements": 16,
+          "numProcessingElements": 4,
           "widthTask": 512,
           "widthMalloc": 0,
 
@@ -82,6 +82,6 @@
   "widthAddress":64,
   "widthContCounter":32,
   "memorySizeSim": 16,
-  "targetFrequency": 225,
+  "targetFrequency": 300,
   "fpgaModel": "ALVEO_U55C"
 }

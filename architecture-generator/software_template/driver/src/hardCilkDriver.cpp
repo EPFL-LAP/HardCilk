@@ -1,5 +1,6 @@
 #include "hardCilkDriver.h"
 
+
 hardCilkDriver::hardCilkDriver(Memory *memory)
 {
     memory_ = memory;
@@ -226,35 +227,22 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
 
     std::vector<uint64_t> addresses;
 
-    // Check the mapServerAddressToClosureBaseAddress and read the address as int and check it if set to 0x1000000 (indicating freed continuation task which is done by the argument notifier)
-    for (auto address : taskDescriptor.mapServerAddressToClosureBaseAddress[base_address])
-    {
-        // read the whole memory block and check each address
-        char *data = (char *)malloc(address.second * taskDescriptor.widthMalloc / 8);
-        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(data), address.first, address.second * taskDescriptor.widthMalloc / 8);
-
-        // iterate over data and check if the value is less than 0
-        for (int i = 0; i < address.second && addresses.size() < size; i++)
-        {
-            int val = *(int *)(data + i * taskDescriptor.widthMalloc / 8);
-            if (val == 0x1000000)
-            {
-                // Indication of a freed closure, tagged from the ArgumentNotifier
-                addresses.push_back(address.first + i * taskDescriptor.widthMalloc / 8);
-            }
-        }
-    }
 
     // check the size of the addresses if less than size allocate memory to complete it
     if (addresses.size() < size)
     {
         int left_size = size - addresses.size();
-        uint64_t continuation_tasks_holder_addr = allocateMemFPGA(left_size * taskDescriptor.widthMalloc / 8, taskDescriptor.widthMalloc / 8);
+        uint64_t continuation_tasks_holder_addr = allocateMemFPGA(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 512);
+
+        uint8_t zeros[left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8];
+        memset(zeros, 0, left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8);
+        memory_->copyToDevice(continuation_tasks_holder_addr, zeros, left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8);
+
         taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, left_size));
 
         for (auto i = 0; i < left_size; i++)
         {
-            addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor.widthMalloc / 8);
+            addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8);
         }
     }
 

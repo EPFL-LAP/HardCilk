@@ -38,12 +38,12 @@ class WriteBundle(
 ) extends Bundle {
   import cfg._
 
-  private val totalSize = wAddr + wData + 8 + nAllow * wAllow
+  private val totalSize = wAddr + wData + 32 + nAllow * wAllow
   private val paddingSize = (1 << log2Up(totalSize)) - totalSize
 
   val padding = UInt(paddingSize.W)
   val allow = Vec(nAllow, UInt(wAllow.W))
-  val size = UInt(8.W)
+  val size = UInt(32.W)
   val data = UInt(wData.W)
   val addr = UInt(wAddr.W)
 }
@@ -85,14 +85,14 @@ class WriteBuffer(
   private val pkgPayload = Wire(chiselTypeOf(s_pkg_))
   private val numNext = Wire(Vec(nAllow, DecoupledIO(UInt(wAllow.W))))
 
-  // private val s_pkg_payload = s_pkg_.bits.asTypeOf(wb_t)
-  // when(s_pkg_.fire) {
-  //   printf("WriteBuffer: addr = %x, data = %x, size = %x, allow = ", s_pkg_payload.addr, s_pkg_payload.data, s_pkg_payload.size)
-  //   for (i <- 0 until nAllow) {
-  //     printf(" %x", s_pkg_payload.allow(i))
-  //   }
-  //   printf("\n")
-  // }
+  private val s_pkg_payload = s_pkg_.bits.asTypeOf(wb_t)
+  when(s_pkg_.fire) {
+    printf("WriteBuffer: addr = %x, data = %x, size = %x, allow = ", s_pkg_payload.addr, s_pkg_payload.data, s_pkg_payload.size)
+    for (i <- 0 until nAllow) {
+      printf(" %x", s_pkg_payload.allow(i))
+    }
+    printf("\n")
+  }
 
   new elastic.Fork(s_pkg_) {
     protected def onFork: Unit = {

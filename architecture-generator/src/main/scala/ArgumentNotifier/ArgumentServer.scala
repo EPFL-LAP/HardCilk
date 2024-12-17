@@ -104,16 +104,16 @@ class ArgumentServer(
         out := DontCare
         when(matchValid) {
           // If there is any match, collapse operations if possible
-          when(memInflight(matchAddr).stage === InflightStage.cnt_rd) {
-            // Collapse two operations to one
-            // memInflight(matchAddr).decrement := memInflight(matchAddr).decrement + 1.U
-            // drop()
-          }.otherwise {
-            // Wait for the previous operation to complete
-            out.addr := in
-            out.sel := 1.U
-            accept()
-          }
+          // when(memInflight(matchAddr).stage === InflightStage.cnt_rd) {
+          //   // Collapse two operations to one
+          //   // memInflight(matchAddr).decrement := memInflight(matchAddr).decrement + 1.U
+          //   // drop()
+          // }.otherwise {
+          //   // Wait for the previous operation to complete
+          //   out.addr := in
+          //   out.sel := 1.U
+          //   accept()
+          // }
         }.otherwise {
           // If there are no matches, try to put it to the inflight operations. If it is full, wait for a previous operation to complete
           when(~isFull) {
@@ -126,9 +126,9 @@ class ArgumentServer(
             out.sel := 0.U
             accept()
           }.otherwise {
-            out.addr := in
-            out.sel := 1.U
-            accept()
+            // out.addr := in
+            // out.sel := 1.U
+            // accept()
           }
         }
       }
@@ -223,6 +223,7 @@ class ArgumentServer(
             out := 0.U.asTypeOf(out)
             out.addr := in.addr
             out.id := in.id
+            out.size := log2Ceil(counterWidth/8).U
           }
         }
 

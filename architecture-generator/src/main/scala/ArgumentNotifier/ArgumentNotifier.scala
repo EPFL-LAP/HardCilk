@@ -68,7 +68,7 @@ class ArgumentNotifier(
         counterWidth = contCounterWidth,
         sysAddressWidth = addrWidth,
         tagBitsShift = log2Ceil(taskWidth / 8),
-        wId = 5
+        wId = 2
       )
     )
   }

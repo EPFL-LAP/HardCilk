@@ -11,6 +11,9 @@
 #include <stdexcept>
 #include <iostream>
 #include <memIO.h>
+#include <cstring>
+#include <cmath>
+
 
 // This is used to track memory freed by the processor to extend one of the FPGA queues to another location
 struct freedMemBlock

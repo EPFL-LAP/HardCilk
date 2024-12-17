@@ -69,7 +69,7 @@ public:
         size++;
     }
 
-    int getSize()
+    int getSize() const
     {
         return size;
     }
@@ -91,6 +91,15 @@ public:
     void clear()
     {
         size = 0;
+    }
+
+    std::vector<uint32_t> asVector() const {
+        std::vector<uint32_t> dat;
+        dat.push_back(size);
+        for(int i = 0; i < size; i++) {
+            dat.push_back(array[i]);
+        }
+        return dat;
     }
 };
 
@@ -175,6 +184,13 @@ public:
         }
 
         file.close();
+
+        adj_list.resize(vertices.size());
+        for (const auto &edge : edges)
+        {
+            adj_list[edge.first].unpromising_insert(edge.second);
+            //adj_list[edge.second].unpromising_insert(edge.first);
+        }
     }
 
     void addEdge(int u, int v)
@@ -197,31 +213,23 @@ public:
         return vertices.size();
     }
 
-    Set getNeighbors(int u) const
+    const Set& getNeighbors(int u) const
     {
-        Set neighbors;
-        for (uint32_t i = 0; i < edges.size(); i++)
-        {
-            auto edge = edges[i];
-            if (edge.first == u)
-            {
-                neighbors.unpromising_insert(edge.second);
-            }
-            else if (edge.second == u)
-            {
-                neighbors.unpromising_insert(edge.first);
-            }
-        }
-        return neighbors;
+        return adj_list[u];
     }
 
     const std::vector<Pair32>& getEdges() {
         return edges;
     }
 
+    const std::vector<Set>& getAdjList() const {
+        return adj_list;
+    }
+
 private:
     std::vector<Pair32> edges;
     std::set<int> vertices;
+    std::vector<Set> adj_list;
 
     friend void edgeMapParallel(const Graph &g, int vertex, Array &flag_visited, int round, Array &d, Set *set);
 };

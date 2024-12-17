@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 
+
 /**
  * @brief init_system is a template function that takes a vector of template type T and initializes the scheduler servers with the corresponding values.
  * The function also initializes the allocation servers and memory allocator servers based on the full system generation descriptor. If 
@@ -31,10 +32,15 @@ template <typename T> int initSystem(std::vector<T> base_task_data){
             // Allocate memory for all the scheduler servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++){
                 // Allocate memory for the scheduler server
-                uint64_t addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, taskDescriptor.widthTask/8);
+                uint64_t addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 512);
                 
-                // Write zeros to the allocated memory
-                memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(std::vector<T>(taskDescriptor.getCapacityVirtualQueue("scheduler")).data()), taskDescriptor.getCapacityVirtualQueue("scheduler") * sizeof(T));
+                // Write zeros to the allocated memory in chunks of 4KB
+                uint64_t kb4_count = ceil(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8.0 / 4096.0);
+                uint8_t zeros [4 * 1024];
+                memset(zeros, 0, sizeof(zeros));
+                for(auto i = 0; i < kb4_count; i++){
+                    memory_->copyToDevice(addr + i * 4096, reinterpret_cast<const uint8_t*>(zeros), sizeof(zeros));
+                }
 
                 // Initialize the scheduler server information
                 waitPaused(*base_address + scheduler_server_rpause_shift);
@@ -53,7 +59,9 @@ template <typename T> int initSystem(std::vector<T> base_task_data){
 
 
                 // Log the successful initialization information of the scheduler server with indentation
-                printf("        Initialized scheduler server at address %lx with length %lx, fifoTail %lx, fifoHead %lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, 0x0);
+                printf("        Initialized scheduler server at address %lx with length %lx, fifoTail %lx, fifoHead %lx,\n", *base_address, taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, 0x0);
+                // Log also the start and the end of the data address addr
+                printf("        Data address start: 0x%lx, end: 0x%lx\n", addr, addr + taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8);
             }
             if(taskDescriptor.isRoot){
                 // Read the address registered at the first virtual server of the task and write the data to that address
@@ -70,14 +78,14 @@ template <typename T> int initSystem(std::vector<T> base_task_data){
                 memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_currLen_shift, base_task_data.size());
 
                 // Log the successful initialization information of the root scheduler server with indentation
-                printf("        Initialized root task at scheduler server at address %lx with length %lx, fifoHead %lx, fifoTail %lx\n", *(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()), taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, base_task_data.size());
+                printf("        Initialized root task at scheduler server at address 0x%lx with length 0x%lx, fifoHead 0x%lx, fifoTail 0x%lx, dataAddress 0x%lx\n", *(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()), taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, base_task_data.size(), data_queue_address);
             }
             
             // Allocate memory for all the allocation servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++){
                 // First allocate memory to carry the continuation tasks
-                uint64_t continuation_tasks_holder_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, taskDescriptor.widthTask/8);
-                uint64_t continuation_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, descriptor.widthAddress/8);
+                uint64_t continuation_tasks_holder_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, 512);
+                uint64_t continuation_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, 512);
                 
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
                 std::vector<uint64_t> addresses;
@@ -95,20 +103,43 @@ template <typename T> int initSystem(std::vector<T> base_task_data){
                 taskDescriptor.mapServerAddressToClosureBaseAddress[*base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, taskDescriptor.getCapacityVirtualQueue("allocator")));
 
                 // Log the successful initialization information of the allocation server with indentation
-                printf("        Initialized allocation server at address %lx with length %lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("allocator"));
+                printf("        Initialized allocation server at address 0x%lx with length 0x%lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("allocator"));
+                // Log also the start and the end of the data address continuation_tasks_holder_addr and continuation_queue_addr
+                printf("        continuation_tasks_holder_addr address start: 0x%lx, end: 0x%lx\n", continuation_tasks_holder_addr, continuation_tasks_holder_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8);
+                printf("        continuation_queue_addr address start: 0x%lx, end: 0x%lx\n", continuation_queue_addr, continuation_queue_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8);
             }
 
             // Allocate memory for all the memory allocator servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.end(); base_address++){
-                // First allocate memory for the pre-allocated memory
-                uint64_t  pre_allocated_memory_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * taskDescriptor.getVirtualEntryWidth("memoryAllocator")/8, taskDescriptor.getVirtualEntryWidth("memoryAllocator")/8);
-                uint64_t  pre_allocated_memory_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * descriptor.widthAddress/8, descriptor.widthAddress/8);
+                uint64_t byte_count = taskDescriptor.getVirtualEntryWidth("memoryAllocator")/8;
+                // Log the entry width of the memory allocator
+                printf("        Entry width of the memory allocator: %d Bytes\n", byte_count);
+
+                
+                uint64_t address_bytes = descriptor.widthAddress/8;
+
+                allocateMemFPGA(0x10000000, 512);
+                uint64_t  pre_allocated_memory_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * address_bytes, 512);
+                allocateMemFPGA(0x10000000, 512);
+                uint64_t  pre_allocated_memory_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 512);
+
+                // We need to write zeros to the pre_allocated_memory_addr    
+                uint64_t kb4_count = ceil((taskDescriptor.getCapacityVirtualQueue("memoryAllocator") / 4096.0) * byte_count );        
+                uint8_t zeros [4 * 1024];              
+                memset(zeros, 0, sizeof(zeros));
+                for(uint64_t i = 0; i < kb4_count; i++){
+                    memory_->copyToDevice(pre_allocated_memory_addr + i * 4096, reinterpret_cast<const uint8_t*>(zeros), sizeof(zeros));
+                }
+                
 
                 // Create an array of 64 bit addresses that has the addresses of the pre-allocated memory allocated in the previous step
                 std::vector<uint64_t> addresses;
-                for(auto i = 0; i < taskDescriptor.getCapacityVirtualQueue("memoryAllocator"); i++){
-                    addresses.push_back(pre_allocated_memory_addr + i * taskDescriptor.getVirtualEntryWidth("memoryAllocator")/8);
+                for(uint64_t i = 0; i < taskDescriptor.getCapacityVirtualQueue("memoryAllocator"); i++){
+                    addresses.push_back(pre_allocated_memory_addr + i * byte_count);
                 }
+
+                // log the last address of the addresses vector
+                printf("        Last address of the addresses vector: 0x%lx\n", addresses.back());
 
                 // Write the addresses to the pre-allocated memory queue
                 memory_->copyToDevice(pre_allocated_memory_queue_addr, reinterpret_cast<const uint8_t*>(addresses.data()), addresses.size() * sizeof(uint64_t));
@@ -117,8 +148,31 @@ template <typename T> int initSystem(std::vector<T> base_task_data){
                 memory_->writeReg64(*base_address + mem_alloc_server_raddr_shift, pre_allocated_memory_queue_addr);
                 memory_->writeReg64(*base_address + mem_alloc_server_availableSize_shift, taskDescriptor.getCapacityVirtualQueue("memoryAllocator"));
 
+                
+                // Read back in 4KB chunks to make sure the zeros were written correctly
+                uint8_t read_zeros [4 * 1024];
+                memset(read_zeros, -1, sizeof(read_zeros));
+                for(uint64_t i = 0; i < kb4_count; i++){
+                    memory_->copyFromDevice(reinterpret_cast<uint8_t*>(read_zeros), pre_allocated_memory_addr + i * 4096, sizeof(read_zeros));
+                    // Check if the zeros were written correctly
+                    memcmp(zeros, read_zeros, sizeof(zeros));
+                }
+
+                // Read back the addresses to make sure they were written correctly
+                uint64_t read_addresses [taskDescriptor.getCapacityVirtualQueue("memoryAllocator")];
+                memset(read_addresses, -1, sizeof(read_addresses));
+                memory_->copyFromDevice(reinterpret_cast<uint8_t*>(read_addresses), pre_allocated_memory_queue_addr, sizeof(read_addresses));
+
+                // Check if the addresses were written correctly
+                memcmp(addresses.data(), read_addresses, sizeof(addresses));
+
+                allocateMemFPGA(0x10000, 512);
+
                 // Log the successful initialization information of the memory allocator server with indentation
-                printf("        Initialized memory allocator server at address %lx with length %lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("memoryAllocator"));
+                printf("        Initialized memory allocator server at address 0x%lx with length 0x%lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("memoryAllocator"));
+                // Log also the start and the end of the data address pre_allocated_memory_addr and pre_allocated_memory_queue_addr
+                printf("        pre_allocated_memory_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_addr, pre_allocated_memory_addr + taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count);
+                printf("        pre_allocated_memory_queue_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_queue_addr, pre_allocated_memory_queue_addr + taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * descriptor.widthAddress/8);
             } 
 
     }

@@ -3,6 +3,7 @@
 #include <hardCilkDriver.h>
 #include <stdio.h>
 #include <graph.h>
+#include <chrono>
 
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
@@ -30,7 +31,7 @@ struct edgemap_args
 struct task_args
 {
     // The arguments
-    uint32_t g_size;
+    uint32_t __g_size;
     uint32_t vertex;
     uint16_t round;
     uint16_t __padding;
@@ -51,24 +52,33 @@ public:
     int run_test_bench() override
     {
         edgemap_args edgemap_args_0 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-        uint64_t addr = allocateMemFPGA(sizeof(edgemap_args_0), sizeof(edgemap_args_0));
+        uint64_t addr = allocateMemFPGA(sizeof(edgemap_args_0), 512);
 
         memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(&edgemap_args_0), sizeof(edgemap_args_0));
 
-        Graph g("/home/cembelentepe/Documents/opencilk_ws/bfs/graph.txt");
-        std::vector<Pair32> edges = g.getEdges();
-        uint64_t g_edges = allocateMemFPGA(edges.size() * sizeof(Pair32), sizeof(Pair32));
-        memory_->copyToDevice(g_edges, reinterpret_cast<const uint8_t *>(edges.data()), edges.size() * sizeof(Pair32));
+        Graph g("/alpha/graph.txt");
+        // std::vector<Pair32> edges = g.getEdges();
+        // uint64_t g_edges = allocateMemFPGA(edges.size() * sizeof(Pair32), 512);
+        // memory_->copyToDevice(g_edges, reinterpret_cast<const uint8_t *>(edges.data()), edges.size() * sizeof(Pair32));
+        const std::vector<Set>& adj_list = g.getAdjList();
+        std::vector<uint64_t> adj_list_addresses;
+        for(size_t i = 0; i < adj_list.size(); i++) {
+            auto data = adj_list[i].asVector();
+            auto dat_addr = allocateMemFPGA(sizeof(uint32_t) * data.size(), 512);
+            adj_list_addresses.push_back(dat_addr);
+            memory_->copyToDevice(dat_addr, reinterpret_cast<const uint8_t *>(data.data()), data.size() * sizeof(uint32_t));
+        }
+        auto list_addr = allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
+        memory_->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
 
         // Create the fib base task using edgeMap args
-        uint64_t vertex = 2;
+        uint64_t vertex = 1;
         edgemap_args args;
         args.counter = 0;
-        args.g_size = edges.size();
-        args.g_edges = g_edges;
-        args.f = allocateMemFPGA(1024 * sizeof(uint32_t), sizeof(uint32_t));
-        args.flag_visited = allocateMemFPGA(g.getNumVertices() * sizeof(uint8_t), sizeof(uint8_t));
-        args.d = allocateMemFPGA(g.getNumVertices() * sizeof(uint16_t), sizeof(uint16_t));
+        args.g_edges = list_addr;
+        args.f = allocateMemFPGA(1024 * sizeof(uint32_t), 512);
+        args.flag_visited = allocateMemFPGA(g.getNumVertices() * sizeof(uint8_t), 512);
+        args.d = allocateMemFPGA(g.getNumVertices() * sizeof(uint16_t), 512);
         args.sets = 0;
         args.size = 0;
         args.round = 1;
@@ -81,22 +91,32 @@ public:
         memory_->copyToDevice(args.f, reinterpret_cast<const uint8_t *>(f), 1024 * sizeof(uint32_t));
 
         std::vector<uint8_t> flag_visited(g.getNumVertices(), 0);
-        flag_visited[2] = 1;
+        flag_visited[vertex] = 1;
         memory_->copyToDevice(args.flag_visited, reinterpret_cast<const uint8_t *>(flag_visited.data()), g.getNumVertices() * sizeof(uint8_t));
         
         std::vector<uint16_t> d(g.getNumVertices(), -1);
-        d[2] = 0;
+        d[vertex] = 0;
         memory_->copyToDevice(args.d, reinterpret_cast<const uint8_t *>(d.data()), g.getNumVertices() * sizeof(uint16_t));
 
         std::vector<edgemap_args> base_task_data = {args};
 
-        // Initialize the system
+        // Log the time in microseconds
+        auto start = std::chrono::high_resolution_clock::now();
         initSystem(base_task_data);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        printf("Time taken for init: %lld milliseconds\n", elapsed.count());
+
+
 
         startSystem();
 
+
         // Run the management loop
+        start = std::chrono::high_resolution_clock::now();
         managementLoop();
+        end = std::chrono::high_resolution_clock::now();
+        elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
         // read f from FPGA
         memory_->copyFromDevice(reinterpret_cast<uint8_t *>(f), args.f, 1024 * sizeof(uint32_t));
@@ -113,6 +133,9 @@ public:
         memory_->copyFromDevice(reinterpret_cast<uint8_t *>(d.data()), args.d, g.getNumVertices() * sizeof(uint16_t));
         for (int i = 0; i < g.getNumVertices(); i++)
             printf("d[%d] = %d\n", i, d[i]);
+
+
+        printf("Time taken for management loop: %lld milliseconds\n", elapsed.count());
 
         return 0;
     }

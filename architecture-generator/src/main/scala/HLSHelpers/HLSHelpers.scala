@@ -146,7 +146,7 @@ class VitisWriteBufferModule(
         new WriteBufferConfig(
           wAddr = fullSysGenDescriptor.widthAddress,
           wData = w,
-          wAllow = 8,
+          wAllow = 32,
           wAllowData = taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
         )
       )
