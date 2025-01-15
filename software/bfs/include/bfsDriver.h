@@ -61,22 +61,45 @@ public:
         // uint64_t g_edges = allocateMemFPGA(edges.size() * sizeof(Pair32), 512);
         // memory_->copyToDevice(g_edges, reinterpret_cast<const uint8_t *>(edges.data()), edges.size() * sizeof(Pair32));
         const std::vector<Set>& adj_list = g.getAdjList();
+
+
+        uint64_t totalSize = 0;
+        std::vector<uint32_t> allLists;
+
+
+        for(size_t i = 0; i < adj_list.size(); i++) {
+            auto curr_list = adj_list[i].asVector();
+            totalSize += curr_list.size();
+            allLists.insert(allLists.end(), curr_list.begin(), curr_list.end());
+        }
+        uint64_t lists_base_addr = allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
+        memory_->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+
+        // log lists_base_addr and totalSize and end address of the lists
+        printf("lists_base_addr: %lx, totalSize: %d, end address of the lists: %lx\n", lists_base_addr, totalSize, lists_base_addr + totalSize * sizeof(uint32_t));
+
         std::vector<uint64_t> adj_list_addresses;
         for(size_t i = 0; i < adj_list.size(); i++) {
-            auto data = adj_list[i].asVector();
-            auto dat_addr = allocateMemFPGA(sizeof(uint32_t) * data.size(), 512);
-            adj_list_addresses.push_back(dat_addr);
-            memory_->copyToDevice(dat_addr, reinterpret_cast<const uint8_t *>(data.data()), data.size() * sizeof(uint32_t));
+            adj_list_addresses.push_back(lists_base_addr);   
+            uint64_t size = adj_list[i].asVector().size();
+            lists_base_addr += size * sizeof(uint32_t);
         }
         auto list_addr = allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
         memory_->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
 
-        // Create the fib base task using edgeMap args
+        // log the list_addr and the end address of the list addresses with the sizer
+        printf("list_addr: %lx, end address of the list addresses: %lx, size of the list addresses: %d\n", list_addr, list_addr + adj_list_addresses.size() * sizeof(uint64_t), adj_list_addresses.size() * sizeof(uint64_t));
+        
+
+
+        int set_size = this->descriptor.taskDescriptors[0].sidesConfigs[3].virtualEntrtyWidth / 8 / sizeof(uint32_t);
+        
+        // Create the base task using edgeMap args
         uint64_t vertex = 1;
         edgemap_args args;
         args.counter = 0;
         args.g_edges = list_addr;
-        args.f = allocateMemFPGA(1024 * sizeof(uint32_t), 512);
+        args.f = allocateMemFPGA(set_size * sizeof(uint32_t), 512);
         args.flag_visited = allocateMemFPGA(g.getNumVertices() * sizeof(uint8_t), 512);
         args.d = allocateMemFPGA(g.getNumVertices() * sizeof(uint16_t), 512);
         args.sets = 0;
@@ -85,10 +108,10 @@ public:
         args.is_sync = 0;
         args.cont = addr;
 
-        uint32_t f[1024] = {0};
+        std::vector<uint32_t> f(set_size, 0);
         f[0] = 1;
         f[1] = vertex;
-        memory_->copyToDevice(args.f, reinterpret_cast<const uint8_t *>(f), 1024 * sizeof(uint32_t));
+        memory_->copyToDevice(args.f, reinterpret_cast<const uint8_t *>(f.data()), set_size * sizeof(uint32_t));
 
         std::vector<uint8_t> flag_visited(g.getNumVertices(), 0);
         flag_visited[vertex] = 1;
