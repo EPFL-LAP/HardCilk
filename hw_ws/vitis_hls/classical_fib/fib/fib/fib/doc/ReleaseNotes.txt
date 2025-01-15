@@ -1,6 +1,0 @@
-
-Family       : virtexuplushbm
-Device       : xcu55c
-Package      : -fsvh2892
-Speed Grade  : -2L-e
-Clock Period : 4
