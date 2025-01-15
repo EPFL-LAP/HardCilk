@@ -50,7 +50,7 @@ public:
     
     Memory *memory_;
 
-private:
+protected:
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
 
     int checkPaused();
