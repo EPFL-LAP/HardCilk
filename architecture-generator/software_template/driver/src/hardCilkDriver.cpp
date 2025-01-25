@@ -220,7 +220,7 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
     uint64_t addr = memory_->readReg64(base_address + mem_alloc_server_raddr_shift);
 
     // Get the size of the queue from the taskDescriptor
-    int size = taskDescriptor.getCapacityVirtualQueue("memoryAllocator");
+    uint64_t size = taskDescriptor.getCapacityVirtualQueue("memoryAllocator");
 
     // Log the information of calling this function
     std::cout << "Managing memory allocation server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << std::endl;
@@ -234,11 +234,10 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
         int left_size = size - addresses.size();
         uint64_t continuation_tasks_holder_addr = allocateMemFPGA(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 512);
 
-        uint8_t zeros[left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8];
-        memset(zeros, 0, left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8);
-        memory_->copyToDevice(continuation_tasks_holder_addr, zeros, left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8);
+        std::vector<uint8_t> zeros(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 0);
+        memory_->copyToDevice(continuation_tasks_holder_addr, zeros.data(), zeros.size());
 
-        taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, left_size));
+        taskDescriptor.mapServerAddressToMallocBaseAddress[base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, left_size));
 
         for (auto i = 0; i < left_size; i++)
         {
