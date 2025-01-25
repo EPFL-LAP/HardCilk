@@ -17,10 +17,10 @@ object CppHeaderTemplate {
          |    bool hasAXI;
          |    int numProcessingElements;
          |    int widthTask;
-         |    int widthMalloc;
          |    std::vector<SideConfig> sidesConfigs;
          |    MemSystemDescriptor mgmtBaseAddresses;
-         |    std::map<uint64_t,std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
+         |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
+         |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToMallocBaseAddress;
          |
          |    int getNumServers(const std::string& sideType) const {
          |        assert(sideType == "scheduler" || sideType == "allocator" || 
@@ -43,7 +43,7 @@ object CppHeaderTemplate {
          |        }
          |        return 0;
          |    }
-         |    int getVirtualEntryWidth(const std::string& sideType) const {
+         |    uint64_t getVirtualEntryWidth(const std::string& sideType) const {
          |        assert(sideType == "scheduler" || sideType == "allocator" ||
          |               sideType == "argumentNotifier" || sideType == "memoryAllocator");
          |        for (const auto& config : sidesConfigs) {
@@ -69,7 +69,6 @@ object CppHeaderTemplate {
          |    ${td.hasAXI || descriptor.spawnNextList.get(td.name).isDefined || descriptor.sendArgumentList.get(td.name).isDefined},
          |    ${td.numProcessingElements},
          |    ${td.widthTask},
-         |    ${td.widthMalloc},
          |    {${generateSideConfig(td.sidesConfigs)}},
          |    ${generateMemSystemDescriptor(td.mgmtBaseAddresses)}
          |}
@@ -142,7 +141,7 @@ object CppHeaderTemplate {
   private def generateSideConfig(sidesConfigs: List[SideConfig]): String = {
     sidesConfigs
       .map { sc =>
-        s"""{"${sc.sideType}", ${sc.numVirtualServers}, ${sc.capacityVirtualQueue}, ${sc.capacityPhysicalQueue}, ${sc.portWidth}, ${sc.virtualEntrtyWidth}}"""
+        s"""{"${sc.sideType}", ${sc.numVirtualServers}, ${sc.capacityVirtualQueue}, ${sc.capacityPhysicalQueue}, ${sc.portWidth}, ${sc.virtualEntrtyWidth}ull}"""
       }
       .mkString(", ")
   }
