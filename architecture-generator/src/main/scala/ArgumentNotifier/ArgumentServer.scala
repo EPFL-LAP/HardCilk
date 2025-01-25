@@ -78,7 +78,7 @@ class ArgumentServer(
       )
     )
 
-    val qFeedback = Module(new Queue(chiselTypeOf(dmuxInput.io.sinks(1).bits), 4))
+    val qFeedback = Module(new Queue(chiselTypeOf(dmuxInput.io.sinks(1).bits), 8))
     dmuxInput.io.sinks(1) :=> qFeedback.io.enq
 
     new elastic.Transform(elastic.SourceBuffer(qFeedback.io.deq), arbInput.io.sources(1)) {
@@ -119,7 +119,7 @@ class ArgumentServer(
           //   out.sel := 1.U
           //   accept()
           // }
-          when(qFeedback.io.count =/= 3.U) {
+          when(qFeedback.io.count >= 3.U) {  // WARNING: This caused a deadlock at some point, maybe needs further investigation
             out.addr := in
             out.sel := 1.U
             accept()
@@ -136,7 +136,7 @@ class ArgumentServer(
             out.sel := 0.U
             accept()
           }.otherwise {
-            when(qFeedback.io.count =/= 3.U) {
+            when(qFeedback.io.count >= 3.U) {
               out.addr := in
               out.sel := 1.U
               accept()
