@@ -270,8 +270,8 @@ object TclGeneralConfigs {
               CONFIG.CLKOUT1_PHASE_ERROR {76.967} \
               """ +
         f"CONFIG.CLKOUT1_REQUESTED_OUT_FREQ ${descriptor.targetFrequency}%.3f" + """\""" +
+        f"CONFIG.CLKOUT2_REQUESTED_OUT_FREQ ${descriptor.targetFrequency}%.3f" + """\""" +
         """
-            CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {300} \
             CONFIG.CLKOUT2_USED {true} \
             CONFIG.CLK_IN1_BOARD_INTERFACE {pcie_refclk} \
             CONFIG.MMCM_CLKFBOUT_MULT_F {15.000} \
