@@ -47,14 +47,14 @@ int hardCilkDriver::waitPaused(uint64_t addr)
 
 int hardCilkDriver::checkFinished()
 {
-    uint32_t finished = 0;
+    int32_t finished = 0;
     assert(return_addresses.size() > 0);
     for (auto addr : return_addresses)
     {
         memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&finished), addr, sizeof(finished));
-        if (finished != 0)
+        if (condition_(finished) == true)
         {
-            printf("Found value %lu at return address %lx\n", (long unsigned int)finished, addr);
+            printf("Found value %d at return address %lx\n", finished, addr);
             return 0; // Finished
         }
     }
@@ -310,9 +310,11 @@ uint64_t hardCilkDriver::allocateMemFPGA(uint64_t size, uint64_t alignment /** a
 int hardCilkDriver::setReturnAddr(uint64_t addr)
 {
     // Write zero to the return address using writeMem
-    uint64_t val = 0;
+    // uint64_t val = 0;
 
-    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(&val), sizeof(val));
+    // memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(&val), sizeof(val));
+
+    printf("NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION\n");
 
     return_addresses.push_back(addr);
 

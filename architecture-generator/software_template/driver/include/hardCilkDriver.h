@@ -30,8 +30,14 @@ public:
 
     hardCilkDriver(Memory *memory);
 
-// template <typename T> int init_system(std::vector<T>);
-#include "hardCilkDriver.tpp"
+    bool defaultDoneCondition(int32_t val)
+    {
+        return val < 0;
+    }
+
+
+    // template <typename T> int init_system(std::vector<T>);
+    #include "hardCilkDriver.tpp"
 
     int startSystem();
     void managementLoop();
@@ -53,9 +59,13 @@ public:
 protected:
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
 
+    // declare the condition function
+    bool (*condition_)(int32_t);
+
     int checkPaused();
 
     int checkFinished();
+
     /**
      * Function that takes no params and makes sure that this driver is connected to the system on the FPGA
      */
