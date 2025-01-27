@@ -98,7 +98,7 @@ class HardCilk(
     val interfacesMemoryAllocator = new ArrayBuffer[axi4.full.Interface]()
     var j = 0
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
-      println(task.mgmtBaseAddresses)
+      //println(task.mgmtBaseAddresses)
 
       // Create the black boxes for the task PEs.
       val peArray = VitisModuleFactory(task, fullSysGenDescriptor)
@@ -180,7 +180,7 @@ class HardCilk(
       }
       j += task.getNumServers("scheduler")
 
-      if (task.isCont) {
+      if (fullSysGenDescriptor.getPortCount("spawnNext", task.name) > 0) {
         closureAllocatorMap += (task.name -> Module(
           new Allocator(
             addrWidth = fullSysGenDescriptor.widthAddress,
@@ -199,7 +199,9 @@ class HardCilk(
           demux.m_axil(i) :=> closureAllocatorMap(task.name).io_internal.axi_mgmt_vcas(i - j)
         }
         j += task.getNumServers("allocator")
+      }
 
+      if(fullSysGenDescriptor.getPortCount("sendArgument", task.name) > 0) {
         argumentNotifierMap += (task.name -> Module(
           new ArgumentNotifier(
             addrWidth = fullSysGenDescriptor.widthAddress,
@@ -219,7 +221,7 @@ class HardCilk(
         schedulerMap(task.name).connArgumentNotifier <> argumentNotifierMap(task.name).connStealNtw
       }
 
-      if (task.dynamicMemAlloc) {
+      if (fullSysGenDescriptor.getPortCount("mallocIn", task.name) > 0) {
         memoryAllocatorMap += (task.name -> Module(
           new Allocator(
             addrWidth = fullSysGenDescriptor.widthAddress,
@@ -240,7 +242,7 @@ class HardCilk(
       }
     }
 
-    // Connect paused and done signals
+    // Connect paused and done signals: N.B: needs to be fixed to accomodate different notifcation approaches
     val schedulerPaused = if (schedulerMap.isEmpty) false.B else schedulerMap.map(_._2.io_paused).reduce(_ || _)
     val closureAllocatorPaused =
       if (closureAllocatorMap.isEmpty) false.B else closureAllocatorMap.map(_._2.io_paused).reduce(_ || _)
