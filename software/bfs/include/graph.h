@@ -10,12 +10,12 @@
 class Set
 {
 private:
-    const int capacity = 1023;
+    const int capacity = 10000000;
     uint32_t *array;
     uint32_t size;
 
 public:
-    Set() : array(new uint32_t[1023]), size(0)
+    Set() : array(new uint32_t[10000000]), size(0)
     {
     }
 

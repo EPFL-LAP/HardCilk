@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <graph.h>
 #include <chrono>
+#include <algorithm>
+#include <queue>
 
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
@@ -60,14 +62,13 @@ public:
         // std::vector<Pair32> edges = g.getEdges();
         // uint64_t g_edges = allocateMemFPGA(edges.size() * sizeof(Pair32), 512);
         // memory_->copyToDevice(g_edges, reinterpret_cast<const uint8_t *>(edges.data()), edges.size() * sizeof(Pair32));
-        const std::vector<Set>& adj_list = g.getAdjList();
-
+        const std::vector<Set> &adj_list = g.getAdjList();
 
         uint64_t totalSize = 0;
         std::vector<uint32_t> allLists;
 
-
-        for(size_t i = 0; i < adj_list.size(); i++) {
+        for (size_t i = 0; i < adj_list.size(); i++)
+        {
             auto curr_list = adj_list[i].asVector();
             totalSize += curr_list.size();
             allLists.insert(allLists.end(), curr_list.begin(), curr_list.end());
@@ -79,8 +80,9 @@ public:
         printf("lists_base_addr: %lx, totalSize: %d, end address of the lists: %lx\n", lists_base_addr, totalSize, lists_base_addr + totalSize * sizeof(uint32_t));
 
         std::vector<uint64_t> adj_list_addresses;
-        for(size_t i = 0; i < adj_list.size(); i++) {
-            adj_list_addresses.push_back(lists_base_addr);   
+        for (size_t i = 0; i < adj_list.size(); i++)
+        {
+            adj_list_addresses.push_back(lists_base_addr);
             uint64_t size = adj_list[i].asVector().size();
             lists_base_addr += size * sizeof(uint32_t);
         }
@@ -89,11 +91,9 @@ public:
 
         // log the list_addr and the end address of the list addresses with the sizer
         printf("list_addr: %lx, end address of the list addresses: %lx, size of the list addresses: %d\n", list_addr, list_addr + adj_list_addresses.size() * sizeof(uint64_t), adj_list_addresses.size() * sizeof(uint64_t));
-        
-
 
         int set_size = this->descriptor.taskDescriptors[0].sidesConfigs[3].virtualEntrtyWidth / 8 / sizeof(uint32_t);
-        
+
         // Create the base task using edgeMap args
         uint64_t vertex = 1;
         edgemap_args args;
@@ -102,11 +102,14 @@ public:
         args.f = allocateMemFPGA(set_size * sizeof(uint32_t), 512);
         args.flag_visited = allocateMemFPGA(g.getNumVertices() * sizeof(uint8_t), 512);
         args.d = allocateMemFPGA(g.getNumVertices() * sizeof(uint16_t), 512);
-        args.sets = 0;
-        args.size = 0;
+        args.sets = allocateMemFPGA(set_size * sizeof(uint64_t), 512); // This is new to be reused across all reduce tasks
+        args.size = 1;
         args.round = 1;
-        args.is_sync = 0;
+        args.is_sync = 1; // Just for the new task structure with internal buffering
         args.cont = addr;
+
+        // write the address of f to the sets array on the FPGA
+        memory_->copyToDevice(args.sets, reinterpret_cast<const uint8_t *>(&args.f), sizeof(uint64_t));
 
         std::vector<uint32_t> f(set_size, 0);
         f[0] = 1;
@@ -116,7 +119,7 @@ public:
         std::vector<uint8_t> flag_visited(g.getNumVertices(), 0);
         flag_visited[vertex] = 1;
         memory_->copyToDevice(args.flag_visited, reinterpret_cast<const uint8_t *>(flag_visited.data()), g.getNumVertices() * sizeof(uint8_t));
-        
+
         std::vector<uint16_t> d(g.getNumVertices(), -1);
         d[vertex] = 0;
         memory_->copyToDevice(args.d, reinterpret_cast<const uint8_t *>(d.data()), g.getNumVertices() * sizeof(uint16_t));
@@ -130,10 +133,7 @@ public:
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         printf("Time taken for init: %lld milliseconds\n", elapsed.count());
 
-
-
         startSystem();
-
 
         // Run the management loop
         start = std::chrono::high_resolution_clock::now();
@@ -142,21 +142,52 @@ public:
         elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
         // read f from FPGA
-        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(f), args.f, 1024 * sizeof(uint32_t));
+        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(f.data()), args.f, 1024 * sizeof(uint32_t));
         for (int i = 0; i < 1024; i++)
             if (f[i] != 0)
                 printf("f[%d] = %d\n", i, f[i]);
 
         // read flag_visited from FPGA
         memory_->copyFromDevice(reinterpret_cast<uint8_t *>(flag_visited.data()), args.flag_visited, g.getNumVertices() * sizeof(uint8_t));
-        for (int i = 0; i < g.getNumVertices(); i++)
-            printf("flag_visited[%d] = %d\n", i, flag_visited[i]);
 
         // read d from FPGA
         memory_->copyFromDevice(reinterpret_cast<uint8_t *>(d.data()), args.d, g.getNumVertices() * sizeof(uint16_t));
-        for (int i = 0; i < g.getNumVertices(); i++)
-            printf("d[%d] = %d\n", i, d[i]);
 
+
+        int n = 5; // Example value for n
+
+        // Priority queue to store pairs of (distance, vertex)
+        std::priority_queue<std::pair<int, int>, std::vector<std::pair<int, int>>, std::greater<>> pq;
+
+        for (int i = 0; i < d.size(); i++)
+        {
+            if (d[i] == 65535)
+                continue;
+
+            // std::cout << "Vertex: " << i << " Distance: " << d[i] << std::endl;
+            if (pq.size() < n)
+            {
+                pq.push(std::make_pair(d[i], i));
+            }
+            else if (d[i] > pq.top().first)
+            {
+                pq.pop();
+                pq.push(std::make_pair(d[i], i));
+            }
+        }
+        // Extract the top n distances and their corresponding vertices
+        std::vector<std::pair<int, int>> top_n_distances;
+        while (!pq.empty())
+        {
+            top_n_distances.push_back(pq.top());
+            pq.pop();
+        }
+
+        // Print the top n distances and their corresponding vertices
+        for (const auto &pair : top_n_distances)
+        {
+            std::cout << "Vertex: " << pair.second << " Distance: " << pair.first << std::endl;
+        }
 
         printf("Time taken for management loop: %lld milliseconds\n", elapsed.count());
 

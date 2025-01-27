@@ -57,19 +57,11 @@ struct task_args {
   uint8_t __padding1[8];
 };
 
-// Define fib_spawn_next for fib to spawn next new tasks
+// Define edgeMap_spawn_next for fib to spawn next new tasks
 struct edgeMap_spawn_next {
   uint64_t addr;
   edgemap_args  data;
   uint32_t size;
   uint32_t allow;
   uint8_t __padding[48];
-};
-
-struct task_arg_out {
-  uint64_t addr;
-  uint64_t data;
-  uint32_t size;
-  uint8_t allow;
-  uint8_t __padding[8];
 };
