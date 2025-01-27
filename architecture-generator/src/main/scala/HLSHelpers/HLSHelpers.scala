@@ -168,6 +168,19 @@ class VitisWriteBufferModule(
     }
   })
 
+  // If a task has a taskOutGlobal but has no spawnNext, then connect the taskOutGlobal 
+  // directly to the taskOutGlobal port
+  if(wSpawnNext.isEmpty) {
+    for (i <- 0 until taskOuts.length) {
+      taskOuts(i)._2 match {
+        case Some(value) => {
+          value.asInstanceOf[axi4s.Interface] <> getPort(taskOuts(i)._1)
+        }
+        case None => {}
+      }
+    }
+  }
+
   if (pe.io.elements.get("argDataOut").isDefined) {
     pe.io.elements
       .get("argDataOut")
