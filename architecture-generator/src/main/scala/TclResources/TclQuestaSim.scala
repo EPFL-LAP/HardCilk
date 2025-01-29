@@ -17,6 +17,9 @@ object TclQuestaSim {
     // Create an instance of the compute system
     tclWriteln(f"create_bd_cell -type module -reference ${fullSysGenDescriptor.name} ${fullSysGenDescriptor.name}_0")
 
+    // Add any tcl generated with the PEs from HLS
+    tclWriteln(TclGeneralConfigs.getPEsTcl(fullSysGenDescriptor))
+
     // Get the stats of the memory connections
     val memConnectionsStats = fullSysGenDescriptor.getMemoryConnectionsStats(reduce_axi)
 

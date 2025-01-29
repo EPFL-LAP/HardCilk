@@ -405,6 +405,26 @@ object TclGeneralConfigs {
     ""
   }
 
+  def getPEsTcl(descriptor: FullSysGenDescriptor): String = {
+    // In the PE HDL path for each task type check if there are any files with .tcl extension
+    // read all the tcl files into one string and return it
+    
+    val sb = new StringBuilder
+    for(task <- descriptor.taskDescriptors) {
+      val peHDLPath = task.peHDLPath
+      // Get all the names of the files in that directory
+      val files = new java.io.File(peHDLPath).listFiles.filter(_.getName.endsWith(".tcl"))
+      // if files is not empty then read all the files and append them to the string builder
+      for(file <- files) {
+        val source = scala.io.Source.fromFile(file)
+        val lines = try source.mkString finally source.close()
+        sb.append(lines)
+      }
+    }
+
+    sb.toString()
+  }
+
   def getAxiVipConfig(): String = {
     """
     create_bd_port -dir I -type clk -freq_hz 250000000 axi_vip_clk
