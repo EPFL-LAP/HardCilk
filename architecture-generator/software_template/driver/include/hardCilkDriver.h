@@ -30,7 +30,7 @@ public:
 
     hardCilkDriver(Memory *memory);
 
-    bool defaultDoneCondition(int32_t val)
+    static bool defaultDoneCondition(int32_t val)
     {
         return val < 0;
     }
