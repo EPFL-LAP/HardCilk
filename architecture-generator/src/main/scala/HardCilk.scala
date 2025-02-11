@@ -634,6 +634,7 @@ object HardCilkEmitter extends App {
     val listOfFilesForRTL = List("DualPortBRAM_sim.v", "DualPortBRAM_xpm.v", "top.v", "u55c.xdc")
     val listOfFilesForQuesta = List("top_sim.sv", "main_sim.sv")
     writeFile(s"$outputDirPathRTL/empty.vh", "")
+    writeFile(s"$outputDirPathRTL/empty.sv", "")
     resourcesFiles.foreach { file =>
       val fileName = file.getName()
       val fileContent = readFile(file.getAbsolutePath())
