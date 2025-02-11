@@ -117,6 +117,9 @@ struct questaMemory : Memory
             uint32_t transaction_size = std::get<1>(transaction);
             uint64_t offset = 0;
             
+            if(transaction_size == 0){
+                continue;
+            }
             for (uint32_t i = 6; i >= 0; i--)
             {
                 // burst length is byte size of the transaction divide by 2^burst_size
@@ -128,6 +131,7 @@ struct questaMemory : Memory
                 {
                     continue;
                 }
+                
 
                 if (!(burst_length < 256) ||
                     !(std::get<2>(transaction) + offset < data_tmp + size) ||
