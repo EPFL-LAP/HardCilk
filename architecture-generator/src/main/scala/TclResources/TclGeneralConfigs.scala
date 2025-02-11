@@ -66,8 +66,9 @@ object TclGeneralConfigs {
           # Include the verilog modules and constraints
           ################################################################
 
-          add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
-          import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
+          add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh] [glob ../rtl/*.sv]
+          import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh] [glob ../rtl/*.sv]
+          
 
           add_files -fileset sources_1 [glob ../rtl/synth/*.v] 
           import_files -fileset sources_1 [glob ../rtl/synth/*.v] 
@@ -78,8 +79,8 @@ object TclGeneralConfigs {
     else 
       sb.append(
         """
-          add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
-          import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh]
+          add_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh] [glob ../rtl/*.sv]
+          import_files -fileset sources_1 [glob ../rtl/*.v] [glob ../rtl/*.vh] [glob ../rtl/*.sv]
 
           add_files -fileset sources_1 [glob ../rtl/questa/*.sv] 
           import_files -fileset sources_1 [glob ../rtl/questa/*.sv] 
@@ -270,9 +271,7 @@ object TclGeneralConfigs {
               CONFIG.CLKOUT1_PHASE_ERROR {76.967} \
               """ +
         f"CONFIG.CLKOUT1_REQUESTED_OUT_FREQ ${descriptor.targetFrequency}%.3f" + """\""" +
-        f"\nCONFIG.CLKOUT2_REQUESTED_OUT_FREQ ${descriptor.targetFrequency}%.3f" + """\""" +
         """
-            CONFIG.CLKOUT2_USED {true} \
             CONFIG.CLK_IN1_BOARD_INTERFACE {pcie_refclk} \
             CONFIG.MMCM_CLKFBOUT_MULT_F {15.000} \
             CONFIG.MMCM_CLKOUT0_DIVIDE_F {6.000} \
@@ -289,7 +288,7 @@ object TclGeneralConfigs {
     sb.append("make_bd_intf_pins_external  [get_bd_intf_pins clk_wiz_0/CLK_IN1_D] -name SYSCLK3\n")
 
     // Connect the axi clocks to this clock
-    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins hbm_0/AXI_*_ACLK]\n")
+    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins hbm_0/AXI_*_ACLK]\n")
     sb.append(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ${descriptor.name}_0/clock]\n")
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_clock_converter_0/m_axi_aclk]\n")
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_clock_converter_1/m_axi_aclk]\n")
@@ -312,10 +311,7 @@ object TclGeneralConfigs {
     )
     
     // Create the second reset system
-    sb.append("create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_2\n")
-    sb.append("connect_bd_net [get_bd_pins clk_wiz_0/locked] [get_bd_pins proc_sys_reset_2/dcm_locked]\n")
-    sb.append("connect_bd_net [get_bd_pins proc_sys_reset_2/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out2]\n")
-    sb.append("connect_bd_net [get_bd_pins proc_sys_reset_2/peripheral_aresetn] [get_bd_pins hbm_0/AXI_*_ARESET_N]\n")
+    sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins hbm_0/AXI_*_ARESET_N]\n")
 
 
 
@@ -395,7 +391,6 @@ object TclGeneralConfigs {
     
     sb.append("connect_bd_net [get_bd_ports PCIE_PERST_LS_65] [get_bd_pins util_vector_logic_0/Op2]\n")
     sb.append("connect_bd_net [get_bd_pins util_vector_logic_0/Res] [get_bd_pins proc_sys_reset_1/ext_reset_in]\n")
-    sb.append("connect_bd_net [get_bd_pins util_vector_logic_0/Res] [get_bd_pins proc_sys_reset_2/ext_reset_in]\n")
     sb.append("connect_bd_net [get_bd_pins axi_gpio_0/gpio_io_o] [get_bd_pins util_vector_logic_0/Op1]\n")
 
     sb.toString()

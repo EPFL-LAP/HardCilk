@@ -86,7 +86,51 @@ object TclQuestaSim {
     // Write the tcl commands to a file
     val tclFile = new java.io.PrintWriter(new java.io.File(s"${tclFileDirectory}/${fullSysGenDescriptor.name}_questa.tcl"))
     tclFile.write(TclGeneralConfigs.getProjectWrapperTCLSyntax(tclCommands.toString(), fullSysGenDescriptor, true))
+
+    // Create a new string builder to write the simulation tcl commands
+    val simTclCommands = new StringBuilder()
+    simTclCommands.append(f"generate_target Simulation [get_files ./${fullSysGenDescriptor.name}_vivado_project/project_1.srcs/sources_1/bd/design_1/design_1.bd]\n")
+    simTclCommands.append(f"export_ip_user_files -of_objects [get_files ./${fullSysGenDescriptor.name}_vivado_project/project_1.srcs/sources_1/bd/design_1/design_1.bd] -no_script -sync -force -quiet\n")
+    simTclCommands.append(f"export_simulation -of_objects [get_files ./${fullSysGenDescriptor.name}_vivado_project/project_1.srcs/sources_1/bd/design_1/design_1.bd] -directory ./${fullSysGenDescriptor.name}_vivado_project/project_1.ip_user_files/sim_scripts -ip_user_files_dir ./${fullSysGenDescriptor.name}_vivado_project/project_1.ip_user_files -ipstatic_source_dir ./${fullSysGenDescriptor.name}_vivado_project/project_1.ip_user_files/ipstatic -lib_map_path [list {modelsim=./${fullSysGenDescriptor.name}_vivado_project/project_1.cache/compile_simlib/modelsim} {questa=/alpha/questa} {xcelium=./${fullSysGenDescriptor.name}_vivado_project/project_1.cache/compile_simlib/xcelium} {vcs=./${fullSysGenDescriptor.name}_vivado_project/project_1.cache/compile_simlib/vcs} {riviera=./${fullSysGenDescriptor.name}_vivado_project/project_1.cache/compile_simlib/riviera}] -use_ip_compiled_libs -force -quiet\n")
+    simTclCommands.append(f"launch_simulation\n")
+    // Write the simulation tcl commands to a file
+    tclFile.write(simTclCommands.toString())
+
     tclFile.close()
+
+    // Read the do file at ./software_template/simulate.do
+    val doFile = scala.io.Source.fromFile("./software_template/simulate.do")
+
+    // Replace "DESCRIPTOR_NAME" with the name of the descriptor
+    val doFileString = doFile.mkString.replace("DESCRIPTOR_NAME", fullSysGenDescriptor.name)
+
+    // Write the do file to the tcl directory of the output
+    val doFileOut = new java.io.PrintWriter(new java.io.File(s"${tclFileDirectory}/simulate.do"))
+    doFileOut.write(doFileString)
+    doFileOut.close()
+
+    // Now we create a shell file to run the tcl file, copy the do file to the simulation directory and run the simulation
+    // The shell file should run enable_xilinx_2024.1 and then run the tcl file
+    val shellFile = new java.io.PrintWriter(new java.io.File(s"${tclFileDirectory}/simulate.sh"))
+
+    val shellFileStringBuilder = new StringBuilder()
+    shellFileStringBuilder.append("#!/bin/bash\n")
+    shellFileStringBuilder.append("export XILINX_ROOT=/alpha/tools/Xilinx/\n")
+    shellFileStringBuilder.append("source $XILINX_ROOT/Vivado/2024.1/settings64.sh\n")
+    shellFileStringBuilder.append(f"vivado -mode batch -source ${fullSysGenDescriptor.name}_questa.tcl\n")
+    shellFileStringBuilder.append(f"cp simulate.do ${fullSysGenDescriptor.name}_vivado_project/project_1.sim/sim_1/behav/questa/\n")
+    shellFileStringBuilder.append(f"cd ${fullSysGenDescriptor.name}_vivado_project/project_1.sim/sim_1/behav/questa/\n")
+    shellFileStringBuilder.append("vsim -do simulate.do\n")
+
+
+    // Write the shell file to the tcl directory of the output
+    shellFile.write(shellFileStringBuilder.toString())
+    shellFile.close()
+
+    // make the shell file executable
+    val p = new java.lang.ProcessBuilder("chmod", "+x", s"${tclFileDirectory}/simulate.sh").start()
+    p.waitFor()
+
 
   }
 }
