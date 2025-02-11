@@ -11,7 +11,7 @@
 using namespace sc_core;
 using namespace sc_dt;
 
-#include <triangleDriver.h>
+#include <triangleCountDriver.h>
 #include <memIO_questa.h>
 
 FullSysGenDescriptor helperDescriptor;
@@ -67,8 +67,7 @@ public:
   
 
     questaMemory mem_;
-    triangleDriver driver_;
+    triangleCountDriver driver_;
 };
 
 #endif
-        

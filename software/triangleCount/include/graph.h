@@ -43,15 +43,21 @@ public:
 
         // get the max vertex number from the vertices set and add the vertices from 0 to max
         int max_vertex = *vertices.rbegin();
-        for (int i = 0; i <= max_vertex; i++)
-        {
-            vertices.insert(i);
-        }
+        set_vertex_count_as_max_vertex();
 
         file.close();
 
         // create adjacency list
         create_adjacency_list(max_vertex);
+    }
+
+    void set_vertex_count_as_max_vertex()
+    {
+        int max_vertex = *vertices.rbegin();
+        for (int i = 0; i <= max_vertex; i++)
+        {
+            vertices.insert(i);
+        }
     }
 
     void create_adjacency_list(int max_vertex_index)
@@ -123,5 +129,6 @@ void filterGraph(Graph &g, Graph &new_graph, bool (*filter)(int, int, Graph &))
             }
         }
     }
+    new_graph.set_vertex_count_as_max_vertex();
     new_graph.create_adjacency_list(g.getNumVertices());
 }
