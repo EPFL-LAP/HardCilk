@@ -48,7 +48,7 @@ class ArgumentServer(
   class InflightArgument extends Bundle {
     val addr = UInt(sysAddressWidth.W)
     val stage = InflightStage()
-    val decrement = UInt((wId + 1).W)
+    val decrement = UInt(counterWidth.W)
   }
 
   private val memInflightValid = RegInit(VecInit.fill(nInflight)(false.B))
@@ -109,20 +109,17 @@ class ArgumentServer(
         out := DontCare
         when(matchValid) {
           // If there is any match, collapse operations if possible
-          // when(memInflight(matchAddr).stage === InflightStage.cnt_rd) {
-          //   // Collapse two operations to one
-          //   // memInflight(matchAddr).decrement := memInflight(matchAddr).decrement + 1.U
-          //   // drop()
-          // }.otherwise {
-          //   // Wait for the previous operation to complete
-          //   out.addr := in
-          //   out.sel := 1.U
-          //   accept()
-          // }
-          when(qFeedback.io.count >= 3.U) {  // WARNING: This caused a deadlock at some point, maybe needs further investigation
-            out.addr := in
-            out.sel := 1.U
-            accept()
+          when(memInflight(matchAddr).stage === InflightStage.cnt_rd) {
+            // Collapse two operations to one
+            memInflight(matchAddr).decrement := memInflight(matchAddr).decrement + 1.U
+            drop()
+          }.otherwise {
+            // Wait for the previous operation to complete
+            when(qFeedback.io.count >= 3.U) { // WARNING: This caused a deadlock at some point, maybe needs further investigation
+              out.addr := in
+              out.sel := 1.U
+              accept()
+            }
           }
         }.otherwise {
           // If there are no matches, try to put it to the inflight operations. If it is full, wait for a previous operation to complete
@@ -168,7 +165,7 @@ class ArgumentServer(
     new elastic.Transform(dmuxInput.io.sinks(0), io.m_axi_counter.ar) {
       protected def onTransform: Unit = {
         out := 0.U.asTypeOf(out)
-        out.addr := memInflight(in.id).addr
+        out.addr := in.addr
         out.id := in.id
         out.len := 0.U
         out.size := log2Ceil(counterWidth / 8).U
@@ -195,7 +192,17 @@ class ArgumentServer(
       val sel = UInt(1.W)
     }))
 
-    new elastic.Arrival(io.m_axi_counter.r, dmuxDataSel) {
+    val readData = Wire(io.m_axi_counter.r.cloneType)
+
+    new elastic.Arrival(io.m_axi_counter.r, elastic.SinkBuffer(readData)) {
+      protected def onArrival: Unit = {
+        out := in
+        memInflight(in.id).stage := InflightStage.cnt_wd
+        accept()
+      }
+    }
+
+    new elastic.Arrival(readData, dmuxDataSel) {
       protected def onArrival: Unit = {
         val inflight = memInflight(in.id)
         val decrement = WireInit(UInt(counterWidth.W), inflight.decrement)
