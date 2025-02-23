@@ -25,7 +25,8 @@ class ArgumentServer(
     counterWidth: Int,
     sysAddressWidth: Int,
     tagBitsShift: Int,
-    wId: Int
+    wId: Int,
+    multiDecrease: Boolean = false
 ) extends Module {
 
   val io = IO(new ArgumentServerIO(taskWidth, counterWidth, sysAddressWidth, wId))
@@ -55,12 +56,10 @@ class ArgumentServer(
   private val memInflight = Reg(Vec(nInflight, new InflightArgument()))
 
   prefix("input") {
-    val addrMask = ((~(0.U(64.W))) << tagBitsShift.U)
-
     val arbInput = Module(new elastic.BasicArbiter(chiselTypeOf(io.connNetwork.bits), 2, chooserFn = elastic.Chooser.rr))
     new elastic.Transform(io.connNetwork, arbInput.io.sources(0)) {
       protected def onTransform: Unit =
-        out := (in & addrMask)
+        out := in(in.getWidth - 1, tagBitsShift) ## 0.U(tagBitsShift.W)
     }
 
     arbInput.io.select.nodeq()
@@ -96,8 +95,15 @@ class ArgumentServer(
     // Check Inflights
     new elastic.Arrival(elastic.SourceBuffer(arbInput.io.sink, bufferQueueDepth), elastic.SinkBuffer(dmuxInputDataSel)) {
       protected def onArrival: Unit = {
+        val inAddr = Wire(in.cloneType)
+        if (multiDecrease) {
+          inAddr := in(in.getWidth - counterWidth - 2, 0)
+        } else {
+          inAddr := in
+        }
+
         val matchList = memInflightValid.zip(memInflight).map { case (valid, inflight) =>
-          valid && (inflight.addr === in)
+          valid && (inflight.addr === inAddr)
         }
 
         val matchAddr = PriorityEncoder(matchList)
@@ -111,7 +117,17 @@ class ArgumentServer(
           // If there is any match, collapse operations if possible
           when(memInflight(matchAddr).stage === InflightStage.cnt_rd) {
             // Collapse two operations to one
-            memInflight(matchAddr).decrement := memInflight(matchAddr).decrement + 1.U
+            val decrement = Wire(memInflight(matchAddr).decrement.cloneType)
+            if (multiDecrease) {
+              when(in(in.getWidth - 1) === 1.U) {
+                decrement := in(in.getWidth - 2, in.getWidth - counterWidth - 1)
+              }.otherwise {
+                decrement := 1.U
+              }
+            } else {
+              decrement := 1.U
+            }
+            memInflight(matchAddr).decrement := memInflight(matchAddr).decrement + decrement
             drop()
           }.otherwise {
             // Wait for the previous operation to complete
@@ -125,10 +141,20 @@ class ArgumentServer(
           // If there are no matches, try to put it to the inflight operations. If it is full, wait for a previous operation to complete
           when(~isFull) {
             memInflightValid(firstEmpty) := true.B
-            memInflight(firstEmpty).addr := in
             memInflight(firstEmpty).stage := InflightStage.cnt_rd
-            memInflight(firstEmpty).decrement := 1.U
-            out.addr := in
+            if (multiDecrease) {
+              memInflight(firstEmpty).addr := inAddr
+              when(in(in.getWidth - 1) === 1.U) {
+                memInflight(firstEmpty).decrement := in(in.getWidth - 2, in.getWidth - counterWidth - 1)
+              }.otherwise {
+                memInflight(firstEmpty).decrement := 1.U
+              }
+              out.addr := inAddr
+            } else {
+              memInflight(firstEmpty).addr := in
+              memInflight(firstEmpty).decrement := 1.U
+              out.addr := in
+            }
             out.id := firstEmpty
             out.sel := 0.U
             accept()

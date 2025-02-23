@@ -13,7 +13,6 @@ import axi4.Ops._
 
 import axi4s.Casts._
 import AXIHelpers.AxisDataWidthConverter
-import AXIHelpers.AxiWriteBuffer
 
 class ArgumentNotifierIO(
     pePortWidth: Int,
@@ -91,14 +90,14 @@ class ArgumentNotifier(
   val axis_stream_converters_in =
     Seq.fill(peCount)(Module(new AxisDataWidthConverter(dataWidthIn = pePortWidth, dataWidthOut = addrWidth)))
   for (i <- 0 until peCount) {
-    axis_stream_converters_in(i).io.dataOut.lite <> argSide.io.connPE(i)
-    io_export.argIn(i).lite <> axis_stream_converters_in(i).io.dataIn.lite
+    axis_stream_converters_in(i).io.dataOut.asLite <> argSide.io.connPE(i)
+    io_export.argIn(i).asLite <> axis_stream_converters_in(i).io.dataIn.asLite
   }
 
   // DEBUG
   val argInCounter = Module(new Counter64(peCount))
   for (i <- 0 until peCount) {
-    argInCounter.io.signals(i) := (io_export.argIn(i).lite.valid & io_export.argIn(i).lite.ready)
+    argInCounter.io.signals(i) := (io_export.argIn(i).asLite.valid & io_export.argIn(i).asLite.ready)
   }
   dontTouch(argInCounter.io.counter)
   // DEBUG
