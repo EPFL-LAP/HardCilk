@@ -95,12 +95,13 @@ case class TaskDescriptor(
     isRoot: Boolean,
     isCont: Boolean,
     dynamicMemAlloc: Boolean,
+    taskId: Int,
     numProcessingElements: Int,
     widthTask: Int,
     widthMalloc: Int,
     sidesConfigs: List[SideConfig],
     mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
-    hasAXI: Boolean = true
+    hasAXI: Boolean = true,
 ) {
 
   assert(numProcessingElements > 0)
@@ -114,6 +115,8 @@ case class TaskDescriptor(
 
   // Assert that the peHDLPath exists on the filesystem
   assert(new java.io.File(peHDLPath).exists)
+
+  assert(taskId < 16, "Task ID must be less than 16 for Mfpga")
   
   if (isCont) {
 
@@ -180,6 +183,7 @@ case class FullSysGenDescriptor(
     val targetFrequency: Int = 250,
     val memorySizeSim: Int = 1, // in GB
     val fpgaModel: String = "ALVEO_U55C",
+    val fpgaCount: Int = 1
 ) {
   assert(isPow2(widthAddress) && widthAddress <= 64)
   assert(isPow2(widthContCounter) && widthContCounter <= 64)
@@ -220,6 +224,8 @@ case class FullSysGenDescriptor(
       j += numMemoryAllocatorServers
     }
   })
+
+  val fpgaIdentifierAddress = (j << 6)
 
   // Helper functions
   def selfSpawnedCount(task_name: String): Int = {
@@ -349,7 +355,12 @@ case class FullSysGenDescriptor(
   def getNumConfigPorts(): Int = {
     taskDescriptors.map(_.getNumServers("scheduler")).sum + taskDescriptors
       .map(_.getNumServers("memoryAllocator"))
-      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum
+      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum + 
+      {
+        if(fpgaCount > 1) 
+          1 // One management port to set the FPGA Index and FPGA count in system (Passed to Multi-FPGAs modules)
+        else 0
+      }
   }
 
   def getSystemAXIPortsNames(reduce_axi: Int): List[String] = {

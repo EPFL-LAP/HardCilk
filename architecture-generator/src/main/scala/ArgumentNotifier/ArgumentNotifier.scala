@@ -8,6 +8,7 @@ import Util._
 
 import chext.amba.axi4
 import chext.amba.axi4s
+import chext.elastic
 
 import axi4.Ops._
 
@@ -40,7 +41,9 @@ class ArgumentNotifier(
     argRouteServersNumber: Int,
     contCounterWidth: Int,
     pePortWidth: Int,
-    cutCount: Int
+    cutCount: Int,
+    fpgaCount: Int,
+    taskIndex: Int
 ) extends Module {
 
   val io_export = IO(new ArgumentNotifierIO(pePortWidth = pePortWidth, peCount = peCount))
@@ -62,12 +65,15 @@ class ArgumentNotifier(
   val serversList = List.tabulate(argRouteServersNumber)(n => n)
   val argRouteServers = serversList.zipWithIndex.map { case (tag, index) =>
     Module(
-      new ArgumentServer(
+      new ArgumentServerMfpgaWrapper(
         taskWidth = taskWidth,
         counterWidth = contCounterWidth,
         sysAddressWidth = addrWidth,
         tagBitsShift = log2Ceil(taskWidth / 8),
-        wId = 2
+        wId = 2,
+        multiDecrease = false,
+        fpgaCount = fpgaCount,
+        taskIndex = taskIndex
       )
     )
   }
@@ -94,6 +100,57 @@ class ArgumentNotifier(
     io_export.argIn(i).asLite <> axis_stream_converters_in(i).io.dataIn.asLite
   }
 
+
+  val master_arbiter =
+    if (fpgaCount > 1)
+      
+      Some(
+        Module(
+          new elastic.BasicArbiter(
+            chiselTypeOf(argRouteServers.head.io.m_axis_remote.get.asFull.bits),
+            argRouteServersNumber,
+            chooserFn = elastic.Chooser.rr
+          )
+        )
+      )
+    else None
+  
+  if(fpgaCount > 1) {
+   master_arbiter.get.io.select.nodeq()
+    when(master_arbiter.get.io.select.valid) {
+      master_arbiter.get.io.select.deq()
+    }
+  }
+
+  val m_axis_remote = if (fpgaCount > 1) Some(IO(axi4s.Master(argRouteServers.head.io.axisCfgTaskAndReq))) else None
+  val s_axis_remote = if (fpgaCount > 1) Some(IO(axi4s.Slave(argRouteServers.head.io.axisCfgTaskAndReq))) else None
+  val fpgaIndexInputReg = if (fpgaCount > 1) Some(Input(UInt(8.W))) else None
+  
+  if (fpgaCount > 1) {
+    // Connect the m_axis_remote to the master of the arbiter
+    m_axis_remote.get.asFull <> master_arbiter.get.io.sink
+
+
+    for (i <- 0 until argRouteServersNumber) {
+      // Connect the axi_mgmt port for all the argument servers
+      fpgaIndexInputReg.get <> argRouteServers(i).io.fpgaIndexInputReg.get
+
+      // Make the slave ports of the arbiter connect to the master ports of the argument servers
+      master_arbiter.get.io.sources(i) <> argRouteServers(i).io.m_axis_remote.get.asFull
+    }
+
+    new elastic.Fork(s_axis_remote.get.asFull) {
+      override def onFork(): Unit = {
+        elastic.Demux(
+          source = fork(in),
+          sinks =  argRouteServers map (_.io.s_axis_remote.get.asFull),
+          select = fork((in.data & "h3FFFFFFFF".U) >> log2Ceil(taskWidth / 8).U) // select the upper bits of the address
+        )
+      }
+    }
+
+  }
+
   // DEBUG
   val argInCounter = Module(new Counter64(peCount))
   for (i <- 0 until peCount) {
@@ -103,3 +160,30 @@ class ArgumentNotifier(
   // DEBUG
 
 }
+
+// object ArgumentNotifierEmitter extends App {
+//   emitVerilog(new ArgumentNotifier(64, 256, 16, 16, 2, 32, 64, 1, 4), Array("--target-dir", "output"))
+// }
+
+// class ArgumentNotifier(
+//     addrWidth: Int,
+//     taskWidth: Int,
+//     queueDepth: Int,
+//     peCount: Int,
+//     argRouteServersNumber: Int,
+//     contCounterWidth: Int,
+//     pePortWidth: Int,
+//     cutCount: Int,
+//     fpgaCount: Int
+// )
+
+// val wa = Wire(Irrevocable(UInt(1.W)))
+// val wb = Wire(Irrevocable(UInt(1.W)))
+
+// val wc = Wire(Irrevocable(UInt(2.W)))
+
+// new elastic.Join(wc) {
+//   override def onJoin(): Unit = {
+//       out := Cat(join(wa), join(wb))
+//   }
+// }

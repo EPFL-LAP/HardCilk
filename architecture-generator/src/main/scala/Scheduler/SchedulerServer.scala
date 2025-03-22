@@ -21,6 +21,8 @@ class SchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth
   val write_last = Output(UInt(1.W))
   val ntwDataUnitOccupancy = Input(Bool())
   val paused = Output(Bool())
+  val serveRemote = Output(Bool())         // A signal from the VSS to the RemoteTaskServer
+  val getTasksFromRemote = Output(Bool())  // A signal from the VSS to the RemoteTaskServer
 }
 
 // N.B: For correct execution
@@ -130,6 +132,14 @@ class SchedulerServer(
     networkCongested := false.B
   }.otherwise {
     networkCongested := networkCongested
+  }
+
+  when(networkCongested || currLen > 16.U) {
+    io.serveRemote := true.B && maxLength =/= 0.U && !rPause
+    io.getTasksFromRemote := false.B
+  }.otherwise {
+    io.serveRemote := false.B
+    io.getTasksFromRemote := true.B && maxLength =/= 0.U && !rPause
   }
 
   // transition of FSM

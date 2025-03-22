@@ -127,6 +127,13 @@ object CppHeaderTemplate {
        |        }
        |        return numSlaves;
        |    }
+       |    const int getFpgaCount(){
+       |        return ${descriptor.fpgaCount};
+       |    }
+       |
+       |    const int getFpgaIdAddress(){
+       |      return ${descriptor.fpgaIdentifierAddress};
+       |    }
        |
        |};
        |

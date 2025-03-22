@@ -2,8 +2,9 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_CXX_STANDARD 20)
 
 project(hardcilk)
+set(CMAKE_BUILD_TYPE Release)
 
-set(HC_VERILATOR_ARGS --no-timing --timescale 1ns/1ps -Wno-WIDTHEXPAND -Wno-STMTDLY -Wno-WIDTHTRUNC -Wno-WIDTHXZEXPAND -Wno-ASCRANGE -Wno-CASEINCOMPLETE -Wno-COMBDLY -Wno-PINMISSING --trace)
+set(HC_VERILATOR_ARGS --no-timing --no-std-waiver --timescale 1ns/1ps -Wno-WIDTHEXPAND -Wno-STMTDLY -Wno-WIDTHTRUNC -Wno-WIDTHXZEXPAND -Wno-ASCRANGE -Wno-CASEINCOMPLETE -Wno-COMBDLY -Wno-PINMISSING --trace)
 set(HC_SYSTEMC_COMPILE_DEFINITIONS VERILATED_TRACE_ENABLED)
 
 # add more variables
@@ -16,6 +17,8 @@ if(NOT DEFINED HC_ENABLE_SYSTEMC_TARGETS)
         "Enables SystemC targets, requires sctlm, verilator, and SystemC."
     )
 endif()
+
+set(HC_ENABLE_PCIE_TARGETS OFF)
 
 if(NOT DEFINED HC_ENABLE_PCIE_TARGETS)
     set(

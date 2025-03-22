@@ -55,6 +55,7 @@ public:
     ~hardCilkDriver();
     
     Memory *memory_;
+    FullSysGenDescriptor descriptor;
 
 protected:
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
@@ -78,7 +79,7 @@ protected:
 
     int waitPaused(uint64_t addr);
 
-    FullSysGenDescriptor descriptor;
+    
 
     const uint8_t alloc_server_rpause_shift = 0x0;
     const uint8_t alloc_server_raddr_shift = 0x8;

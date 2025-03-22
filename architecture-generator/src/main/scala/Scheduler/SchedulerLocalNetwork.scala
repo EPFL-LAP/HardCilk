@@ -1,9 +1,7 @@
 package Scheduler
 
 import chisel3._
-import Scheduler.SchedulerClient
 import Util._
-import Scheduler.SchedulerNetwork
 import scala.math._
 
 class SchedulerLocalNetworkIO(peCount: Int, vssCount: Int, vasCount: Int, taskWidth: Int, queueMaxLength: Int) extends Bundle {
@@ -40,7 +38,7 @@ class SchedulerLocalNetwork(
   // Instantiate the stealing network.
   val stealNet = Module(new SchedulerNetwork(taskWidth, peCount + vasCount + vssCount, vssIndicies))
 
-  var minLengthThresh = min(max((0.2 * queueMaxLength).asInstanceOf[Int], 1), 4)
+  var minLengthThresh = min(max((0.2 * queueMaxLength).asInstanceOf[Int], 1), 8)
 
   var maxLengthThresh = max((0.7 * queueMaxLength).asInstanceOf[Int], 1)
 

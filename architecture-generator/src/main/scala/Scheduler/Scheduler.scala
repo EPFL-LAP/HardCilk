@@ -12,8 +12,8 @@ import chext.amba.axi4s
 
 import axi4.Ops._
 import axi4s.Casts._
+import chext.elastic
 
-import axi4.full.components._
 
 class SchedulerPEIO(
     pePortWidth: Int,
@@ -49,7 +49,7 @@ class SchedulerAxiIO(
     axiMgmtCfg: axi4.Config,
     addrWidth: Int,
     taskWidth: Int,
-    vssAxiFullCfg: axi4.Config,
+    vssAxiFullCfg: axi4.Config
 ) extends Bundle {
   val nAxiPorts = vssCount
 
@@ -68,10 +68,14 @@ class Scheduler(
     argRouteServersNumber: Int,
     pePortWidth: Int,
     peType: String,
-    debug: Boolean
+    debug: Boolean,
+    fpgaCount: Int,
+    taskIndex: Int,
+    collectStats: Boolean = true
 ) extends Module {
 
-  val successiveNetworkConfig = (peCountGlobalTaskIn + argRouteServersNumber) > 0
+  val taskIndexV = taskIndex
+  val successiveNetworkConfig = (peCountGlobalTaskIn + argRouteServersNumber) > 1
 
   val vssAxiFullCfg = axi4.Config(
     wAddr = addrWidth,
@@ -83,7 +87,7 @@ class Scheduler(
   val stealNW_TQ = Module(
     new SchedulerLocalNetwork(
       peCount = peCount,
-      vssCount = virtualAddressServersNumber,
+      vssCount = if (fpgaCount > 1) (virtualAddressServersNumber + 2) else virtualAddressServersNumber,
       vasCount = argRouteServersNumber + peCountGlobalTaskIn,
       taskWidth = taskWidth,
       queueMaxLength = queueDepth,
@@ -127,7 +131,7 @@ class Scheduler(
       taskWidth = taskWidth,
       vssCount = virtualAddressServersNumber,
       axiMgmtCfg = virtualStealServers(0).regBlock.cfgAxi,
-      vssAxiFullCfg = vssAxiFullCfg,
+      vssAxiFullCfg = vssAxiFullCfg
     )
   )
 
@@ -153,8 +157,7 @@ class Scheduler(
 
   for (i <- 0 until virtualAddressServersNumber) {
     io_internal.axi_mgmt_vss(i) :=> virtualStealServers(i).io.axi_mgmt
-    virtualStealServers(i).io.ntwDataUnitOccupancy <> stealNW_TQ.io
-      .ntwDataUnitOccupancyVSS(i)
+    virtualStealServers(i).io.ntwDataUnitOccupancy <> stealNW_TQ.io.ntwDataUnitOccupancyVSS(i)
   }
 
   val vssRvm = Seq.fill(virtualAddressServersNumber)(
@@ -183,6 +186,34 @@ class Scheduler(
       }
     }
     // DEBUG
+  }
+
+  val numberOftasksToStealOrServe = 12
+
+  val remoteTaskServer =
+    if (fpgaCount > 1) Some(Module(new RemoteTaskServer(taskWidth, numberOftasksToStealOrServe, peCount, taskIndex))) else None
+
+  val fpgaCountInputReg =
+    if (fpgaCount > 1) Some(IO(chiselTypeOf(remoteTaskServer.get.io.fpgaCountInputReg)).suggestName("fpgaCountInputReg"))
+    else None
+  val fpgaIndexInputReg =
+    if (fpgaCount > 1) Some(IO(chiselTypeOf(remoteTaskServer.get.io.fpgaIndexInputReg)).suggestName("fpgaIndexInputReg"))
+    else None
+
+  val m_axis_remote =
+    if (fpgaCount > 1) Some(IO(chiselTypeOf(remoteTaskServer.get.io.m_axis_taskAndReq)).suggestName("m_axis_remote")) else None
+  val s_axis_remote =
+    if (fpgaCount > 1) Some(IO(chiselTypeOf(remoteTaskServer.get.io.s_axis_taskAndReq)).suggestName("s_axis_remote")) else None
+
+  if (fpgaCount > 1) {
+    remoteTaskServer.get.io.serveRemote := virtualStealServers(0).io.serveRemote
+    remoteTaskServer.get.io.getTasksFromRemote := virtualStealServers(0).io.getTasksFromRemote
+    remoteTaskServer.get.io.connNetwork_0 <> stealNW_TQ.io.connVSS(virtualAddressServersNumber)
+    remoteTaskServer.get.io.connNetwork_1 <> stealNW_TQ.io.connVSS(virtualAddressServersNumber + 1)
+    elastic.SinkBuffer(m_axis_remote.get.asFull) <> remoteTaskServer.get.io.m_axis_taskAndReq.asFull
+    s_axis_remote.get <> remoteTaskServer.get.io.s_axis_taskAndReq
+    remoteTaskServer.get.io.fpgaCountInputReg := fpgaCountInputReg.get
+    remoteTaskServer.get.io.fpgaIndexInputReg := fpgaIndexInputReg.get
   }
 
   axiFullPorts.zip(io_internal.vss_axi_full).foreach { case (vss, s_axi) => AxiWriteBuffer(vss) :=> s_axi }
@@ -235,15 +266,15 @@ class Scheduler(
       )
     else None
   for (i <- 0 until peCount) {
-    axis_stream_converters_out(i).io.dataIn.lite <> stealNW_TQ.io.connPE(i).pop
-    io_export.taskOut(i).lite <> axis_stream_converters_out(i).io.dataOut.lite
+    axis_stream_converters_out(i).io.dataIn.asLite <> stealNW_TQ.io.connPE(i).pop
+    io_export.taskOut(i).asLite <> axis_stream_converters_out(i).io.dataOut.asLite
     if (spawnsItself) {
-      axis_stream_converters_in.get(i).io.dataIn.lite <> io_export.taskIn
+      axis_stream_converters_in.get(i).io.dataIn.asLite <> io_export.taskIn
         .get(i)
-        .lite
+        .asLite
       stealNW_TQ.io
         .connPE(i)
-        .push <> axis_stream_converters_in.get(i).io.dataOut.lite
+        .push <> axis_stream_converters_in.get(i).io.dataOut.asLite
     } else {
       stealNW_TQ.io.connPE(i).push.valid := false.B
       stealNW_TQ.io.connPE(i).push.bits := DontCare
@@ -255,18 +286,18 @@ class Scheduler(
     if (spawnsItself) {
       val spawnTaskCounter = Module(new Counter64(peCount));
       for (i <- 0 until peCount) {
-        spawnTaskCounter.io.signals(i) := (io_export.taskIn.get(i).lite.fire)
-        when(io_export.taskIn.get(i).lite.fire) {
-          logTask("TaskIn", i, io_export.taskIn.get(i).lite.bits.asUInt)
+        spawnTaskCounter.io.signals(i) := (io_export.taskIn.get(i).asLite.fire)
+        when(io_export.taskIn.get(i).asLite.fire) {
+          logTask("TaskIn", i, io_export.taskIn.get(i).asLite.bits.asUInt)
         }
       }
     }
 
     val getExecuteTaskCounter = Module(new Counter64(peCount));
     for (i <- 0 until peCount) {
-      getExecuteTaskCounter.io.signals(i) := (io_export.taskOut(i).lite.fire)
-      when(io_export.taskOut(i).lite.fire) {
-        logTask("TaskOut", i, io_export.taskOut(i).lite.bits.asUInt)
+      getExecuteTaskCounter.io.signals(i) := (io_export.taskOut(i).asLite.fire)
+      when(io_export.taskOut(i).asLite.fire) {
+        logTask("TaskOut", i, io_export.taskOut(i).asLite.bits.asUInt)
       }
     }
 
@@ -305,14 +336,14 @@ class Scheduler(
     for (i <- argRouteServersNumber until (argRouteServersNumber + peCountGlobalTaskIn)) {
       axis_stream_converters_in_global(
         i - argRouteServersNumber
-      ).io.dataIn.lite <> io_export.taskInGlobal
+      ).io.dataIn.asLite <> io_export.taskInGlobal
         .get(i - argRouteServersNumber)
-        .lite
+        .asLite
       globalsTaskBuffers(
         i - argRouteServersNumber
       ).io.in <> axis_stream_converters_in_global(
         i - argRouteServersNumber
-      ).io.dataOut.lite
+      ).io.dataOut.asLite
       stealNW_TQ.io.connVAS(i) <> globalsTaskBuffers(
         i - argRouteServersNumber
       ).io.connStealNtw
@@ -323,14 +354,79 @@ class Scheduler(
       val globalTaskInCounter = Module(new Counter64(peCountGlobalTaskIn))
       for (i <- 0 until peCountGlobalTaskIn) {
         globalTaskInCounter.io.signals(i) :=
-          io_export.taskInGlobal.get(i).lite.fire
-        when(io_export.taskInGlobal.get(i).lite.fire) {
-          logTask("GlobalTaskIn", i, io_export.taskInGlobal.get(i).lite.bits.asUInt)
+          io_export.taskInGlobal.get(i).asLite.fire
+        when(io_export.taskInGlobal.get(i).asLite.fire) {
+          logTask("GlobalTaskIn", i, io_export.taskInGlobal.get(i).asLite.bits.asUInt)
         }
       }
       dontTouch(globalTaskInCounter.io.counter)
     }
     // DEBUG
 
+    // If collectStats is true, create two counters, one for the number of tasks taken in and one for the number of tasks given out
+    // Log the two counters to the output each 1000 cycles
+
   }
+
+
+  if (collectStats) {
+    val taskInCounter = if (spawnsItself) Some(Module(new Counter64(peCount))) else None
+    val taskOutCounter = Module(new Counter64(peCount))
+
+    for (i <- 0 until peCount) {
+      if (spawnsItself) {
+        taskInCounter.get.io.signals(i) := io_export.taskIn.get(i).asLite.fire
+      }
+      taskOutCounter.io.signals(i) := io_export.taskOut(i).asLite.fire
+    }
+
+    val cycleCounter = RegInit(0.U(128.W))
+    val previousTaskInCounter = if(spawnsItself) Some(RegInit(0.U(128.W))) else None
+    val previousTaskOutCounter = RegInit(0.U(128.W))
+    cycleCounter := cycleCounter + 1.U
+
+    // when(cycleCounter % 1000.U === 0.U && (previousTaskOutCounter =/= taskOutCounter.io.counter || (if(spawnsItself) taskInCounter.get.io.counter =/= previousTaskInCounter.get else 0.B))) {
+    //   // Also log fpga Index
+    //   // print only if one of the values changes
+    //   previousTaskOutCounter := taskOutCounter.io.counter
+    //   if(spawnsItself) previousTaskInCounter.get := taskInCounter.get.io.counter
+
+
+    //   if (fpgaCount > 1) printf("fpgaIndex: %d\n", fpgaIndexInputReg.get)
+    //   if (spawnsItself) printf("  TaskIn: %d\n", taskInCounter.get.io.counter)
+    //   printf("  TaskOut: %d\n", taskOutCounter.io.counter)
+    //   // print the value of the cycle counter * 2 in nano seconds
+    //   printf("  Time ns: %d\n", cycleCounter * 2.U)
+
+    // }
+    
+    if (spawnsItself) dontTouch(taskInCounter.get.io.counter)
+    dontTouch(taskOutCounter.io.counter)
+    dontTouch(cycleCounter)
+  }
+
+
+  // expose the task counters to the MFPGA module to be used for logging
+
 }
+
+object SchedulerEmitter extends App {
+  emitVerilog(new Scheduler(64, 256, 16, 16, 1, true, 0, 0, 256, "PE", false, 2, 0), Array("--target-dir", "output"))
+}
+
+//
+
+// class Scheduler(
+//     addrWidth: Int,
+//     taskWidth: Int,
+//     queueDepth: Int,
+//     peCount: Int,
+//     virtualAddressServersNumber: Int,
+//     spawnsItself: Boolean,
+//     peCountGlobalTaskIn: Int,
+//     argRouteServersNumber: Int,
+//     pePortWidth: Int,
+//     peType: String,
+//     debug: Boolean,
+//     fpgaCount: Int
+// )

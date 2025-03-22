@@ -2,7 +2,6 @@ package TclResources
 
 import Descriptors._
 import scala.collection.mutable.Map
-import scala.util.control.Breaks._
 
 object TclGeneratorMemPEs {
   def generate(fullSysGenDescriptor: FullSysGenDescriptor, tclFileDirectory: String, reduce_axi: Int) = {
@@ -22,7 +21,7 @@ object TclGeneratorMemPEs {
     tclWriteln(TclGeneralConfigs.getPEsTcl(fullSysGenDescriptor))
 
     // Get the stats of the memory connections
-    val memConnectionsStats = fullSysGenDescriptor.getMemoryConnectionsStats(reduce_axi)
+    //val memConnectionsStats = fullSysGenDescriptor.getMemoryConnectionsStats(reduce_axi)
 
     // Create and configure the xdma
     tclWriteln(TclGeneralConfigs.getXdmaConfigTclSyntax())

@@ -18,14 +18,16 @@
 */
 
 
-template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolean function that is applied to an int64  */ bool (*condition)(int32_t) = defaultDoneCondition){
+template <typename T> int initSystem(std::vector<T> base_task_data, const bool no_base_task = false, /** A boolean function that is applied to an int64  */ bool (*condition)(int32_t) = defaultDoneCondition){
 
     // set the boolean function in the class
     condition_ = condition;
 
     // Set the return addresses of the driver
-    for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
-        setReturnAddr(taskData->cont);
+    if(!no_base_task){
+        for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
+            setReturnAddr(taskData->cont);
+        }
     }
 
     // Initialize the different servers
@@ -39,9 +41,9 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Allocate memory for the scheduler server
                 uint64_t addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 512);
                 
-                // Write zeros to the allocated memory 
-                std::vector <uint8_t> zeros(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 0);
-                memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(zeros.data()), zeros.size());
+                // Write zeros to the allocated memory (ENABLE THIS IF NOT SIMULATION) 
+                //std::vector <uint8_t> zeros(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 0);
+                //memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(zeros.data()), zeros.size());
 
                 // Initialize the scheduler server information
                 waitPaused(*base_address + scheduler_server_rpause_shift);
@@ -64,7 +66,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Log also the start and the end of the data address addr
                 printf("        Data address start: 0x%lx, end: 0x%lx\n", addr, addr + taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8);
             }
-            if(taskDescriptor.isRoot){
+            if(taskDescriptor.isRoot && !no_base_task){
                 // Read the address registered at the first virtual server of the task and write the data to that address
                 uint64_t data_queue_address = memory_->readReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_raddr_shift);
                 printf("        Writing root task data to the scheduler server with data at address %lx\n", data_queue_address);

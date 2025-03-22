@@ -1,29 +1,42 @@
 {
-    "fullSysGenName": "paper_exp1",
-    "taskList": [
+    "name": "paper_exp1",
+    "taskDescriptors": [
         {
-            "isRoot": true,
-            "name": "task",
-            "type": "complete",
-            "argBitSize": 64,
-            "peCount": 8,
-            "virtualStealServersNumber": 1,
-            "stealQueueSize": 32,
-            "virtualStealQueueSize": 16384,
-            "continuationServersNumber": 0,
-            "continuationQueueSize": 0,
-            "virtualContinuationQueueSize": 0,
-            "argRouteServersNumber": 0, 
-            "argRouteServersQueueSize": 0
+            "name": "paper_exp1_task",
+            "peHDLPath": "/home/shahawy/vitis_testing/paper_exp1/paper_exp1/paper_exp1/hls/syn/verilog",
+            "isRoot": true,            
+            "isCont": false,
+            "dynamicMemAlloc": false,
+            "taskId": 0,
+            
+            "numProcessingElements": 4,
+            "widthTask": 128,
+            "widthMalloc": 0,
+
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 2,
+                    "capacityVirtualQueue": 10000000,
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 128
+                }
+            ]
         }
     ],
     "spawnList": {
-        "task": ["task"]
+        "paper_exp1_task": ["paper_exp1_task"]
     },
     "spawnNextList": {
     },
     "sendArgumentList": {
     },
-    "systemAddressWidth":64,
-    "continuationCounterWidth":32
+    "mallocList": {
+    },
+    "widthAddress":64,
+    "widthContCounter":32,
+    "memorySizeSim": 16,
+    "targetFrequency": 250,
+    "fpgaModel": "ALVEO_U55C",
+    "fpgaCount": 3
 }

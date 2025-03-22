@@ -8,11 +8,14 @@ val chiselVersion = "6.0.0"
 val chiseltestVersion = "6.0-SNAPSHOT"
 val circeVersion = "0.14.1"
 
+val firrtlVersion = "6.0-SNAPSHOT"
+
 lazy val root = (project in file("."))
   .settings(
     name := "hardcilk",
     libraryDependencies ++= Seq(
       "org.chipsalliance" %% "chisel" % chiselVersion,
+      "edu.berkeley.cs" %% "firrtl2" % firrtlVersion,
       "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
       "com.typesafe.play" %% "play-json" % "2.9.2",
       "hdlstuff" %% "chext" % "0.1.1",

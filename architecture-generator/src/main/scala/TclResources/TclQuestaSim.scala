@@ -21,7 +21,7 @@ object TclQuestaSim {
     tclWriteln(TclGeneralConfigs.getPEsTcl(fullSysGenDescriptor))
 
     // Get the stats of the memory connections
-    val memConnectionsStats = fullSysGenDescriptor.getMemoryConnectionsStats(reduce_axi)
+    //val memConnectionsStats = fullSysGenDescriptor.getMemoryConnectionsStats(reduce_axi)
 
     // Create and configure the axi verfication IPs to replace the xdma
     tclWriteln(TclGeneralConfigs.getAxiVipConfig())

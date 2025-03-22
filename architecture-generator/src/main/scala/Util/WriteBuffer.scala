@@ -3,14 +3,12 @@ package Util
 import chisel3._
 import chisel3.util._
 
-import chext.elastic
 import chext.elastic.ConnectOp._
 
 import chext.amba.axi4
 import chext.amba.axi4s
 import chext.amba.axi4.Ops._
 import chext.amba.axi4s.Casts._
-import chext.bundles.Bundle2
 
 class WriteBufferConfig(
     val wAddr: Int,

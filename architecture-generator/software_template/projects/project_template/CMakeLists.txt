@@ -16,7 +16,7 @@ if(HC_ENABLE_SYSTEMC_TARGETS)
     hdlscw(
         TARGET ${HC_TARGET_NAME}_systemc
         HDLINFO hdl/${HC_TARGET_NAME}.hdlinfo.json
-        ARGS -i sctlm
+        ARGS -r ${CMAKE_CURRENT_SOURCE_DIR}/protocols.py
     )
 endif()
 

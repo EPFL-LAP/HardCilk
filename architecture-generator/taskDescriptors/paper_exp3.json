@@ -1,44 +1,58 @@
 {
-    "fullSysGenName": "paper_exp3",
-    "taskList": [
-        {
-            "isRoot": true,
-            "name": "task1Exp3",
-            "type": "complete",
-            "argBitSize": 64,
-            "peCount": 12,
-            "virtualStealServersNumber": 2,
-            "stealQueueSize": 32,
-            "virtualStealQueueSize": 10000000,
-            "continuationServersNumber": 0,
-            "continuationQueueSize": 0,
-            "virtualContinuationQueueSize": 0,
-            "argRouteServersNumber": 0, 
-            "argRouteServersQueueSize": 0
-        },
-        {
-            "isRoot": false,
-            "name": "task2Exp3",
-            "type": "complete",
-            "argBitSize": 32,
-            "peCount": 12,
-            "virtualStealServersNumber": 2,
-            "stealQueueSize": 32,
-            "virtualStealQueueSize": 10000000,
-            "continuationServersNumber": 0,
-            "continuationQueueSize": 0,
-            "virtualContinuationQueueSize": 0,
-            "argRouteServersNumber": 0, 
-            "argRouteServersQueueSize": 0
-        }
-    ],
-    "spawnList": {
-        "task1Exp3": ["task1Exp3","task2Exp3"]
-    },
-    "spawnNextList": {
-    },
-    "sendArgumentList": {
-    },
-    "systemAddressWidth":64,
-    "continuationCounterWidth":32
+  "name": "paper_exp3",
+  "taskDescriptors": [
+      {
+          "name": "paper_exp3_task",
+          "peHDLPath": "/home/shahawy/vitis_testing/paper_exp1/paper_exp1/paper_exp1/hls/syn/verilog",
+          "isRoot": true,            
+          "isCont": false,
+          "dynamicMemAlloc": false,
+          "taskId": 0,
+          
+          "numProcessingElements": 8,
+          "widthTask": 128,
+          "widthMalloc": 0,
+
+          "sidesConfigs": [
+              {
+                  "sideType": "scheduler",
+                  "numVirtualServers": 1,
+                  "capacityVirtualQueue": 10000000,
+                  "capacityPhysicalQueue": 32,
+                  "portWidth": 128
+              },
+              {
+                  "sideType": "allocator",
+                  "numVirtualServers": 4,
+                  "capacityVirtualQueue": 10000000,
+                  "capacityPhysicalQueue": 32,
+                  "portWidth": 64
+              },
+              {
+                  "sideType": "argumentNotifier",
+                  "numVirtualServers": 4,
+                  "capacityVirtualQueue": 8192,
+                  "capacityPhysicalQueue": 32,
+                  "portWidth": 64
+              }
+          ]
+      }
+  ],
+  "spawnList": {
+      "paper_exp3_task": ["paper_exp3_task"]
+  },
+  "spawnNextList": {
+      "paper_exp3_task": ["paper_exp3_task"]
+  },
+  "sendArgumentList": {
+      "paper_exp3_task": ["paper_exp3_task"]
+  },
+  "mallocList": {
+  },
+  "widthAddress":64,
+  "widthContCounter":32,
+  "memorySizeSim": 16,
+  "targetFrequency": 250,
+  "fpgaModel": "ALVEO_U55C",
+  "fpgaCount": 3
 }
