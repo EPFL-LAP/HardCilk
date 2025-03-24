@@ -17,7 +17,6 @@ class ArgumentServerMfpgaWrapperIO(
     counterWidth: Int,
     sysAddressWidth: Int,
     wId: Int,
-    regBlock: Option[RegisterBlock],
     fpgaCount: Int
 ) extends Bundle {
   val connNetwork = Flipped(DecoupledIO(UInt(sysAddressWidth.W)))
@@ -62,9 +61,8 @@ class ArgumentServerMfpgaWrapper(
     )
   )
 
-  val regBlock = if (fpgaCount > 1) Some(new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)) else None
 
-  val io = IO(new ArgumentServerMfpgaWrapperIO(taskWidth, counterWidth, sysAddressWidth, wId, regBlock, fpgaCount))
+  val io = IO(new ArgumentServerMfpgaWrapperIO(taskWidth, counterWidth, sysAddressWidth, wId, fpgaCount))
 
   // Connect the ArgumentServer to the ArgumentServerMfpgaWrapper
   argServer.io.m_axi_counter <> io.m_axi_counter
@@ -116,12 +114,15 @@ class ArgumentServerMfpgaWrapper(
     // connect the deq of the remoteQSend to m_axis_remote
     remoteQSend.io.deq.ready := io.m_axis_remote.get.TREADY 
     io.m_axis_remote.get.TVALID := remoteQSend.io.deq.valid
-    io.m_axis_remote.get.TDATA := remoteQSend.io.deq.bits
+    io.m_axis_remote.get.TDATA := Cat(Fill(13, 0.U(1.W)), 1.U(1.W), Fill(512 - 14 - 64, 0.U(1.W)) ,remoteQSend.io.deq.bits)
     io.m_axis_remote.get.TDEST.get := remoteQSend.io.deq.bits(sysAddressWidth - 1, 60)
 
     // When connNetwork is valid, check the upper 8 bits of the address
     // If it is equal to rFPGAIndex, then it is a local address, so enqueue it to localQ
     // else enqueue it to remoteQSend and set TDEST to the value of the 8 bits
+
+
+
 
 
     new elastic.Fork(io.connNetwork) {
@@ -134,14 +135,6 @@ class ArgumentServerMfpgaWrapper(
       }
     }
 
-    // Reply to axi management operations.
-    when(regBlock.get.rdReq) {
-      regBlock.get.rdOk()
-    }
-
-    when(regBlock.get.wrReq) {
-      regBlock.get.wrOk()
-    }
   }
 
 }

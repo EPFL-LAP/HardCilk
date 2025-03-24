@@ -3,7 +3,7 @@ import Descriptors._
 import java.io.PrintWriter
 
 object CppHeaderTemplate {
-  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String, reduceAxi: Int): Unit = {
+  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String): Unit = {
     // Generate TaskDescriptor class
     val taskDescriptorClass =
       s"""
@@ -116,7 +116,7 @@ object CppHeaderTemplate {
        |    };
        |    int getNumberAxiMasters() const
        |    {
-       |        return ${reduceAxi};
+       |        return ${descriptor.getAxiMastersCount()};
        |    }
        |    int getNumberPEsAXISlaves() const
        |    {

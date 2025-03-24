@@ -3,34 +3,34 @@
   "taskDescriptors": [
       {
           "name": "paper_exp3_task",
-          "peHDLPath": "/home/shahawy/vitis_testing/paper_exp1/paper_exp1/paper_exp1/hls/syn/verilog",
+          "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp3",
           "isRoot": true,            
-          "isCont": false,
+          "isCont": true,
           "dynamicMemAlloc": false,
           "taskId": 0,
           
-          "numProcessingElements": 8,
-          "widthTask": 128,
+          "numProcessingElements": 4,
+          "widthTask": 256,
           "widthMalloc": 0,
 
           "sidesConfigs": [
               {
                   "sideType": "scheduler",
                   "numVirtualServers": 1,
-                  "capacityVirtualQueue": 10000000,
+                  "capacityVirtualQueue": 100000,
                   "capacityPhysicalQueue": 32,
-                  "portWidth": 128
+                  "portWidth": 256
               },
               {
                   "sideType": "allocator",
-                  "numVirtualServers": 4,
-                  "capacityVirtualQueue": 10000000,
+                  "numVirtualServers": 1,
+                  "capacityVirtualQueue": 100000,
                   "capacityPhysicalQueue": 32,
                   "portWidth": 64
               },
               {
                   "sideType": "argumentNotifier",
-                  "numVirtualServers": 4,
+                  "numVirtualServers": 2,
                   "capacityVirtualQueue": 8192,
                   "capacityPhysicalQueue": 32,
                   "portWidth": 64
@@ -54,5 +54,5 @@
   "memorySizeSim": 16,
   "targetFrequency": 250,
   "fpgaModel": "ALVEO_U55C",
-  "fpgaCount": 3
+  "fpgaCount": 1
 }

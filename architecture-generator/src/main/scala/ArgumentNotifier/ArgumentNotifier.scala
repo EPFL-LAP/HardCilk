@@ -124,7 +124,7 @@ class ArgumentNotifier(
 
   val m_axis_remote = if (fpgaCount > 1) Some(IO(axi4s.Master(argRouteServers.head.io.axisCfgTaskAndReq))) else None
   val s_axis_remote = if (fpgaCount > 1) Some(IO(axi4s.Slave(argRouteServers.head.io.axisCfgTaskAndReq))) else None
-  val fpgaIndexInputReg = if (fpgaCount > 1) Some(Input(UInt(8.W))) else None
+  val fpgaIndexInputReg = if (fpgaCount > 1) Some(IO(Input(UInt(8.W)))) else None
   
   if (fpgaCount > 1) {
     // Connect the m_axis_remote to the master of the arbiter

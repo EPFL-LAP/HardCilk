@@ -75,7 +75,7 @@ class Scheduler(
 ) extends Module {
 
   val taskIndexV = taskIndex
-  val successiveNetworkConfig = (peCountGlobalTaskIn + argRouteServersNumber) > 1
+  val successiveNetworkConfig = false //(peCountGlobalTaskIn + argRouteServersNumber) > 1
 
   val vssAxiFullCfg = axi4.Config(
     wAddr = addrWidth,
@@ -99,7 +99,7 @@ class Scheduler(
   )
 
   val contentionThreshold_ = (max((peCount + argRouteServersNumber + peCountGlobalTaskIn) / 1.2, 1)).toInt
-  val contentionDelta_ = if (contentionThreshold_ > 4) 1 else 0
+  val contentionDelta_ = 0 // if (contentionThreshold_ > 4) 1 else 0
 
   val virtualStealServers = Seq.fill(virtualAddressServersNumber)(
     Module(
@@ -188,7 +188,7 @@ class Scheduler(
     // DEBUG
   }
 
-  val numberOftasksToStealOrServe = 12
+  val numberOftasksToStealOrServe = 128
 
   val remoteTaskServer =
     if (fpgaCount > 1) Some(Module(new RemoteTaskServer(taskWidth, numberOftasksToStealOrServe, peCount, taskIndex))) else None

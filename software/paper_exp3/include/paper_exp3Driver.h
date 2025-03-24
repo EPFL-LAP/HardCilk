@@ -9,38 +9,50 @@
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
 #define BASE_DEPTH 2
+#define SERIAL_TASKS 2
 #define BRANCH_FACTOR 6
 #define INIT_COUNT 6
+#define DELAY 8
 
-struct task
-{
-    uint32_t delay;
+struct task {
+    uint32_t counter;
     uint32_t depth;
+    uint32_t delay;
     uint32_t branchFactor;
-    uint32_t cont; // fake cont
-};
+    uint32_t serialTasks;
+    uint32_t index;
+    uint64_t cont;
+  };
+
 
 int remainingTasks;
 double T1 = 0; 
 int nodesProcessed = 0;
 
-class paper_exp1Driver : public mFpgaHardCilkDriver
+
+
+
+class paper_exp3Driver : public mFpgaHardCilkDriver
 {
 public:
-    paper_exp1Driver(std::vector<Memory *> memories) : mFpgaHardCilkDriver(memories) {}
+    paper_exp3Driver(std::vector<Memory *> memories) : mFpgaHardCilkDriver(memories) {}
 
     int run_test_bench_mFpga() override { return 0; }
 
     int run_test_bench_mFpga(uint64_t &taskCreatedCounter, uint64_t &taskConsumedCounter)
     {
-        task task_args_0 = {0, 0, 0, 0};
+        task task_args_0 = {0, 0, 0, 0, 0, 0, 0};
         uint64_t addr = allocateMemFPGA_Mfpga(sizeof(task_args_0), 512);
         // uint64_t addr= 0x0;
 
         memories_[0]->copyToDevice(addr, (uint8_t *)&task_args_0, sizeof(task_args_0));
 
         task_args_0.branchFactor = BRANCH_FACTOR;
-        task_args_0.delay = 32; // delay in cycles, a cycle is 2ns
+        task_args_0.delay = DELAY; // delay in cycles, a cycle is 2ns
+        task_args_0.serialTasks = SERIAL_TASKS;
+        task_args_0.cont = addr;
+        task_args_0.index = 0;
+        task_args_0.counter = 0;    
 
         std::vector<task> base_task_data;
 
@@ -50,8 +62,6 @@ public:
             base_task_data.push_back(task_args_0);
         }
 
-        remainingTasks = INIT_COUNT;
-
         initSystemMfpga(base_task_data);
 
         startSystemMfpga();
@@ -59,6 +69,9 @@ public:
         auto T_START = sc_time_stamp();
         // Log T_START
         std::cout << "T_START: " << T_START << std::endl;
+
+
+        remainingTasks = INIT_COUNT;
 
         const int logFreq = 10000;
         while (remainingTasks > 0)
@@ -70,20 +83,16 @@ public:
 
         }
 
-
-        
-
         auto T_END = sc_time_stamp();
-
         // Log T_END
         std::cout << "T_END: " << T_END << std::endl;
+
 
 
         // Calculate T_n in nanoseconds
         FullSysGenDescriptor desc;
         int totalPEs = desc.taskDescriptors[0].numProcessingElements * desc.getFpgaCount();
 
-        
         double T_n_perfect = T1 / totalPEs;
         double T_n = (T_END - T_START).to_seconds();
 

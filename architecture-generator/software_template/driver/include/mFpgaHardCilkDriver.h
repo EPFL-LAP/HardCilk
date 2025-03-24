@@ -47,16 +47,20 @@ public:
         auto descriptor = drivers[0]->descriptor;
 
         // loop over the memorties and write the fpga Index and the fpga count in the management registers
-        for(auto memory = memories_.begin(); memory != memories_.end(); memory++){
-            (*memory)->writeReg64(descriptor.getFpgaIdAddress() + fpga_count_shift, memories_.size());
-            (*memory)->writeReg64(descriptor.getFpgaIdAddress() + fpga_id_shift, memory - memories_.begin());
+        if(descriptor.getFpgaCount() > 1){
+            for(auto memory = memories_.begin(); memory != memories_.end(); memory++){
+                (*memory)->writeReg64(descriptor.getFpgaIdAddress() + fpga_count_shift, memories_.size());
+                (*memory)->writeReg64(descriptor.getFpgaIdAddress() + fpga_id_shift, memory - memories_.begin());
+            }
         }
 
 
         auto driver_0 = drivers[0];
-        driver_0->initSystem(base_task_data);
+        driver_0->initSystem(base_task_data, 0);
+        int fpgaId = 1;
         for(auto driver = drivers.begin() + 1; driver != drivers.end(); driver++){
-            (*driver)->initSystem(base_task_data, true); // no base tasks for the rest of the drivers
+            (*driver)->initSystem(base_task_data, fpgaId, 0, true); // no base tasks for the rest of the drivers
+            fpgaId++;
         }
         return 0;    
     }

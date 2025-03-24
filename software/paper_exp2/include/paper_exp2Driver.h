@@ -10,7 +10,11 @@
 
 #define BASE_DEPTH 2
 #define BRANCH_FACTOR 6
-#define INIT_COUNT 8
+#define INIT_COUNT 6
+
+int remainingTasks;
+double T1 = 0; 
+int nodesProcessed = 0;
 
 
 struct task_0 {
@@ -41,7 +45,7 @@ public:
                                sizeof(task_args_0));
 
     task_args_0.branchFactor = BRANCH_FACTOR;
-    task_args_0.delay = 8; // delay in cycles, a cycle is 2ns
+    task_args_0.delay = 32; // delay in cycles, a cycle is 2ns
 
     std::vector<task_0> base_task_data;
 
@@ -50,6 +54,8 @@ public:
       base_task_data.push_back(task_args_0);
     }
 
+    remainingTasks = INIT_COUNT;
+
     initSystemMfpga(base_task_data);
 
     startSystemMfpga();
@@ -57,56 +63,31 @@ public:
     auto T_START = sc_time_stamp();
     // Log T_START
     std::cout << "T_START: " << T_START << std::endl;
-    int counter = 3;
-    uint64_t taskConsumedHistory = 0;
-    while (true) {
-      if (taskConsumedCounter - taskConsumedHistory > 1000) {
-        // Log only each 50000 tasks
 
-        taskConsumedHistory = taskConsumedCounter;
-        // Log taskConsumedCounter
-        std::cout << "taskConsumedCounter: " << taskConsumedCounter
-                  << std::endl;
+    const int logFreq = 10000;
+    while (remainingTasks > 0)
+    {
+        wait(task_args_0.delay * 2, SC_NS);
+        if(nodesProcessed % logFreq == 0){
+            std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
+        }
 
-        // Log taskCreatedCounter
-        std::cout << "taskCreatedCounter: " << taskCreatedCounter << std::endl;
-      }
-
-      wait(task_args_0.delay * 4, SC_NS);
-
-      if (taskConsumedCounter == (taskCreatedCounter*2 + INIT_COUNT)) {
-        counter--;
-      }
-      if (counter == 0) {
-        break;
-      }
     }
-    // Log taskConsumedCounter
-    std::cout << "taskConsumedCounter: " << taskConsumedCounter << std::endl;
 
-    // Log taskCreatedCounter
-    std::cout << "taskCreatedCounter: " << taskCreatedCounter << std::endl;
-
-    wait(task_args_0.delay * 2, SC_NS);
 
     auto T_END = sc_time_stamp();
 
     // Log T_END
     std::cout << "T_END: " << T_END << std::endl;
 
-    // Log taskConsumedCounter
-    std::cout << "taskConsumedCounter: " << taskConsumedCounter << std::endl;
-
-    // Log taskCreatedCounter
-    std::cout << "taskCreatedCounter: " << taskCreatedCounter << std::endl;
+ 
 
     // Calculate T_n in nanoseconds
     FullSysGenDescriptor desc;
     int totalPEs =
         desc.taskDescriptors[0].numProcessingElements * desc.getFpgaCount();
 
-    double T_n_perfect =
-        (taskConsumedCounter * task_args_0.delay * 2 * 1e-9) / totalPEs;
+    double T_n_perfect = T1 / totalPEs;
     double T_n = (T_END - T_START).to_seconds();
 
     // Log T_n_perfect

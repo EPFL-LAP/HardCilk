@@ -3,13 +3,13 @@
     "taskDescriptors": [
         {
             "name": "paper_exp2_task0",
-            "peHDLPath": "/home/shahawy/vitis_testing/paper_exp2/paper_exp2_task0/paper_exp2_task0/hls/syn/verilog",
+            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp2",
             "isRoot": true,            
             "isCont": false,
             "dynamicMemAlloc": false,
             "taskId": 0,
             
-            "numProcessingElements": 3,
+            "numProcessingElements": 128,
             "widthTask": 128,
             "widthMalloc": 0,
 
@@ -25,13 +25,13 @@
         },
         {
             "name": "paper_exp2_task1",
-            "peHDLPath": "/home/shahawy/vitis_testing/paper_exp2/paper_exp2_task1/paper_exp2_task1/hls/syn/verilog",
+            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp2",
             "isRoot": false,            
             "isCont": false,
             "dynamicMemAlloc": false,
             "taskId": 1,
             
-            "numProcessingElements": 3,
+            "numProcessingElements": 128,
             "widthTask": 32,
             "widthMalloc": 0,
 
@@ -61,5 +61,5 @@
     "memorySizeSim": 16,
     "targetFrequency": 250,
     "fpgaModel": "ALVEO_U55C",
-    "fpgaCount": 3
+    "fpgaCount": 1
 }

@@ -238,6 +238,20 @@ case class FullSysGenDescriptor(
     }
   }
 
+  def getAxiMastersCount(): Int = {
+    var count = taskDescriptors.map(_.getNumServers("scheduler")).sum + 
+    taskDescriptors.map(_.getNumServers("memoryAllocator")).sum + 
+    taskDescriptors.map(_.getNumServers("allocator")).sum +
+    (taskDescriptors.map(_.getNumServers("argumentNotifier")).sum * 2)
+
+    // if a task has in the spawn_next list, we add masters equal to the number of processing elements of that task
+    spawnNextList.keys.foreach { task_name =>
+      count += taskDescriptors.find(_.name == task_name).map(_.numProcessingElements).getOrElse(0)
+    }
+
+    count
+  }
+
   def getPortCount(port_type: String, task_name: String): Int = {
     // Get the correct map based on the port_type
     val map = port_type match {

@@ -79,7 +79,8 @@ protected:
 
     int waitPaused(uint64_t addr);
 
-    
+    int fpgaId_ = 0;
+    int taskId_ = 0;
 
     const uint8_t alloc_server_rpause_shift = 0x0;
     const uint8_t alloc_server_raddr_shift = 0x8;

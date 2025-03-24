@@ -18,10 +18,12 @@
 */
 
 
-template <typename T> int initSystem(std::vector<T> base_task_data, const bool no_base_task = false, /** A boolean function that is applied to an int64  */ bool (*condition)(int32_t) = defaultDoneCondition){
+template <typename T> int initSystem(std::vector<T> base_task_data, const int fpgaId = 0, const int taskId = 0, const bool no_base_task = false, /** A boolean function that is applied to an int64  */ bool (*condition)(int32_t) = defaultDoneCondition){
 
     // set the boolean function in the class
     condition_ = condition;
+    fpgaId_ = fpgaId;
+    taskId_ = taskId;
 
     // Set the return addresses of the driver
     if(!no_base_task){
@@ -90,9 +92,14 @@ template <typename T> int initSystem(std::vector<T> base_task_data, const bool n
                 uint64_t continuation_tasks_holder_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, 512);
                 uint64_t continuation_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, 512);
                 
+                
+                //uint64_t fpgaId_add_value = (bigValue & ~(0xFULL << 60)) | (static_cast<uint64_t>(smallValue) << 60);
+
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
                 std::vector<uint64_t> addresses;
                 for(auto i = 0; i < taskDescriptor.getCapacityVirtualQueue("allocator"); i++){
+                    uint64_t addr = continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8;
+                    addr = (addr & ~(0xFULL << 60)) | (static_cast<uint64_t>(fpgaId) << 60);
                     addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8);
                 }
 

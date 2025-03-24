@@ -22,7 +22,7 @@ import os.read
   */
 
 class RemoteTaskServerIO(taskWidth: Int) extends Bundle {
-  assert((taskWidth + 9) < 512, "Task width is too large for the streaming interface in the RemoteTaskServer")
+  assert((taskWidth + 14) < 512, "Task width is too large for the streaming interface in the RemoteTaskServer")
   val axisCfgTaskAndReq =
     axi4s.Config(wData = 512, wDest = 4) // task plus 8 bits for task valid and request value (8 bits for AXIS compat)
   val s_axis_taskAndReq = axi4s.Slave(axisCfgTaskAndReq)
