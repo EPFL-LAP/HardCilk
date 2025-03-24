@@ -10,7 +10,7 @@
 
 #define BASE_DEPTH 2
 #define BRANCH_FACTOR 6
-#define INIT_COUNT 6
+#define INIT_COUNT 8
 
 struct task
 {
