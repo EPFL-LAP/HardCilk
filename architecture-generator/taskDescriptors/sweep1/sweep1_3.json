@@ -38,5 +38,5 @@
     "memorySizeSim": 16,
     "targetFrequency": 250,
     "fpgaModel": "ALVEO_U55C",
-    "fpgaCount": 6
+    "fpgaCount": 4
 }

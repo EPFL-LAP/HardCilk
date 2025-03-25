@@ -67,20 +67,17 @@ class MfpgaHardCilk(
     interfaceBuffer ++= fpgaModule.interfaceBuffer
   }
 
-
-
   // loop over the fpgaModules
   for (i <- 0 until fullSysGenDescriptor.fpgaCount) {
 
     val fpgaModule = fpgaModules(i)
 
-
     // export all the axi streams and them to the interface buffer of HDL INFO
-    fpgaModule.peMap.foreach{ pe =>
+    fpgaModule.peMap.foreach { pe =>
       val peType = pe._1
       val peMap = pe._2
-      peMap.foreach { pe =>        
-        pe.peElements.foreach{ port =>
+      peMap.foreach { pe =>
+        pe.peElements.foreach { port =>
           // get the config of the port
           val portConfig = port._2._2
           // get the port
@@ -89,8 +86,9 @@ class MfpgaHardCilk(
           val portName = port._1
 
           // Create a export decoupled IO for the port with the same port width
-          val portExport = if(port._2._3 == "Master") IO(DecoupledIO(UInt(portConfig.wData.W))).suggestName(portName) else IO(Flipped(DecoupledIO(UInt(portConfig.wData.W)))).suggestName(portName)
-
+          val portExport =
+            if (port._2._3 == "Master") IO(DecoupledIO(UInt(portConfig.wData.W))).suggestName(portName)
+            else IO(Flipped(DecoupledIO(UInt(portConfig.wData.W)))).suggestName(portName)
 
           // connect the port to the export
           portIO.asLite <> portExport
@@ -110,11 +108,6 @@ class MfpgaHardCilk(
       }
     }
 
-
-
-    
-
-
     // export all the axi masters (n per fpgaModule)
     var j = 0
     fpgaModule.axiOuts.foreach { axiOut =>
@@ -132,7 +125,7 @@ class MfpgaHardCilk(
       interfaceAxiManagementIO :=> interfaceAxiManagement._1
     }
 
-    if(fpgaModules.size > 1){
+    if (fpgaModules.size > 1) {
       val m_axis_bufferIO = IO(axi4s.Master(fpgaModule.m_axis_buffer.head._2))
         .suggestName(f"m_axis_mFPGA_${i}")
       val s_axis_bufferIO = IO(axi4s.Slave(fpgaModule.s_axis_buffer.head._2))
@@ -142,8 +135,6 @@ class MfpgaHardCilk(
     }
 
   }
-
-  
 
   lazy val hdlinfoModule: hdlinfo.Module = {
     import hdlinfo._
@@ -172,7 +163,6 @@ class MfpgaHardCilk(
   write.write(hdlinfoModule.asJson.toString())
   write.close()
 
-  
 }
 
 object MfpgaHardCilkEmitter extends App {
@@ -191,7 +181,8 @@ object MfpgaHardCilkEmitter extends App {
       val sc_header_generation: Boolean = false,
       val project_sc_generation: Boolean = false,
       val output_dir: String = ".",
-      val json_path: String = ""
+      val json_path: String = "",
+      val project_name: String = ""
   )
 
   val builder = OParser.builder[BuilderConfig]
@@ -207,6 +198,9 @@ object MfpgaHardCilkEmitter extends App {
       opt[String]('o', "output-dir")
         .action((x, c) => c.copy(output_dir = x))
         .text("output directory"),
+      opt[String]('q', "source-project-name")
+        .action((x, c) => c.copy(project_name = x))
+        .text("source project name"),
       opt[Unit]('d', "debug")
         .action((_, c) => c.copy(debug = true))
         .text("enable debug hardware counters and simulation logging"),
@@ -303,9 +297,7 @@ object MfpgaHardCilkEmitter extends App {
       val fileContent = readFile(file.getAbsolutePath())
 
       if (fileName.startsWith("DualPortBRAM")) {
-        if (
-          (isSimulation && fileName == "DualPortBRAM_sim.v") || (!isSimulation && fileName == "DualPortBRAM_xpm.v")
-        ) {
+        if ((isSimulation && fileName == "DualPortBRAM_sim.v") || (!isSimulation && fileName == "DualPortBRAM_xpm.v")) {
           writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
         }
       } else if (listOfFilesForQuesta.contains(fileName)) {
@@ -376,6 +368,7 @@ object MfpgaHardCilkEmitter extends App {
       val pathOutputDir = flags.output_dir
       val pathInputJsonFile = flags.json_path
       val jsonName = basename(pathInputJsonFile)
+      val internalName = flags.project_name
       val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
       val timeFormatter = DateTimeFormatter.ofPattern("HH-mm-ss")
 
@@ -431,25 +424,25 @@ object MfpgaHardCilkEmitter extends App {
         val projectTemplate =
           new java.io.File(s"$outputDirPathSC/projects/project_template")
         val projectDestination =
-          new java.io.File(s"$outputDirPathSC/projects/${jsonName}")
+          new java.io.File(s"$outputDirPathSC/projects/${internalName}")
         projectTemplate.renameTo(projectDestination)
 
         // Generate the HDL in the `outputDirPathSC/projects/${jsonName}/hdl`
-        new java.io.File(s"$outputDirPathSC/projects/${jsonName}/hdl").mkdirs()
+        new java.io.File(s"$outputDirPathSC/projects/${internalName}/hdl").mkdirs()
         val fpgaModules = generateRTL(
           systemDescriptor,
           pathInputJsonFile,
-          s"$outputDirPathSC/projects/${jsonName}/hdl",
+          s"$outputDirPathSC/projects/${internalName}/hdl",
           flags,
           true
         )
 
         // Generate the SystemC project in the `outputDirPathSC/project/${jsonName}/include`
-        new java.io.File(s"$outputDirPathSC/projects/${jsonName}/include")
+        new java.io.File(s"$outputDirPathSC/projects/${internalName}/include")
           .mkdirs()
         CppHeaderTemplate.generateCppHeader(
           systemDescriptor,
-          s"$outputDirPathSC/projects/${jsonName}/include"
+          s"$outputDirPathSC/projects/${internalName}/include"
         )
 
         systemDescriptor.taskDescriptors.foreach { task =>
@@ -458,37 +451,36 @@ object MfpgaHardCilkEmitter extends App {
           peHDLPathFiles.foreach { file =>
             val fileName = file.getName()
             val fileContent = readFile(file.getAbsolutePath())
-            writeFile(s"$outputDirPathSC/projects/${jsonName}/include/$fileName", fileContent)
+            writeFile(s"$outputDirPathSC/projects/${internalName}/include/$fileName", fileContent)
           }
         }
 
-
         // softlink "ln -s repos/jnbrq/sysc-switch/include/sysc_netw/" to "outputDirPathSC/projects/${jsonName}/include/sysc_netw"
         val syscSwitchPath =
-          "/home/shahawy/repos/jnbrq/sysc-switch/include/sysc_netw"
+          "/repos/jnbrq/sysc-switch/include/sysc_netw"
         val syscSwitchDestination =
-          s"$outputDirPathSC/projects/${jsonName}/include/sysc_netw"
+          s"$outputDirPathSC/projects/${internalName}/include/sysc_netw"
         val syscSwitchCommand = s"ln -s $syscSwitchPath $syscSwitchDestination"
         syscSwitchCommand.!
 
         // Generate the SystemC testbench in the `outputDirPathSC/projects/${jsonName}/include`
         TestBenchHeaderTemplate.generateCppHeader(
           systemDescriptor,
-          s"$outputDirPathSC/projects/${jsonName}/include",
+          s"$outputDirPathSC/projects/${internalName}/include",
           fpgaModules
         )
 
-
         // Read the `outputDirPathSC/projects/${jsonName}/CMakeLists.txt` and replace the `${project_template}` with the `${jsonName}`
         val cmakeListsPath =
-          s"$outputDirPathSC/projects/${jsonName}/CMakeLists.txt"
+          s"$outputDirPathSC/projects/${internalName}/CMakeLists.txt"
         val cmakeListsContent = readFile(cmakeListsPath)
         val newCmakeListsContent =
-          cmakeListsContent.replace("${project_template}", jsonName)
+          cmakeListsContent.replace("${project_template}", internalName)
         writeFile(cmakeListsPath, newCmakeListsContent)
 
         // Also copy `../software/${jsonName}` to `outputDirPathSC/projects/${jsonName}`
-        val sourceProject = new java.io.File(s"../software/${jsonName}")
+        val sourceProject = new java.io.File(s"../software/${internalName}")
+
         java.nio.file.Files
           .walk(sourceProject.toPath)
           .forEach(sourcePath => {
@@ -502,8 +494,6 @@ object MfpgaHardCilkEmitter extends App {
           })
 
       }
-
-
 
       // if (flags.rtl_generation) {
       //   new java.io.File(outputDirPathRTL).mkdirs()
@@ -550,4 +540,21 @@ object mFPGAEntry extends App {
       "-a"
     )
   )
+}
+
+object mFpga_Sweep1 extends App {
+  for (i <- (1 to 4)) {
+    MfpgaHardCilkEmitter.main(
+      Array[String](
+        f"taskDescriptors/sweep1/sweep1_${i}.json",
+        "-o",
+        "output",
+        "-r",
+        "32",
+        "-a",
+        "-q", // // original project
+        "paper_exp1"  // original project
+      )
+    )
+  }
 }

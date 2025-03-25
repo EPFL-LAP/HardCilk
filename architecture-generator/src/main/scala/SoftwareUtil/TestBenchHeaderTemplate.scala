@@ -38,6 +38,14 @@ object TestBenchHeaderTemplate {
         |using namespace sc_core;
         |using namespace sc_dt;
         |
+        |
+        |// these are defined in the main file, and parsed from args
+        |extern sc_core::sc_time _mFpga_switchPeriod;
+        |extern sc_core::sc_time _mFpga_linkToSwitchDelay;
+        |extern sc_core::sc_time _mFpga_linkToSwitchPeriod;
+        |extern sc_core::sc_time _mFpga_linkToFpgaDelay;
+        |extern sc_core::sc_time _mFpga_linkToFpgaPeriod;
+        |
         | #include <${descriptor.name}Driver.h>
         | #include <memIO_tlm.h>
         |
@@ -118,13 +126,13 @@ object TestBenchHeaderTemplate {
     var config = ""
     if(descriptor.fpgaCount > 1){
       config += s"""        sysc_netw::MfpgaSwitchConfig config;\n"""
-      config += s"""                config.numNodes = ${descriptor.fpgaCount};\n"""
-      config += s"""                config.switchPeriod = sc_time(8, SC_NS);\n"""
-      config += s"""                config.linkToSwitchDelay = sc_time(500, SC_NS);\n"""
-      config += s"""                config.linkToSwitchPeriod = sc_time(8, SC_NS);\n"""
-      config += s"""                config.linkToFpgaDelay = sc_time(500, SC_NS);\n"""
-      config += s"""                config.linkToFpgaPeriod = sc_time(8, SC_NS);\n"""
-      config += s"""       switch_ = std::make_unique<sysc_netw::MfpgaSwitch>("switch", config, std::move(fpgaSinks), std::move(fpgaSources));\n"""
+      config += s"""        config.numNodes = ${descriptor.fpgaCount};\n"""
+      config += s"""        config.switchPeriod = _mFpga_switchPeriod;\n"""
+      config += s"""        config.linkToSwitchDelay = _mFpga_linkToSwitchDelay;\n"""
+      config += s"""        config.linkToSwitchPeriod = _mFpga_linkToSwitchPeriod;\n"""
+      config += s"""        config.linkToFpgaDelay = _mFpga_linkToFpgaDelay;\n"""
+      config += s"""        config.linkToFpgaPeriod = _mFpga_linkToFpgaPeriod;\n"""
+      config += s"""        switch_ = std::make_unique<sysc_netw::MfpgaSwitch>("switch", config, std::move(fpgaSinks), std::move(fpgaSources));\n"""
     }
 
     config
