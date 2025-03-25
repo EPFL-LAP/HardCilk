@@ -9,9 +9,10 @@
           "dynamicMemAlloc": false,
           "taskId": 0,
           
-          "numProcessingElements": 4,
+          "numProcessingElements": 28,
           "widthTask": 256,
           "widthMalloc": 0,
+          "spawnServersCount": 4, 
 
           "sidesConfigs": [
               {
@@ -24,13 +25,13 @@
               {
                   "sideType": "allocator",
                   "numVirtualServers": 1,
-                  "capacityVirtualQueue": 100000,
+                  "capacityVirtualQueue": 4000000,
                   "capacityPhysicalQueue": 32,
                   "portWidth": 64
               },
               {
                   "sideType": "argumentNotifier",
-                  "numVirtualServers": 2,
+                  "numVirtualServers": 4,
                   "capacityVirtualQueue": 8192,
                   "capacityPhysicalQueue": 32,
                   "portWidth": 64

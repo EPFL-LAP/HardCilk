@@ -297,7 +297,7 @@ object TestBenchHeaderTemplate {
     for (fpgaIndex <- 0 until descriptor.fpgaCount) {
       instantiations += s"""        , memory_${fpgaIndex}_("memory_${fpgaIndex}", sc_time(${memLatency}, SC_NS), memorySize, 0, nullptr)\n"""
       instantiations += s"""        , iconnectMem_${fpgaIndex}_("iconnectMem_${fpgaIndex}", ${descriptor
-          .getAxiMastersCount() + 1}, 1)\n"""
+          .getAxiMastersCount()+1}, 1)\n"""
       instantiations += s"""        , memoryDriverMemory_${fpgaIndex}_("memoryDriverMemory_${fpgaIndex}")\n"""
       instantiations += s"""        , memoryDriverManagement_${fpgaIndex}_("memoryDriverManagement_${fpgaIndex}")\n"""
       instantiations += s"""        , mem_${fpgaIndex}_(memoryDriverMemory_${fpgaIndex}_, memoryDriverManagement_${fpgaIndex}_)\n"""

@@ -116,7 +116,7 @@ object CppHeaderTemplate {
        |    };
        |    int getNumberAxiMasters() const
        |    {
-       |        return ${descriptor.getAxiMastersCount()};
+       |        return (${descriptor.getAxiMastersCount()});
        |    }
        |    int getNumberPEsAXISlaves() const
        |    {

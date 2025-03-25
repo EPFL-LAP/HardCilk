@@ -157,7 +157,8 @@ class HardCilk(
           debug = debug,
           fpgaCount = fullSysGenDescriptor.fpgaCount,
           taskIndex = task.taskId,
-          collectStats = true
+          collectStats = true,
+          spawnerServerNumber = task.spawnServersCount
         )
       ))
 
@@ -232,11 +233,25 @@ class HardCilk(
       // Export the AXI interface of the Scheduler
       interfacesScheduler.addAll(schedulerMap(task.name).io_internal.vss_axi_full)
 
+      if(schedulerMap(task.name).spawnerServerAXI != None){
+        interfacesScheduler.addAll(schedulerMap(task.name).spawnerServerAXI.get)
+      }
+
       // Connect the Scheduler Management to the management demux
       for (i <- j until j + task.getNumServers("scheduler")) {
         demux.m_axil(i) :=> schedulerMap(task.name).io_internal.axi_mgmt_vss(i - j)
       }
       j += task.getNumServers("scheduler")
+
+      // Connect the taskSpawner from the Schedueler to the management demux
+      if(schedulerMap(task.name).spawnerServerMgmt != None){
+
+        for(i <- j until j + task.spawnServersCount){
+          demux.m_axil(i) :=> schedulerMap(task.name).spawnerServerMgmt.get(i - j)
+        }
+
+        j += task.spawnServersCount
+      }
 
       if(mfpgaFlag){
         schedulerMap(task.name).fpgaCountInputReg.get := fpgaCountInputReg

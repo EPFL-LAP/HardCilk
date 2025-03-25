@@ -83,7 +83,8 @@ case class SideConfig(
     val capacityVirtualQueue: Int = 0,
     val capacityPhysicalQueue: Int = 0,
     val portWidth: Int = 32,
-    val virtualEntrtyWidth: Int = 0
+    val virtualEntrtyWidth: Int = 0,
+    val numSpawnerServer: Int = 0
 ) {
   assert(sideType == "scheduler" || sideType == "allocator" || sideType == "argumentNotifier" || sideType == "memoryAllocator")
 }
@@ -101,7 +102,8 @@ case class TaskDescriptor(
     widthMalloc: Int,
     sidesConfigs: List[SideConfig],
     mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
-    hasAXI: Boolean = true,
+    spawnServersCount: Int,
+    hasAXI: Boolean = true
 ) {
 
   assert(numProcessingElements > 0)
@@ -207,6 +209,14 @@ case class FullSysGenDescriptor(
       task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ (i << 6)
     }
     j += numSchedulerServers
+
+    if(task.spawnServersCount > 0) {
+      for (i <- j until j + task.spawnServersCount ) {
+        task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ (i << 6)
+      }
+      j += task.spawnServersCount 
+    }
+
     if (task.isCont) {
       val numAllocationServers = task.getNumServers("allocator")
       for (i <- j until j + numAllocationServers) {
@@ -242,12 +252,18 @@ case class FullSysGenDescriptor(
     var count = taskDescriptors.map(_.getNumServers("scheduler")).sum + 
     taskDescriptors.map(_.getNumServers("memoryAllocator")).sum + 
     taskDescriptors.map(_.getNumServers("allocator")).sum +
-    (taskDescriptors.map(_.getNumServers("argumentNotifier")).sum * 2)
+    (taskDescriptors.map(_.getNumServers("argumentNotifier")).sum * 2) 
 
     // if a task has in the spawn_next list, we add masters equal to the number of processing elements of that task
     spawnNextList.keys.foreach { task_name =>
       count += taskDescriptors.find(_.name == task_name).map(_.numProcessingElements).getOrElse(0)
     }
+
+    taskDescriptors.foreach(task => {
+      if(task.spawnServersCount > 0) {
+        count += task.spawnServersCount
+      }
+    })
 
     count
   }
@@ -374,6 +390,15 @@ case class FullSysGenDescriptor(
         if(fpgaCount > 1) 
           1 // One management port to set the FPGA Index and FPGA count in system (Passed to Multi-FPGAs modules)
         else 0
+      } + 
+      {
+        var spawner_count = 0
+        taskDescriptors.foreach(task => {
+          if(task.spawnServersCount > 0) {
+            spawner_count += task.spawnServersCount
+          }
+        })
+        spawner_count
       }
   }
 

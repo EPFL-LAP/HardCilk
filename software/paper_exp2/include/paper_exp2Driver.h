@@ -73,6 +73,7 @@ public:
         }
 
     }
+    std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
 
 
     auto T_END = sc_time_stamp();

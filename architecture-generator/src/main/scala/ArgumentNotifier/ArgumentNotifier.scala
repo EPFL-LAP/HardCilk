@@ -70,7 +70,7 @@ class ArgumentNotifier(
         counterWidth = contCounterWidth,
         sysAddressWidth = addrWidth,
         tagBitsShift = log2Ceil(taskWidth / 8),
-        wId = 2,
+        wId = 0,
         multiDecrease = false,
         fpgaCount = fpgaCount,
         taskIndex = taskIndex

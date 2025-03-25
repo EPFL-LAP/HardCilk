@@ -86,13 +86,13 @@ class WriteBufferCounter(
   private val numNext = Wire(Vec(nAllow, DecoupledIO(UInt(wAllow.W))))
 
   private val s_pkg_payload = s_pkg_.bits.asTypeOf(wb_t)
-  when(s_pkg_.fire) {
-    printf("WriteBuffer: addr = %x, data = %x, size = %x, allow = ", s_pkg_payload.addr, s_pkg_payload.data, s_pkg_payload.size)
-    for (i <- 0 until nAllow) {
-      printf(" %x", s_pkg_payload.allow(i))
-    }
-    printf("\n")
-  }
+  // when(s_pkg_.fire) {
+  //   printf("WriteBuffer: addr = %x, data = %x, size = %x, allow = ", s_pkg_payload.addr, s_pkg_payload.data, s_pkg_payload.size)
+  //   for (i <- 0 until nAllow) {
+  //     printf(" %x", s_pkg_payload.allow(i))
+  //   }
+  //   printf("\n")
+  // }
 
   new elastic.Fork(s_pkg_) {
     protected def onFork: Unit = {
