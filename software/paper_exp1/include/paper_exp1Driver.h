@@ -8,9 +8,10 @@
 
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
-#define BASE_DEPTH 2
-#define BRANCH_FACTOR 6
-#define INIT_COUNT 6
+extern uint32_t _exp1_baseDepth;
+extern uint32_t _exp1_branchFactor;
+extern uint32_t _exp1_initCount;
+extern uint32_t _exp1_delay;
 
 struct task
 {
@@ -39,18 +40,18 @@ public:
 
         memories_[0]->copyToDevice(addr, (uint8_t *)&task_args_0, sizeof(task_args_0));
 
-        task_args_0.branchFactor = BRANCH_FACTOR;
-        task_args_0.delay = 32; // delay in cycles, a cycle is 2ns
+        task_args_0.branchFactor = _exp1_branchFactor;
+        task_args_0.delay = _exp1_delay; // delay in cycles, a cycle is 2ns
 
         std::vector<task> base_task_data;
 
-        for (int i = 0; i < INIT_COUNT; i++)
+        for (int i = 0; i < _exp1_initCount; i++)
         {
-            task_args_0.depth = BASE_DEPTH + i;
+            task_args_0.depth = _exp1_baseDepth + i;
             base_task_data.push_back(task_args_0);
         }
 
-        remainingTasks = INIT_COUNT;
+        remainingTasks = _exp1_initCount;
 
         initSystemMfpga(base_task_data);
 
