@@ -22,6 +22,9 @@ extern int nodesProcessed;
 extern double T1;
 extern int remainingTasks;
 
+extern int tasksSpawnedNext;
+extern int tasksNotifiedFromA;
+extern int tasksNotifiedFromB;
 
 struct task_INPE {
   uint32_t counter;
@@ -97,24 +100,29 @@ private:
       t.index = receievedPacket.range(191, 160).to_uint();
       t.cont = receievedPacket.range(255, 192).to_uint();
 
-      bool returningTask = ((t.cont & 0x3FFFFFFFF) != 0x3FFFFFFFF);
+      //bool returningTask = ((t.cont & 0x3FFFFFFFF) != 0x3FFFFFFFF);
+    
 
       if (t.depth == 0) {
         wait(sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS));
         T1 += sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS).to_seconds();
-        if(returningTask){
+        nodesProcessed += 1;
+        if(t.cont != 0){
           // make t.cont a sc_bv<64>
           sc_dt::sc_bv<64> t_cont;
           t_cont.range(63, 0) = t.cont;
           argOut_->send(t_cont);
+          tasksNotifiedFromA += 1;
         }
+        remainingTasks -= 1;
       } else {
-
+        bool continuation = false;
         for (std::uint32_t i = t.index; i < t.branchFactor; ++i) {
           wait(sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS));
           T1 += sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS).to_seconds();
 
           if(i < t.serialTasks){
+            continuation = true;
             remainingTasks+=2;
             auto addr = closureIn_->receive().range(63, 0).to_uint();
             
@@ -146,30 +154,23 @@ private:
 
             // convert sn to sc_bv<512>
             sc_dt::sc_bv<512> spawnNext;
-            spawnNext.range(63, 0) = sn.addr;
 
-            spawnNext.range(95, 64) = sn.data.counter;
+            spawnNext.range(63, 0) = sn.addr;
+            spawnNext.range(95, 64) = sn.data.counter; 
             spawnNext.range(127, 96) = sn.data.depth;
             spawnNext.range(159, 128) = sn.data.delay;
             spawnNext.range(191, 160) = sn.data.branchFactor;
             spawnNext.range(223, 192) = sn.data.serialTasks;
             spawnNext.range(255, 224) = sn.data.index;
-            spawnNext.range(320, 256) = sn.data.cont;
-            spawnNext.range(351, 321) = sn.size;
+            spawnNext.range(319, 256) = sn.data.cont;
+            spawnNext.range(351, 320) = sn.size;
             spawnNext.range(383, 352) = sn.allow;
-            
+
             
             spawnNext_->send(spawnNext);
+            tasksSpawnedNext += 1;
             
 
-            // uint32_t counter;
-            // uint32_t depth;
-            // uint32_t delay;
-            // uint32_t branchFactor;
-            // uint32_t serialTasks;
-            // uint32_t index;
-            // uint64_t cont;
-            
             // Convert new_task to sc_bv<256>
             sc_dt::sc_bv<256> task;
             task.range(31, 0) = new_task.delay;
@@ -180,7 +181,10 @@ private:
             task.range(191, 160) = new_task.index;
             task.range(255, 192) = new_task.cont;
 
+            //std::cout << "Task should return to: " << task.range(255, 192).to_uint() << std::endl;
+
             taskOutSynced_->send(task);
+            remainingTasks--;
 
             break;
   
@@ -191,7 +195,7 @@ private:
             new_task.counter = 0;
             new_task.branchFactor = t.branchFactor;
             new_task.depth = t.depth - 1;
-            new_task.cont = 0x3FFFFFFFF;
+            new_task.cont = 0;
             new_task.index = 0;  
             new_task.delay = t.delay;
             // Convert new_task to sc_bv<128>
@@ -207,17 +211,27 @@ private:
             fifo_.write(task);
           }
         }
-
+        if (!continuation) {
+          remainingTasks -= 1;
+          nodesProcessed += 1;
+          if (t.cont != 0) {
+            // make t.cont a sc_bv<64>
+            sc_dt::sc_bv<64> t_cont;
+            t_cont.range(63, 0) = t.cont;
+            argOut_->send(t_cont);
+            tasksNotifiedFromB += 1;
+          }
+        }
       }
 
-      if(t.index >= t.serialTasks && returningTask && t.depth != 0){
-        // make t.cont a sc_bv<64>
-        sc_dt::sc_bv<64> t_cont;
-        t_cont.range(63, 0) = t.cont;
-        argOut_->send(t_cont);
-      }
+      // if(t.index >= t.serialTasks && returningTask && t.depth != 0){
+      //   // make t.cont a sc_bv<64>
+      //   sc_dt::sc_bv<64> t_cont;
+      //   t_cont.range(63, 0) = t.cont;
+      //   argOut_->send(t_cont);
+      // }
 
-      --remainingTasks;
+      // --remainingTasks;
 
     }
   }

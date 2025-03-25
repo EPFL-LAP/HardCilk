@@ -30,7 +30,9 @@ double T1 = 0;
 int nodesProcessed = 0;
 
 
-
+int tasksSpawnedNext = 0;
+int tasksNotifiedFromA = 0;
+int tasksNotifiedFromB = 0;
 
 class paper_exp3Driver : public mFpgaHardCilkDriver
 {
@@ -50,9 +52,9 @@ public:
         task_args_0.branchFactor = BRANCH_FACTOR;
         task_args_0.delay = DELAY; // delay in cycles, a cycle is 2ns
         task_args_0.serialTasks = SERIAL_TASKS;
-        task_args_0.cont = addr;
         task_args_0.index = 0;
         task_args_0.counter = 0;    
+        task_args_0.cont = addr;
 
         std::vector<task> base_task_data;
 
@@ -76,10 +78,18 @@ public:
         const int logFreq = 10000;
         while (remainingTasks > 0)
         {
-            wait(task_args_0.delay * 2, SC_NS);
+            //wait(task_args_0.delay * 2, SC_NS);
+            wait(100000, SC_NS);
             if(nodesProcessed % logFreq == 0){
                 std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
             }
+            std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
+            std::cout << "remainingTasks: " << remainingTasks << std::endl;
+            std::cout << "tasksSpawnedNext: " << tasksSpawnedNext << std::endl;
+            std::cout << "tasksNotifiedFromA: " << tasksNotifiedFromA << std::endl;
+            std::cout << "tasksNotifiedFromB: " << tasksNotifiedFromB << std::endl;
+            // total notified
+            std::cout << "total notified: " << tasksNotifiedFromA + tasksNotifiedFromB << std::endl;
 
         }
 

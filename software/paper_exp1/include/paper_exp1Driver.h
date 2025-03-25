@@ -40,7 +40,7 @@ public:
         memories_[0]->copyToDevice(addr, (uint8_t *)&task_args_0, sizeof(task_args_0));
 
         task_args_0.branchFactor = BRANCH_FACTOR;
-        task_args_0.delay = 32; // delay in cycles, a cycle is 2ns
+        task_args_0.delay = 32; // Change the delay here between 32 / 64 / 256
 
         std::vector<task> base_task_data;
 

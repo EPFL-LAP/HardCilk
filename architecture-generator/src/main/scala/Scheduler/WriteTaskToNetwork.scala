@@ -10,12 +10,11 @@ class WriteTaskToNetworkIO(taskWidth: Int) extends Bundle {
   val s_axis_task = Flipped(DecoupledIO(UInt(taskWidth.W)))
   val fpgaId = Input(UInt(64.W))
   val startToken = Flipped(DecoupledIO(UInt(1.W)))
+  val numTasksToStealOrServe = Input(UInt(32.W)) 
 }
 
 class WriteTaskToNetwork(
-    taskWidth: Int,
-    numTasksToStealOrServe: Int,
-    peCount: Int
+    taskWidth: Int
 ) extends Module {
 
   object state extends ChiselEnum {
@@ -37,19 +36,24 @@ class WriteTaskToNetwork(
 
   io.startToken.ready := false.B
 
+  val numberOftasksToStealOrServeReg = RegInit(0.U(32.W))
+
+
+
 
   val startTokenReceived = RegInit(false.B)
   when(!startTokenReceived){
     io.startToken.ready := true.B
     when(io.startToken.valid){
       startTokenReceived := true.B
+      numberOftasksToStealOrServeReg := io.numTasksToStealOrServe
     }
   }
 
   // to serve a task u need to read a network request first  
   val allowCount = RegInit(0.U(32.W))
 
-  when(startTokenReceived && allowCount < numTasksToStealOrServe.U) {
+  when(startTokenReceived && allowCount < numberOftasksToStealOrServeReg) {
     io.connNetwork.ctrl.serveStealReq.valid := true.B
     when(io.connNetwork.ctrl.serveStealReq.ready){
       allowCount := allowCount + 1.U
@@ -68,7 +72,7 @@ class WriteTaskToNetwork(
     }
   }
 
-  when(startTokenReceived && tasksWritten === numTasksToStealOrServe.U){
+  when(startTokenReceived && tasksWritten === numberOftasksToStealOrServeReg){
     allowCount := 0.U
     tasksWritten := 0.U
     startTokenReceived := false.B
