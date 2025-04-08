@@ -6,11 +6,13 @@
 #include <systemc.h>
 #include "FullSysGenDescriptor.h"
 
+#include <unordered_set>
+
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
 #define BASE_DEPTH 2
 #define SERIAL_TASKS 2
-#define BRANCH_FACTOR 6
+#define BRANCH_FACTOR 7
 #define INIT_COUNT 6
 #define DELAY 8
 
@@ -19,7 +21,7 @@ struct task {
     uint32_t depth;
     uint32_t delay;
     uint32_t branchFactor;
-    uint32_t serialTasks;
+    uint32_t tag;
     uint32_t index;
     uint64_t cont;
   };
@@ -29,10 +31,14 @@ int remainingTasks;
 double T1 = 0; 
 int nodesProcessed = 0;
 
+int tasksSpawned = 0;
 
 int tasksSpawnedNext = 0;
 int tasksNotifiedFromA = 0;
 int tasksNotifiedFromB = 0;
+
+std::unordered_set <uint32_t> uniqueTags;
+int uniqueTagsCount = 0;
 
 class paper_exp3Driver : public mFpgaHardCilkDriver
 {
@@ -51,7 +57,7 @@ public:
 
         task_args_0.branchFactor = BRANCH_FACTOR;
         task_args_0.delay = DELAY; // delay in cycles, a cycle is 2ns
-        task_args_0.serialTasks = SERIAL_TASKS;
+        //task_args_0.serialTasks = SERIAL_TASKS;
         task_args_0.index = 0;
         task_args_0.counter = 0;    
         task_args_0.cont = addr;
@@ -61,6 +67,7 @@ public:
         for (int i = 0; i < INIT_COUNT; i++)
         {
             task_args_0.depth = BASE_DEPTH + i;
+            task_args_0.tag = uniqueTagsCount++;
             base_task_data.push_back(task_args_0);
         }
 
@@ -76,6 +83,10 @@ public:
         remainingTasks = INIT_COUNT;
 
         const int logFreq = 10000;
+
+        // Measure simulation wall time start 
+        auto start = std::chrono::high_resolution_clock::now();
+
         while (remainingTasks > 0)
         {
             //wait(task_args_0.delay * 2, SC_NS);
@@ -90,6 +101,7 @@ public:
             std::cout << "tasksNotifiedFromB: " << tasksNotifiedFromB << std::endl;
             // total notified
             std::cout << "total notified: " << tasksNotifiedFromA + tasksNotifiedFromB << std::endl;
+            std::cout << "tasksSpawned: " << tasksSpawned << std::endl;
 
         }
 
@@ -97,7 +109,14 @@ public:
         // Log T_END
         std::cout << "T_END: " << T_END << std::endl;
 
-
+        std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
+        std::cout << "remainingTasks: " << remainingTasks << std::endl;
+        std::cout << "tasksSpawnedNext: " << tasksSpawnedNext << std::endl;
+        std::cout << "tasksNotifiedFromA: " << tasksNotifiedFromA << std::endl;
+        std::cout << "tasksNotifiedFromB: " << tasksNotifiedFromB << std::endl;
+        // total notified
+        std::cout << "total notified: " << tasksNotifiedFromA + tasksNotifiedFromB << std::endl;
+        std::cout << "tasksSpawned: " << tasksSpawned << std::endl;
 
         // Calculate T_n in nanoseconds
         FullSysGenDescriptor desc;
@@ -114,6 +133,16 @@ public:
 
         // Log efficiency T_n_perfect / T_n * 100 % to the nearest 100th
         std::cout << "Efficiency: " << (T_n_perfect / T_n) * 100 << "%" << std::endl;
+
+
+        // Measure simulation wall time end
+        auto end = std::chrono::high_resolution_clock::now();
+
+        // Calculate simulation wall time in minutes
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Simulation wall time: " << duration.count() / 60000.0 << " minutes" << std::endl;
+
+        assert(remainingTasks == 0);
 
         return 0;
     }

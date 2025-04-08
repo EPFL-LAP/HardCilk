@@ -14,8 +14,8 @@ class ArgumentServerIO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int, 
   val connNetwork = Flipped(DecoupledIO(UInt(sysAddressWidth.W)))
   val connStealNtw = Flipped(new SchedulerNetworkClientIO(taskWidth))
 
-  val m_axi_counter = axi4.full.Master(cfg = axi4.Config(wId, sysAddressWidth, taskWidth))
-  val m_axi_task = axi4.full.Master(cfg = axi4.Config(wId, sysAddressWidth, taskWidth))
+  val m_axi_counter = axi4.full.Master(cfg = axi4.Config(wId, 34, taskWidth))
+  val m_axi_task = axi4.full.Master(cfg = axi4.Config(wId, 34, taskWidth))
 
   val done = Output(Bool())
 }

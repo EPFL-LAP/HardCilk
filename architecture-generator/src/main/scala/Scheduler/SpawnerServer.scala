@@ -157,9 +157,17 @@ class SpawnerServer(
     when(queue_write.io.deq.valid && !writeAddressDone && !(maxLength < (currLen + queueDepth.U))){
       io.m_axi.asFull.aw.valid := true.B
       io.m_axi.asFull.aw.bits.addr := rAddr + (fifoTailReg << addrShift)
-      io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
+      
       writeTasksCounterWriting := queue_write.io.count
       writeTasksCounterBvalid := queue_write.io.count
+
+      io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
+      when(queue_write.io.count  < queueDepth.U){
+        io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
+      }.otherwise{
+        io.m_axi.asFull.aw.bits.len := (queueDepth.U) - 1.U
+      }
+
       when(io.m_axi.asFull.aw.ready){
         writeAddressDone := true.B
       }
@@ -194,7 +202,15 @@ class SpawnerServer(
     when(queue_read.io.count === 0.U && currLen > 0.U && !s_axis_slave.asLite.valid && !readAddressDone){
       io.m_axi.asFull.ar.valid := true.B
       io.m_axi.asFull.ar.bits.addr := rAddr + (fifoHeadReg << addrShift)
-      io.m_axi.asFull.ar.bits.len := (currLen & (queueDepth - 1).U) - 1.U
+
+
+      when(currLen < queueDepth.U){
+        io.m_axi.asFull.ar.bits.len := currLen - 1.U
+      }.otherwise{
+        io.m_axi.asFull.ar.bits.len := (queueDepth.U) - 1.U
+      }
+
+      
       when(io.m_axi.asFull.ar.ready){
         readAddressDone := true.B
         queue_is_reading := true.B
@@ -221,6 +237,29 @@ class SpawnerServer(
       writeTaskToNetwork.startToken.bits := queue_read.io.deq.bits
       writeTaskToNetwork.numTasksToStealOrServe := queue_read.io.count
     }
+  }
+
+  // // // Print for debugging
+  val fireInCounter = RegInit(0.U(64.W))
+  when(io.connNetwork_slave.data.availableTask.fire){
+    fireInCounter := fireInCounter + 1.U
+    //printf("fireInCounter: %d\n", fireInCounter)
+  }
+
+  val fireOutCounter = RegInit(0.U(64.W))
+  when(io.connNetwork_master.data.qOutTask.fire){
+    fireOutCounter := fireOutCounter + 1.U
+    //printf("fireOutCounter: %d\n", fireOutCounter)
+  }
+
+  // print each 1000 cycles
+  val cyclesCounter = RegInit(0.U(64.W))
+  cyclesCounter := cyclesCounter + 1.U
+  when(cyclesCounter === 100000.U){
+    printf("_______\n")
+    printf("FPGA ID: %d, fireInCounter: %d, fireOutCounter: %d\n", 0.U, fireInCounter, fireOutCounter)
+    printf("_______\n")
+    cyclesCounter := 0.U
   }
 
 

@@ -17,7 +17,7 @@
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 1,
+                    "numVirtualServers": 4,
                     "capacityVirtualQueue": 10000000,
                     "capacityPhysicalQueue": 32,
                     "portWidth": 128
@@ -40,7 +40,7 @@
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 1,
+                    "numVirtualServers": 4,
                     "capacityVirtualQueue": 10000000,
                     "capacityPhysicalQueue": 32,
                     "portWidth": 32
@@ -63,5 +63,5 @@
     "memorySizeSim": 16,
     "targetFrequency": 250,
     "fpgaModel": "ALVEO_U55C",
-    "fpgaCount": 4
+    "fpgaCount": 1
 }

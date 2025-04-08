@@ -12,6 +12,7 @@
             "numProcessingElements": 32,
             "widthTask": 128,
             "widthMalloc": 0,
+            "spawnServersCount": 0,
 
             "sidesConfigs": [
                 {
@@ -38,5 +39,5 @@
     "memorySizeSim": 16,
     "targetFrequency": 250,
     "fpgaModel": "ALVEO_U55C",
-    "fpgaCount": 6
+    "fpgaCount": 1
 }

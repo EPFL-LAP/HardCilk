@@ -6,6 +6,7 @@ import Util._
 
 import chext.amba.axi4s
 import chext.elastic
+import chext.util.BitOps._
 import axi4s.Casts._
 
 /** RemoteTaskServer What does this moudle shall do? (No operations can be reverted, it shall continue to the end to stop
@@ -51,6 +52,8 @@ class RemoteTaskServer(
   val axisCfgTaskAndReq =
     axi4s.Config(wData = 512, wDest = 4)
 
+
+  val servingRemote = RegInit(false.B)
 
 
   // Instantiate a network reader and writer
@@ -147,17 +150,19 @@ class RemoteTaskServer(
     }
 
     // Reset this state if flagged by serving remote and no data was received
-    when(!taskWaitingSlave.asFull.valid && io.serveRemote && dataReceievedCount === 0.U && flaggedByServingRemote) {
+    when(/*!taskWaitingSlave.asFull.valid && io.serveRemote && dataReceievedCount === 0.U &&*/ flaggedByServingRemote) {
+
       requestSent := false.B
       fetchingRemote := false.B
       dataReceievedCount := 0.U
+      flaggedByServingRemote := false.B
 
     }
 
   }
 
   // Start Listening to the incoming requests
-  val servingRemote = RegInit(false.B)
+
   val activelyServing = RegInit(false.B)
   val fetchLocalNetwork = RegInit(false.B)
   val servingCount = RegInit(0.U(32.W))
@@ -190,6 +195,32 @@ class RemoteTaskServer(
     queueForSendingTasks.io.deq.bits
   )
   taskServingMaster.TDEST.get := fpgaToServe
+
+
+  // Count the fires of the taskServeingMaster
+  val fires_counter = RegInit(0.U(32.W))
+  when(taskServingMaster.asFull.fire) {
+    fires_counter := fires_counter + 1.U
+  }
+  
+  // Count the fires of the taskRequestListener
+  val fires_counter_listener = RegInit(0.U(32.W))
+  when(taskWaitingSlave.asFull.fire) {
+    fires_counter_listener := fires_counter_listener + 1.U
+  }
+
+  // Print each 10000 cycles
+  val cycles_counter = RegInit(0.U(32.W))
+  cycles_counter := cycles_counter + 1.U
+  when(cycles_counter === 1000000.U) {
+    printf("_______\n")
+    printf("FPGA ID %d, taskID %d: Tasks recieved from remote: %d\n", io.fpgaIndexInputReg, taskIndex.U, fires_counter_listener)
+    printf("FPGA ID %d, taskID %d: Tasks sent to remote: %d\n", io.fpgaIndexInputReg, taskIndex.U, fires_counter)
+    printf("_______\n")
+    cycles_counter := 0.U
+  }
+
+
 
   // Check if we need to serve the remote
   when(io.serveRemote && !servingRemote) {
@@ -234,21 +265,45 @@ class RemoteTaskServer(
 
   val requestForwardSlaveSupressSelfRequest = Wire(axi4s.Slave(axisCfgTaskAndReq))
   requestForwardSlaveSupressSelfRequest.asFull.ready := true.B
-  flaggedByServingRemote := requestForwardSlaveSupressSelfRequest.asFull.valid
+  
+  //when(flaggedByServingRemote === false.B){
+    flaggedByServingRemote := requestForwardSlaveSupressSelfRequest.asFull.valid
+  //}
+
+  val s_axis_taskAndReqMarked = Wire(Irrevocable(new chext.amba.axi4s.FullChannel(io.s_axis_taskAndReq.cfg)))
+
+  new elastic.Arrival(io.s_axis_taskAndReq.asFull, s_axis_taskAndReqMarked) {
+    protected def onArrival: Unit = {
+      out := in
+      out.data := in.data.msbN(14) ## Cat(servingRemote, activelyServing) ## 0.U((512 - 16 - 256).W) ## in.data.lsbN(256)
+      accept()
+    }
+  }
 
   // A demux to separate requests from tasks
-  new elastic.Fork(io.s_axis_taskAndReq.asFull) {
+  new elastic.Fork(s_axis_taskAndReqMarked) {
     override def onFork(): Unit = {
       val isRequest = in.data(511 - 12, 511 - 12) === 1.U /*Check the 13th bit of TDATA*/ 
       val isSelfRequest = (in.data(507, 511 - 11) === io.fpgaIndexInputReg) && isRequest
+
+      val isServingRemote = in.data.dropMsbN(14).msbN(1).asBool
+      val isActivelyServing = in.data.dropMsbN(15).msbN(1).asBool
+
       elastic.Demux(
         source = fork(in),
-        sinks = Seq(taskWaitingSlave.asFull, taskRequestListener.asFull, requestForwardSlave.asFull, requestForwardSlaveSupressSelfRequest.asFull),
-        select = fork(
+        sinks = Seq(elastic.SinkBuffer(taskWaitingSlave.asFull), elastic.SinkBuffer(taskRequestListener.asFull), elastic.SinkBuffer(requestForwardSlave.asFull), elastic.SinkBuffer(requestForwardSlaveSupressSelfRequest.asFull)),
+        select = elastic.SourceBuffer(fork(
           Cat(
-            (isRequest && !(servingRemote && !activelyServing)) || (isRequest && isSelfRequest && servingRemote),
-            (servingRemote && !activelyServing && isRequest) || (servingRemote && isSelfRequest)
-          )
+          
+            //(isRequest && !(servingRemote && !activelyServing)) || (isRequest && isSelfRequest && servingRemote),
+            
+            (isRequest && !servingRemote) || (isRequest && activelyServing) || (isSelfRequest && servingRemote),
+            
+            //(servingRemote && !activelyServing && isRequest) || (servingRemote && isSelfRequest)
+            
+            servingRemote && ((!activelyServing && isRequest) ||  isSelfRequest)
+
+          ))
         )
       )
 
@@ -269,6 +324,18 @@ class RemoteTaskServer(
       out.last := in.last
       out.strobe := in.strobe
     }
+  }
+
+
+
+
+  // Log request generation and request subression
+  when(taskRequestingMaster.asFull.valid) {
+    printf("TIME %d, FPGA ID %d, packet FPGAID %d: Request generated\n", cycles_counter, io.fpgaIndexInputReg, taskRequestingMaster.TDATA(511 - 4, 511 - 11))
+  }
+
+  when(requestForwardSlaveSupressSelfRequest.asFull.valid) {
+    printf("TIME %d, FPGA ID %d, packet FPGAID %d: Request subpressed\n", cycles_counter, io.fpgaIndexInputReg, requestForwardSlaveSupressSelfRequest.TDATA(511 - 4, 511 - 11))
   }
 
 }

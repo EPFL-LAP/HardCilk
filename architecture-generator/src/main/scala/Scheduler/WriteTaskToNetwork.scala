@@ -81,27 +81,20 @@ class WriteTaskToNetwork(
 
   // Create a counter here to keep track of the number of tasks that have been given to the network and print it 
   // to the console with fpga ID
-  // val writeTaskCount = RegInit(0.U(32.W))
-  // when(io.connNetwork.data.qOutTask.fire) {
-  //   writeTaskCount := writeTaskCount + 1.U
-  // }
+  val writeTaskCount = RegInit(0.U(32.W))
+  when(io.connNetwork.data.qOutTask.fire) {
+    writeTaskCount := writeTaskCount + 1.U
+  }
 
-  // val cyclesCounter = RegInit(0.U(32.W))
-  // cyclesCounter := cyclesCounter + 1.U
-  // when(cyclesCounter === 10000.U){
-  //   printf("FPGA ID: %d, Tasks given to network: %d\n", io.fpgaId, writeTaskCount)
-  //   cyclesCounter := 0.U
-  // }
+  val cyclesCounter = RegInit(0.U(32.W))
+  cyclesCounter := cyclesCounter + 1.U
+  when(cyclesCounter === 100000.U){
+    printf("_______\n")
+    printf("FPGA ID: %d, Tasks written to local stealing network: %d\n", io.fpgaId, writeTaskCount)
+    printf("_______\n")
+    cyclesCounter := 0.U
+  }
 
-  // dontTouch(writeTaskCount)
-  // dontTouch(cyclesCounter)
-
-  // when(tasksGivenAwayCount > 0.U && (stateReg =/= state.readTask || ~io.s_axis_task.valid)) {
-  //   io.connNetwork.ctrl.serveStealReq.valid := true.B
-  //   when(io.connNetwork.ctrl.serveStealReq.ready) {
-  //     tasksGivenAwayCount := tasksGivenAwayCount - 1.U
-  //   }
-  // }
 
 }
 

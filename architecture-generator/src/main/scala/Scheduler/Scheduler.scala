@@ -72,7 +72,7 @@ class Scheduler(
     fpgaCount: Int,
     taskIndex: Int,
     spawnerServerNumber: Int = 1,
-    collectStats: Boolean = true
+    collectStats: Boolean = true,
 ) extends Module {
 
   val taskIndexV = taskIndex
@@ -93,8 +93,17 @@ class Scheduler(
   // val spawnerServerAXI = if(outsideSpawn) Some(Vec(spawnerServerNumber, IO(axi4.full.Master(spawnerServer.get(0).asInstanceOf[SpawnerServer].axiCfg)))) else None
 
   // Create Array of indicies 0, 1, 2, until spawnerServerNumber
-  var spawnerIndicies = Array.tabulate(spawnerServerNumber)(n => (n))
+  
+  val step = if(outsideSpawn) (peCountGlobalTaskIn + argRouteServersNumber) / spawnerServerNumber else 0
+  var spawnerIndicies = Array.tabulate(spawnerServerNumber)(n => (n + n * step))
+  var outTaskSpawnIndicies = Array.tabulate(peCountGlobalTaskIn + argRouteServersNumber + spawnerServerNumber)(n => (n))
+  // remove spawnServerIndicies from outTaskSpawnIndicies
+  outTaskSpawnIndicies = outTaskSpawnIndicies.filterNot(spawnerIndicies.contains(_))
+
   val getOutsideSpawnNetwork = if(outsideSpawn) Some( Module(new SchedulerNetwork(taskWidth, (peCountGlobalTaskIn + argRouteServersNumber) + spawnerServerNumber, spawnerIndicies))) else None
+
+
+
 
   if(outsideSpawn){
     // spawnerServer.get.io.axi_mgmt <> spawnerServerMgmt.get
@@ -104,7 +113,7 @@ class Scheduler(
     for(i <- 0 until spawnerServerNumber){
       spawnerServer.get(i).asInstanceOf[SpawnerServer].io.axi_mgmt <> spawnerServerMgmt.get(i)
       spawnerServer.get(i).asInstanceOf[SpawnerServer].io.m_axi.asFull :=> spawnerServerAXI.get(i)
-      spawnerServer.get(i).asInstanceOf[SpawnerServer].io.connNetwork_slave <> getOutsideSpawnNetwork.get.io.connSS(i)
+      spawnerServer.get(i).asInstanceOf[SpawnerServer].io.connNetwork_slave <> getOutsideSpawnNetwork.get.io.connSS(spawnerIndicies(i))
     }
   }
 
@@ -338,7 +347,7 @@ class Scheduler(
 
   if (argRouteServersNumber > 0) {
     for (i <- 0 until argRouteServersNumber) {
-      getOutsideSpawnNetwork.get.io.connSS(i + spawnerServerNumber) <> connArgumentNotifier(i)
+      getOutsideSpawnNetwork.get.io.connSS(outTaskSpawnIndicies(i)) <> connArgumentNotifier(i)
     }
 
     // DEBUG
@@ -382,7 +391,7 @@ class Scheduler(
       ).io.dataOut.asLite
 
       //stealNW_TQ.io.connVAS(i) 
-      getOutsideSpawnNetwork.get.io.connSS(i+spawnerServerNumber) <> globalsTaskBuffers(i - argRouteServersNumber).io.connStealNtw
+      getOutsideSpawnNetwork.get.io.connSS(outTaskSpawnIndicies(i)) <> globalsTaskBuffers(i - argRouteServersNumber).io.connStealNtw
 
     }
 

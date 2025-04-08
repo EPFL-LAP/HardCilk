@@ -99,8 +99,8 @@ template <typename T> int initSystem(std::vector<T> base_task_data, const int fp
                 std::vector<uint64_t> addresses;
                 for(auto i = 0; i < taskDescriptor.getCapacityVirtualQueue("allocator"); i++){
                     uint64_t addr = continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8;
-                    addr = (addr & ~(0xFULL << 60)) | (static_cast<uint64_t>(fpgaId) << 60);
-                    addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8);
+                    addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56); // address space for the fpgaId
+                    addresses.push_back(addr);
                 }
 
                 // Write the addresses to the continuation queue

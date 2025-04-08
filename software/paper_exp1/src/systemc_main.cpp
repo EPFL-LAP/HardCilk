@@ -132,7 +132,7 @@ int sc_main(int argc, char **argv)
 #ifdef VERILATED_TRACE_ENABLED
     auto tfp = std::make_unique<VerilatedVcdSc>();
     testBench.myModule->traceVerilated(tfp.get(), 99);
-    tfp->open(fmt::format("{}.vcd", name).c_str());
+    tfp->open(fmt::format("{}.fst", name).c_str());
 #endif
 
     sc_start(1000, SC_MS);

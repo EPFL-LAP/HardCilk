@@ -24,6 +24,7 @@ class SchedulerLocalNetwork(
 ) extends Module {
   val io = IO(new SchedulerLocalNetworkIO(peCount, vssCount, vasCount, taskWidth, queueMaxLength))
 
+  //println(s"SchedulerLocalNetwork: $peCount PEs, $vssCount VSSs, $vasCount VASs")
   assert(peCount >= vssCount)
   // Create an array of indicies for the VSSs to be attached to in the stealing network,
   // the indicies should be between the indicies of the PEs with a mod operation.

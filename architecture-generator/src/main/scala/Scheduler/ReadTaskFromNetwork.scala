@@ -51,12 +51,12 @@ class ReadTaskFromNetwork(
   } 
 
   val tasksRead = RegInit(0.U(32.W))
-  when(startTokenReceived && tasksRead < readTasksCountReg){
+  when(startTokenReceived && tasksRead < allowCount){
     io.connNetwork.data.availableTask.ready := io.m_axis_task.ready
     io.m_axis_task.valid := io.connNetwork.data.availableTask.valid
     io.m_axis_task.bits := io.connNetwork.data.availableTask.bits
 
-    when(io.m_axis_task.fire){
+    when(io.connNetwork.data.availableTask.fire){
       tasksRead := tasksRead + 1.U
     }
   }
@@ -65,7 +65,9 @@ class ReadTaskFromNetwork(
     allowCount := 0.U
     tasksRead := 0.U
     startTokenReceived := false.B
+    readTasksCountReg := 0.U
   }
+  
 
   // io.readTasksCount.ready := false.B
 
@@ -143,19 +145,21 @@ class ReadTaskFromNetwork(
 
   // Create a counter here to keep track of the number of tasks that have been read from the network and print it 
   // to the console with fpga ID
-  // val readTaskCounter = RegInit(0.U(32.W))
-  // when(taskQueue.io.enq.fire){
-  //   readTaskCounter := readTaskCounter + 1.U
-  // }
+  val readTaskCounter = RegInit(0.U(32.W))
+  when(io.connNetwork.data.availableTask.fire){
+    readTaskCounter := readTaskCounter + 1.U
+  }
 
-  // val cyclesCounter = RegInit(0.U(32.W))
-  // cyclesCounter := cyclesCounter + 1.U
-  // when(cyclesCounter === 10000.U){
-  //   printf("FPGA ID: %d, Number of tasks read from the network: %d\n", io.fpgaId, readTaskCounter)
-  //   cyclesCounter := 0.U
-  // }
-  // dontTouch(readTaskCounter)
-  // dontTouch(cyclesCounter)
+  val cyclesCounter = RegInit(0.U(32.W))
+  cyclesCounter := cyclesCounter + 1.U
+  when(cyclesCounter === 100000.U){
+    printf("_______\n")
+    printf("FPGA ID: %d, Number of tasks read from the local network: %d\n", io.fpgaId, readTaskCounter)
+    printf("_______\n")
+    cyclesCounter := 0.U
+  }
+  dontTouch(readTaskCounter)
+  dontTouch(cyclesCounter)
   
 
 

@@ -13,6 +13,7 @@
 #include <chext_test/elastic/Driver.hpp>
 #include <systemc>
 #include <Protocols.hpp>
+#include <unordered_set>
 
 
 #define clockPeriod_ns 2
@@ -25,13 +26,18 @@ extern int remainingTasks;
 extern int tasksSpawnedNext;
 extern int tasksNotifiedFromA;
 extern int tasksNotifiedFromB;
+extern int tasksSpawned;
+
+
+extern std::unordered_set <uint32_t> uniqueTags;
+extern int uniqueTagsCount;
 
 struct task_INPE {
   uint32_t counter;
   uint32_t depth;
   uint32_t delay;
   uint32_t branchFactor;
-  uint32_t serialTasks;
+  uint32_t tag;
   uint32_t index;
   uint64_t cont;
 };
@@ -88,7 +94,6 @@ private:
   void executer_thread() {
     while (true) {
       auto receievedPacket = taskIn_->receive();
-      nodesProcessed++;
 
       // Conver the task to a struct of type task from the sc_bv<128> task
       task_INPE t;
@@ -96,17 +101,37 @@ private:
       t.depth = receievedPacket.range(63, 32).to_uint();
       t.delay = receievedPacket.range(95, 64).to_uint();
       t.branchFactor = receievedPacket.range(127, 96).to_uint();
-      t.serialTasks = receievedPacket.range(159, 128).to_uint();
+      t.tag = receievedPacket.range(159, 128).to_uint();
       t.index = receievedPacket.range(191, 160).to_uint();
-      t.cont = receievedPacket.range(255, 192).to_uint();
+      t.cont = receievedPacket.range(255, 192).to_ulong();
 
       //bool returningTask = ((t.cont & 0x3FFFFFFFF) != 0x3FFFFFFFF);
     
 
+      // Check if the tag is unique
+      if(uniqueTags.find(t.tag) != uniqueTags.end()){
+        std::cout << "Tag already exists: " << t.tag << std::endl;
+
+        //Print task info
+        std::cout << "Task info: " << std::endl;
+        std::cout << "Tag: " << t.tag << std::endl;
+        std::cout << "Counter: " << t.counter << std::endl;
+        std::cout << "Depth: " << t.depth << std::endl;
+        std::cout << "Delay: " << t.delay << std::endl;
+        std::cout << "Branch Factor: " << t.branchFactor << std::endl;
+        std::cout << "Index: " << t.index << std::endl;
+        std::cout << "Cont: " << t.cont << std::endl;
+        
+
+        sc_stop();
+      } else {
+        uniqueTags.insert(t.tag);
+      }
+
+
       if (t.depth == 0) {
         wait(sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS));
         T1 += sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS).to_seconds();
-        nodesProcessed += 1;
         if(t.cont != 0){
           // make t.cont a sc_bv<64>
           sc_dt::sc_bv<64> t_cont;
@@ -114,20 +139,20 @@ private:
           argOut_->send(t_cont);
           tasksNotifiedFromA += 1;
         }
-        remainingTasks -= 1;
+        nodesProcessed++;
       } else {
         bool continuation = false;
         for (std::uint32_t i = t.index; i < t.branchFactor; ++i) {
           wait(sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS));
           T1 += sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS).to_seconds();
-
-          if(i < t.serialTasks){
+          int serialTasks = 2;
+          if(i < serialTasks){
             continuation = true;
             remainingTasks+=2;
-            auto addr = closureIn_->receive().range(63, 0).to_uint();
+            auto addr = closureIn_->receive().range(63, 0).to_ulong();
             
             task_INPE new_cont_task;
-            new_cont_task.serialTasks = t.serialTasks;
+            new_cont_task.tag = uniqueTagsCount++;
             new_cont_task.counter = 1;
             new_cont_task.branchFactor = t.branchFactor;
             new_cont_task.depth = t.depth;
@@ -135,8 +160,15 @@ private:
             new_cont_task.index = i + 1;  
             new_cont_task.delay = t.delay;
   
+
+            if(new_cont_task.cont == 41551392)
+            {
+              // print the addr the task will set in 
+              std::cout << "Task sets at: " << addr << std::endl;
+            }
+
             task_INPE new_task;
-            new_task.serialTasks = t.serialTasks;
+            new_task.tag = uniqueTagsCount++;
             new_task.counter = 0;
             new_task.branchFactor = t.branchFactor;
             new_task.depth = t.depth - 1;
@@ -145,7 +177,7 @@ private:
             new_task.delay = t.delay;
 
             task_spawn_next sn;
-            sn.addr = addr;
+            sn.addr = addr & 0x3FFFFFFFF;
             sn.data = new_cont_task;
             sn.size = 5; // task size is 2^5 bytes
             sn.allow = 1;
@@ -160,7 +192,7 @@ private:
             spawnNext.range(127, 96) = sn.data.depth;
             spawnNext.range(159, 128) = sn.data.delay;
             spawnNext.range(191, 160) = sn.data.branchFactor;
-            spawnNext.range(223, 192) = sn.data.serialTasks;
+            spawnNext.range(223, 192) = sn.data.tag;
             spawnNext.range(255, 224) = sn.data.index;
             spawnNext.range(319, 256) = sn.data.cont;
             spawnNext.range(351, 320) = sn.size;
@@ -177,21 +209,21 @@ private:
             task.range(63, 32) = new_task.depth;
             task.range(95, 64) = new_task.delay;
             task.range(127, 96) = new_task.branchFactor;
-            task.range(159, 128) = new_task.serialTasks;
+            task.range(159, 128) = new_task.tag;
             task.range(191, 160) = new_task.index;
             task.range(255, 192) = new_task.cont;
 
             //std::cout << "Task should return to: " << task.range(255, 192).to_uint() << std::endl;
 
             taskOutSynced_->send(task);
-            remainingTasks--;
+            tasksSpawned++;
 
             break;
   
           } else{
             remainingTasks++;
             task_INPE new_task;
-            new_task.serialTasks = t.serialTasks;
+            new_task.tag = uniqueTagsCount++;
             new_task.counter = 0;
             new_task.branchFactor = t.branchFactor;
             new_task.depth = t.depth - 1;
@@ -204,16 +236,15 @@ private:
             task.range(63, 32) = new_task.depth;
             task.range(95, 64) = new_task.delay;
             task.range(127, 96) = new_task.branchFactor;
-            task.range(159, 128) = new_task.serialTasks;
+            task.range(159, 128) = new_task.tag;
             task.range(191, 160) = new_task.index;
             task.range(255, 192) = new_task.cont;
             
             fifo_.write(task);
+            tasksSpawned++;
           }
         }
         if (!continuation) {
-          remainingTasks -= 1;
-          nodesProcessed += 1;
           if (t.cont != 0) {
             // make t.cont a sc_bv<64>
             sc_dt::sc_bv<64> t_cont;
@@ -221,17 +252,16 @@ private:
             argOut_->send(t_cont);
             tasksNotifiedFromB += 1;
           }
+          nodesProcessed++;
         }
       }
 
-      // if(t.index >= t.serialTasks && returningTask && t.depth != 0){
-      //   // make t.cont a sc_bv<64>
-      //   sc_dt::sc_bv<64> t_cont;
-      //   t_cont.range(63, 0) = t.cont;
-      //   argOut_->send(t_cont);
-      // }
+      --remainingTasks;
 
-      // --remainingTasks;
+
+      assert(nodesProcessed < (tasksSpawned + tasksNotifiedFromA + tasksNotifiedFromB + 6));
+
+      //if(nodesProcessed + 6 > (tasksSpawned + ))
 
     }
   }

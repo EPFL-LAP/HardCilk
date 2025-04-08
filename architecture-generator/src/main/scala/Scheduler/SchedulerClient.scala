@@ -254,6 +254,9 @@ class SchedulerClient(
       when(io.connNetwork.data.qOutTask.ready) {
         tasksGivenAwayCount := tasksGivenAwayCount + 1.U
         stateReg := state.init
+      }.elsewhen(io.connQ.currLength < minLengthThresh.U){
+        stolenTaskReg := giveTaskReg
+        stateReg := state.pushTask
       }.otherwise {
         stateReg := state.giveAwayTask
       }

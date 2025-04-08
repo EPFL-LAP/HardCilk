@@ -326,6 +326,7 @@ class HardCilk(
           mWriteBuffer.m_axi :=> port.asFull
           axiOuts.addOne((port, port.cfg))
 
+
           // add it to the hdlinfo interface buffer
           interfaceBuffer.addOne(
             hdlinfo.Interface(
@@ -514,7 +515,7 @@ class HardCilk(
           // A demux to connect the m_axis_mFPGA_schedulers to the correct Scheduler of the correct task ID
           val schedulers = schedulerMap.toSeq.sortBy(_._2.taskIndexV).map(_._2.s_axis_remote.get.asFull)
 
-          new elastic.Fork(s_axis_mFPGA_schedulers.get) {
+          new elastic.Fork(elastic.SourceBuffer(s_axis_mFPGA_schedulers.get)) {
             override def onFork(): Unit = {
               elastic.Demux(
                 source = fork(in),
@@ -528,7 +529,7 @@ class HardCilk(
           // There are only schedulers!
           // Create a sequence of the schedulers' s_axis_remote interfaces ordered by task ID
           val schedulers = schedulerMap.toSeq.sortBy(_._2.taskIndexV).map(_._2.s_axis_remote.get.asFull)
-          new elastic.Fork(s_axis_mFPGA.get.asFull) {
+          new elastic.Fork(elastic.SourceBuffer(s_axis_mFPGA.get.asFull)) {
             override def onFork(): Unit = {
               elastic.Demux(
                 source = fork(in),

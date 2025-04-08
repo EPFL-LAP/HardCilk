@@ -159,6 +159,38 @@ class ArgumentNotifier(
   dontTouch(argInCounter.io.counter)
   // DEBUG
 
+  // Debug
+  val taskOutCounter = Module(new Counter64(argRouteServersNumber))
+  for (i <- 0 until argRouteServersNumber) {
+    taskOutCounter.io.signals(i) := connStealNtw(i).data.qOutTask.fire
+  }
+  dontTouch(taskOutCounter.io.counter)
+  // Debug
+
+
+  // Debug
+  // Count the arguments coming on s_remote if fpgaCount > 1
+  if(fpgaCount>1){
+    val remoteCounter = Module(new Counter64(1))
+
+    remoteCounter.io.signals(0) := s_axis_remote.get.asFull.fire
+    dontTouch(remoteCounter.io.counter)
+
+
+    assert(taskOutCounter.io.counter <= (argInCounter.io.counter + remoteCounter.io.counter), "Error: taskOutCounter > argInCounter + remoteCounter")
+  } else {
+    assert(taskOutCounter.io.counter <= argInCounter.io.counter, "Error: taskOutCounter > argInCounter")
+  }
+
+
+
+
+  // If  taskOutCounter > argInCounter, print a debugging statement inidicating the error
+  // when(argInCounter.io.counter < taskOutCounter.io.counter) {
+  //   printf("Error: argInCounter < taskOutCounter: %d < %d\n", argInCounter.io.counter, taskOutCounter.io.counter)
+  // }
+  //
+
 }
 
 // object ArgumentNotifierEmitter extends App {

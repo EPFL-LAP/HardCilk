@@ -32,7 +32,7 @@ class ArgumentServerMfpgaWrapperIO(
 
 
   val axisCfgTaskAndReq =
-    axi4s.Config(wData = 64, wDest = 4) // task plus 8 bits for task valid and request value (8 bits for AXIS compat)
+    axi4s.Config(wData = 512, wDest = 4) // task plus 8 bits for task valid and request value (8 bits for AXIS compat)
   val m_axis_remote = if (fpgaCount > 1) Some(axi4s.Master(axisCfgTaskAndReq)) else None
   val s_axis_remote = if (fpgaCount > 1) Some(axi4s.Slave(axisCfgTaskAndReq)) else None
 
@@ -115,7 +115,7 @@ class ArgumentServerMfpgaWrapper(
     remoteQSend.io.deq.ready := io.m_axis_remote.get.TREADY 
     io.m_axis_remote.get.TVALID := remoteQSend.io.deq.valid
     io.m_axis_remote.get.TDATA := Cat(Fill(13, 0.U(1.W)), 1.U(1.W), Fill(512 - 14 - 64, 0.U(1.W)) ,remoteQSend.io.deq.bits)
-    io.m_axis_remote.get.TDEST.get := remoteQSend.io.deq.bits(sysAddressWidth - 1, 60)
+    io.m_axis_remote.get.TDEST.get := remoteQSend.io.deq.bits(sysAddressWidth - 5, 56) // Important bug fix here, TDEST sets in specific address range
 
     // When connNetwork is valid, check the upper 8 bits of the address
     // If it is equal to rFPGAIndex, then it is a local address, so enqueue it to localQ
