@@ -185,7 +185,8 @@ case class FullSysGenDescriptor(
     val targetFrequency: Int = 250,
     val memorySizeSim: Int = 1, // in GB
     val fpgaModel: String = "ALVEO_U55C",
-    val fpgaCount: Int = 1
+    val fpgaCount: Int = 1,
+    val tasksMoveCount: Int = 0,
 ) {
   assert(isPow2(widthAddress) && widthAddress <= 64)
   assert(isPow2(widthContCounter) && widthContCounter <= 64)

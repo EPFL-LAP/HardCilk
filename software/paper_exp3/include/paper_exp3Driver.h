@@ -10,11 +10,11 @@
 
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
-#define BASE_DEPTH 2
-#define SERIAL_TASKS 2
-#define BRANCH_FACTOR 7
-#define INIT_COUNT 6
-#define DELAY 8
+extern uint32_t _exp3_baseDepth;
+extern uint32_t _exp3_branchFactor;
+extern uint32_t _exp3_initCount;
+extern uint32_t _exp3_delay;
+extern uint32_t _exp3_serialTasks;
 
 struct task {
     uint32_t counter;
@@ -55,8 +55,8 @@ public:
 
         memories_[0]->copyToDevice(addr, (uint8_t *)&task_args_0, sizeof(task_args_0));
 
-        task_args_0.branchFactor = BRANCH_FACTOR;
-        task_args_0.delay = DELAY; // delay in cycles, a cycle is 2ns
+        task_args_0.branchFactor = _exp3_branchFactor;
+        task_args_0.delay = _exp3_delay; // delay in cycles, a cycle is 2ns
         //task_args_0.serialTasks = SERIAL_TASKS;
         task_args_0.index = 0;
         task_args_0.counter = 0;    
@@ -64,9 +64,9 @@ public:
 
         std::vector<task> base_task_data;
 
-        for (int i = 0; i < INIT_COUNT; i++)
+        for (int i = 0; i < _exp3_initCount; i++)
         {
-            task_args_0.depth = BASE_DEPTH + i;
+            task_args_0.depth = _exp3_baseDepth + i;
             task_args_0.tag = uniqueTagsCount++;
             base_task_data.push_back(task_args_0);
         }
@@ -80,7 +80,7 @@ public:
         std::cout << "T_START: " << T_START << std::endl;
 
 
-        remainingTasks = INIT_COUNT;
+        remainingTasks = _exp3_initCount;
 
         const int logFreq = 10000;
 
@@ -89,19 +89,18 @@ public:
 
         while (remainingTasks > 0)
         {
-            //wait(task_args_0.delay * 2, SC_NS);
-            wait(100000, SC_NS);
+            wait(10000, SC_NS);
             if(nodesProcessed % logFreq == 0){
                 std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
             }
-            std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
-            std::cout << "remainingTasks: " << remainingTasks << std::endl;
-            std::cout << "tasksSpawnedNext: " << tasksSpawnedNext << std::endl;
-            std::cout << "tasksNotifiedFromA: " << tasksNotifiedFromA << std::endl;
-            std::cout << "tasksNotifiedFromB: " << tasksNotifiedFromB << std::endl;
-            // total notified
-            std::cout << "total notified: " << tasksNotifiedFromA + tasksNotifiedFromB << std::endl;
-            std::cout << "tasksSpawned: " << tasksSpawned << std::endl;
+            // std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
+            // std::cout << "remainingTasks: " << remainingTasks << std::endl;
+            // std::cout << "tasksSpawnedNext: " << tasksSpawnedNext << std::endl;
+            // std::cout << "tasksNotifiedFromA: " << tasksNotifiedFromA << std::endl;
+            // std::cout << "tasksNotifiedFromB: " << tasksNotifiedFromB << std::endl;
+            // // total notified
+            // std::cout << "total notified: " << tasksNotifiedFromA + tasksNotifiedFromB << std::endl;
+            // std::cout << "tasksSpawned: " << tasksSpawned << std::endl;
 
         }
 

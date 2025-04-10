@@ -73,10 +73,13 @@ class Scheduler(
     taskIndex: Int,
     spawnerServerNumber: Int = 1,
     collectStats: Boolean = true,
+    tasksMoveCount: Int = 1
 ) extends Module {
 
   val taskIndexV = taskIndex
-  val outsideSpawn = (peCountGlobalTaskIn + argRouteServersNumber) > 1
+  val outsideSpawn = (peCountGlobalTaskIn + argRouteServersNumber) > 0
+
+  // println(f"Outside spawn: $outsideSpawn")
 
   val vssAxiFullCfg = axi4.Config(
     wAddr = addrWidth,
@@ -228,7 +231,7 @@ class Scheduler(
     // DEBUG
   }
 
-  val numberOftasksToStealOrServe = 128
+  val numberOftasksToStealOrServe = tasksMoveCount
 
   val remoteTaskServer =
     if (fpgaCount > 1) Some(Module(new RemoteTaskServer(taskWidth, numberOftasksToStealOrServe, peCount, taskIndex))) else None

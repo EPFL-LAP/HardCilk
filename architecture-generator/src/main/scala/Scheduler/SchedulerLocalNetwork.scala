@@ -25,12 +25,23 @@ class SchedulerLocalNetwork(
   val io = IO(new SchedulerLocalNetworkIO(peCount, vssCount, vasCount, taskWidth, queueMaxLength))
 
   //println(s"SchedulerLocalNetwork: $peCount PEs, $vssCount VSSs, $vasCount VASs")
-  assert(peCount >= vssCount)
+  assert(peCount >= vssCount || peCount == 1)
   // Create an array of indicies for the VSSs to be attached to in the stealing network,
   // the indicies should be between the indicies of the PEs with a mod operation.
-  val step = (peCount + vasCount) / vssCount
+  var step = (peCount + vasCount) / vssCount
+
+  // if(step == 0) {
+  //   step = 
+  // }
+
+ // println(f"Vss Count: $vssCount, Step: $step")
 
   var vssIndicies = Array.tabulate(vssCount)(n => (n + n * step))
+
+  // log vss indicies
+  // for (i <- 0 until vssCount) {
+  //   println(f"VSS $i index: ${vssIndicies(i)}")
+  // }
 
   if (successiveNetworkConfig) {
     vssIndicies = Array.tabulate(vssCount)(n => (n))

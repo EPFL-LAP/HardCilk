@@ -32,6 +32,8 @@ extern int tasksSpawned;
 extern std::unordered_set <uint32_t> uniqueTags;
 extern int uniqueTagsCount;
 
+extern uint32_t _exp3_serialTasks;
+
 struct task_INPE {
   uint32_t counter;
   uint32_t depth;
@@ -145,8 +147,7 @@ private:
         for (std::uint32_t i = t.index; i < t.branchFactor; ++i) {
           wait(sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS));
           T1 += sc_core::sc_time(clockPeriod_ns * t.delay, sc_core::SC_NS).to_seconds();
-          int serialTasks = 2;
-          if(i < serialTasks){
+          if(i < _exp3_serialTasks){
             continuation = true;
             remainingTasks+=2;
             auto addr = closureIn_->receive().range(63, 0).to_ulong();
@@ -160,12 +161,6 @@ private:
             new_cont_task.index = i + 1;  
             new_cont_task.delay = t.delay;
   
-
-            if(new_cont_task.cont == 41551392)
-            {
-              // print the addr the task will set in 
-              std::cout << "Task sets at: " << addr << std::endl;
-            }
 
             task_INPE new_task;
             new_task.tag = uniqueTagsCount++;

@@ -8,12 +8,130 @@
 
 static constexpr const char *name = "paper_exp3";
 
+
+sc_time _mFpga_switchPeriod = sc_time(8, SC_NS);
+sc_time _mFpga_linkToSwitchDelay = sc_time(500, SC_NS);
+sc_time _mFpga_linkToSwitchPeriod = sc_time(8, SC_NS);
+sc_time _mFpga_linkToFpgaDelay = sc_time(500, SC_NS);
+sc_time _mFpga_linkToFpgaPeriod = sc_time(8, SC_NS);
+
+uint32_t _exp3_baseDepth = 2;
+uint32_t _exp3_branchFactor = 7;
+uint32_t _exp3_initCount = 7;
+uint32_t _exp3_delay = 8;
+uint32_t _exp3_serialTasks = 2;
+
+#include <map>
+#include <sstream>
+
+std::map<std::string, std::string> parseArgs(int argc, char **argv)
+{
+    std::map<std::string, std::string> result;
+
+    for (unsigned i = 1; i < argc; ++i)
+    {
+        auto arg = std::string(argv[i]);
+
+        if (arg.size() > 2)
+        {
+            if (arg.substr(0, 2) == "-D")
+            {
+                std::istringstream iss(arg.substr(2));
+
+                std::string name, value;
+                std::getline(iss, name, '=');
+                std::getline(iss, value);
+
+                std::cout << "Found argument: '" << name << "' -> '" << value << "'\n";
+
+                result[name] = value;
+            }
+        }
+    }
+
+    return result;
+}
+
+sc_time scTimeFromString(std::string const &str)
+{
+    // format: <double>_<unit>
+    std::istringstream iss(str);
+
+    std::string num_str, unit_str;
+    std::getline(iss, num_str, '_');
+    std::getline(iss, unit_str);
+
+    auto num = std::stof(num_str);
+
+    if (unit_str == "ns")
+        return sc_time(num, SC_NS);
+
+    else if (unit_str == "us")
+        return sc_time(num, SC_US);
+
+    throw std::runtime_error("not recognized unit!");
+}
+
 int sc_main(int argc, char **argv)
 {
 #ifdef VERILATED_TRACE_ENABLED
     Verilated::traceEverOn(true);
 #endif
     Verilated::commandArgs(argc, argv);
+
+    {
+        auto args = parseArgs(argc, argv);
+
+        if (auto it = args.find("mFpga_switchPeriod"); it != args.end())
+        {
+            _mFpga_switchPeriod = scTimeFromString(it->second);
+        }
+
+        if (auto it = args.find("mFpga_linkToSwitchDelay"); it != args.end())
+        {
+            _mFpga_linkToSwitchDelay = scTimeFromString(it->second);
+        }
+
+        if (auto it = args.find("mFpga_linkToSwitchPeriod"); it != args.end())
+        {
+            _mFpga_linkToSwitchPeriod = scTimeFromString(it->second);
+        }
+
+        if (auto it = args.find("mFpga_linkToFpgaDelay"); it != args.end())
+        {
+            _mFpga_linkToFpgaDelay = scTimeFromString(it->second);
+        }
+
+        if (auto it = args.find("mFpga_linkToFpgaPeriod"); it != args.end())
+        {
+            _mFpga_linkToFpgaPeriod = scTimeFromString(it->second);
+        }
+
+        if (auto it = args.find("exp3_baseDepth"); it != args.end())
+        {
+            _exp3_baseDepth = static_cast<uint32_t>(std::stoul(it->second));
+        }
+
+        if (auto it = args.find("exp3_branchFactor"); it != args.end())
+        {
+            _exp3_branchFactor = static_cast<uint32_t>(std::stoul(it->second));
+        }
+
+        if (auto it = args.find("exp3_initCount"); it != args.end())
+        {
+            _exp3_initCount = static_cast<uint32_t>(std::stoul(it->second));
+        }
+
+        if (auto it = args.find("exp3_delay"); it != args.end())
+        {
+            _exp3_delay = static_cast<uint32_t>(std::stoul(it->second));
+        }
+
+        if (auto it = args.find("exp3_serialTasks"); it != args.end())
+        {
+            _exp3_serialTasks = static_cast<uint32_t>(std::stoul(it->second));
+        }
+    }
 
     TestBench testBench("testBench");
 

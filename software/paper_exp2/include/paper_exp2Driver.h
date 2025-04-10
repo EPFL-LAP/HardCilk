@@ -8,13 +8,10 @@
 
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
-#define BASE_DEPTH 2
-#define BRANCH_FACTOR 6
-#define INIT_COUNT 6
-
-int remainingTasks;
-double T1 = 0; 
-int nodesProcessed = 0;
+extern uint32_t _exp2_baseDepth;
+extern uint32_t _exp2_branchFactor;
+extern uint32_t _exp2_initCount;
+extern uint32_t _exp2_delay;
 
 
 struct task_0 {
@@ -28,6 +25,12 @@ struct task_1 {
     uint32_t delay;
 };
 
+
+int remainingTasks;
+double T1 = 0; 
+int nodesProcessed = 0;
+
+
 class paper_exp2Driver : public mFpgaHardCilkDriver {
 public:
   paper_exp2Driver(std::vector<Memory *> memories)
@@ -39,22 +42,21 @@ public:
                            uint64_t &taskConsumedCounter) {
     task_0 task_args_0 = {0, 0, 0, 0};
     uint64_t addr = allocateMemFPGA_Mfpga(sizeof(task_args_0), 512);
-    // uint64_t addr= 0x0;
 
     memories_[0]->copyToDevice(addr, (uint8_t *)&task_args_0,
                                sizeof(task_args_0));
 
-    task_args_0.branchFactor = BRANCH_FACTOR;
-    task_args_0.delay = 32; // delay in cycles, a cycle is 2ns
+    task_args_0.branchFactor = _exp2_branchFactor;
+    task_args_0.delay = _exp2_delay; // delay in cycles, a cycle is 2ns
 
     std::vector<task_0> base_task_data;
 
-    for (int i = 0; i < INIT_COUNT; i++) {
-      task_args_0.depth = BASE_DEPTH + i;
+    for (int i = 0; i < _exp2_initCount; i++) {
+      task_args_0.depth = _exp2_baseDepth + i;
       base_task_data.push_back(task_args_0);
     }
 
-    remainingTasks = INIT_COUNT;
+    remainingTasks = _exp2_initCount;
 
     initSystemMfpga(base_task_data);
 
@@ -97,8 +99,11 @@ public:
     // Log T_n
     std::cout << "T_n: " << T_n << std::endl;
 
+    // Log task delay
+    std::cout << "task delay (for correct efficiency calculation): " << task_args_0.delay << std::endl;
+
     // Log efficiency T_n_perfect / T_n * 100 % to the nearest 100th
-    std::cout << "Efficiency: " << (T_n_perfect / T_n) * 100 << "%"
+    std::cout << "Efficiency (Not final!): " << (T_n_perfect / T_n) * 100 << "%"
               << std::endl;
 
     return 0;

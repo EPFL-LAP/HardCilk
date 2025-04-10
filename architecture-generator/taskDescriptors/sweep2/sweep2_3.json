@@ -9,7 +9,7 @@
             "dynamicMemAlloc": false,
             "taskId": 0,
             
-            "numProcessingElements": 1,
+            "numProcessingElements": 32,
             "widthTask": 128,
             "widthMalloc": 0,
             "spawnServersCount": 0, 
@@ -17,7 +17,7 @@
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 4,
+                    "numVirtualServers": 1,
                     "capacityVirtualQueue": 10000000,
                     "capacityPhysicalQueue": 32,
                     "portWidth": 128
@@ -32,15 +32,15 @@
             "dynamicMemAlloc": false,
             "taskId": 1,
             
-            "numProcessingElements": 1,
+            "numProcessingElements": 32,
             "widthTask": 32,
             "widthMalloc": 0,
-            "spawnServersCount": 1,
+            "spawnServersCount": 4,
 
             "sidesConfigs": [
                 {
                     "sideType": "scheduler",
-                    "numVirtualServers": 4,
+                    "numVirtualServers": 1,
                     "capacityVirtualQueue": 10000000,
                     "capacityPhysicalQueue": 32,
                     "portWidth": 32
@@ -63,6 +63,6 @@
     "memorySizeSim": 16,
     "targetFrequency": 250,
     "fpgaModel": "ALVEO_U55C",
-    "fpgaCount": 1,
+    "fpgaCount": 4,
     "tasksMoveCount": 128
 }

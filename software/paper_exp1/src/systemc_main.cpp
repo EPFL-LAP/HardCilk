@@ -1,8 +1,9 @@
 #include <testBench.h>
 
-#include <verilated_vcd_sc.h>
+#include "verilated_fst_sc.h"
 #include <stdint.h>
 #include <iostream>
+#include "Vpaper_exp1.h"
 
 static constexpr const char *name = "paper_exp1";
 
@@ -14,7 +15,7 @@ sc_time _mFpga_linkToFpgaDelay = sc_time(500, SC_NS);
 sc_time _mFpga_linkToFpgaPeriod = sc_time(8, SC_NS);
 
 uint32_t _exp1_baseDepth = 2;
-uint32_t _exp1_branchFactor = 6;
+uint32_t _exp1_branchFactor = 7;
 uint32_t _exp1_initCount = 6;
 uint32_t _exp1_delay = 32;
 
@@ -130,8 +131,9 @@ int sc_main(int argc, char **argv)
     sc_start(SC_ZERO_TIME);
 
 #ifdef VERILATED_TRACE_ENABLED
-    auto tfp = std::make_unique<VerilatedVcdSc>();
-    testBench.myModule->traceVerilated(tfp.get(), 99);
+    auto* verilatedModule = static_cast<Vpaper_exp2*>(testBench.myModule->getVerilatedModule());
+    VerilatedFstC* tfp = new VerilatedFstSc;
+    verilatedModule->trace(tfp, 99, 0);
     tfp->open(fmt::format("{}.fst", name).c_str());
 #endif
 

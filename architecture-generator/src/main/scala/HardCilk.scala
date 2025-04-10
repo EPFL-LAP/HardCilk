@@ -158,7 +158,8 @@ class HardCilk(
           fpgaCount = fullSysGenDescriptor.fpgaCount,
           taskIndex = task.taskId,
           collectStats = true,
-          spawnerServerNumber = task.spawnServersCount
+          spawnerServerNumber = task.spawnServersCount,
+          tasksMoveCount = fullSysGenDescriptor.tasksMoveCount
         )
       ))
 

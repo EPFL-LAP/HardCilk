@@ -456,8 +456,8 @@ object MfpgaHardCilkEmitter extends App {
         }
 
         // softlink "ln -s repos/jnbrq/sysc-switch/include/sysc_netw/" to "outputDirPathSC/projects/${jsonName}/include/sysc_netw"
-        val syscSwitchPath =
-          "/repos/jnbrq/sysc-switch/include/sysc_netw"
+        val syscSwitchPath = "/home/shahawy/repos/jnbrq/sysc-switch/include/sysc_netw/"
+          //"/repos/jnbrq/sysc-switch/include/sysc_netw"
         val syscSwitchDestination =
           s"$outputDirPathSC/projects/${internalName}/include/sysc_netw"
         val syscSwitchCommand = s"ln -s $syscSwitchPath $syscSwitchDestination"
@@ -548,12 +548,46 @@ object mFpga_Sweep1 extends App {
       Array[String](
         f"taskDescriptors/sweep1/sweep1_${i}.json",
         "-o",
-        "output",
+        "/beta/shahawy/output/",
         "-r",
         "32",
         "-a",
         "-q", // // original project
         "paper_exp1"  // original project
+      )
+    )
+  }
+}
+
+object mFpga_Sweep2 extends App {
+  for (i <- (0 to 4)) {
+    MfpgaHardCilkEmitter.main(
+      Array[String](
+        f"taskDescriptors/sweep2/sweep2_${i}.json",
+        "-o",
+        "/beta/shahawy/output/",
+        "-r",
+        "32",
+        "-a",
+        "-q", // // original project
+        "paper_exp2"  // original project
+      )
+    )
+  }
+}
+
+object mFpga_Sweep3 extends App {
+  for (i <- (1 to 4)) {
+    MfpgaHardCilkEmitter.main(
+      Array[String](
+        f"taskDescriptors/sweep3/sweep3_${i}.json",
+        "-o",
+        "/beta/shahawy/output/",
+        "-r",
+        "32",
+        "-a",
+        "-q", // // original project
+        "paper_exp3"  // original project
       )
     )
   }
