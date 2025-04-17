@@ -295,7 +295,7 @@ object TestBenchHeaderTemplate {
     var instantiations = ""
     var memList = ""
     for (fpgaIndex <- 0 until descriptor.fpgaCount) {
-      instantiations += s"""        , memory_${fpgaIndex}_("memory_${fpgaIndex}", sc_time(${memLatency}, SC_NS), memorySize, 0, nullptr)\n"""
+      instantiations += s"""        , memory_${fpgaIndex}_("memory_${fpgaIndex}", sc_time(${memLatency}, SC_NS), memorySize, 32, nullptr)\n"""
       instantiations += s"""        , iconnectMem_${fpgaIndex}_("iconnectMem_${fpgaIndex}", ${descriptor
           .getAxiMastersCount()+1}, 1)\n"""
       instantiations += s"""        , memoryDriverMemory_${fpgaIndex}_("memoryDriverMemory_${fpgaIndex}")\n"""

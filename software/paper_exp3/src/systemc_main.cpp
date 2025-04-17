@@ -144,7 +144,7 @@ int sc_main(int argc, char **argv)
     tfp->open(fmt::format("{}.fst", name).c_str());
 #endif
 
-    sc_start(1000, SC_MS);
+    sc_start(100000, SC_MS);
     
 #ifdef VERILATED_TRACE_ENABLED
     tfp->close();

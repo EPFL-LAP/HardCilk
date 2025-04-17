@@ -17,7 +17,7 @@ sc_time _mFpga_linkToFpgaPeriod = sc_time(8, SC_NS);
 
 uint32_t _exp2_baseDepth = 2;
 uint32_t _exp2_branchFactor = 7;
-uint32_t _exp2_initCount = 6;
+uint32_t _exp2_initCount = 7;
 uint32_t _exp2_delay = 32;
 
 
@@ -140,7 +140,7 @@ int sc_main(int argc, char **argv)
     tfp->open(fmt::format("{}.fst", name).c_str());
 #endif
 
-    sc_start(1000, SC_MS);
+    sc_start(100000, SC_MS);
     
 #ifdef VERILATED_TRACE_ENABLED
     tfp->close();

@@ -3,15 +3,16 @@
     "taskDescriptors": [
         {
             "name": "paper_exp1_task",
-            "peHDLPath": "/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp1",
+            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp1",
             "isRoot": true,            
             "isCont": false,
             "dynamicMemAlloc": false,
             "taskId": 0,
             
-            "numProcessingElements": 16,
+            "numProcessingElements": 64,
             "widthTask": 128,
             "widthMalloc": 0,
+            "spawnServersCount": 0, 
 
             "sidesConfigs": [
                 {
@@ -38,5 +39,6 @@
     "memorySizeSim": 16,
     "targetFrequency": 250,
     "fpgaModel": "ALVEO_U55C",
-    "fpgaCount": 8
+    "fpgaCount": 2,
+    "tasksMoveCount": 64
 }

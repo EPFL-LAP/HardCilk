@@ -71,6 +71,9 @@ public:
             base_task_data.push_back(task_args_0);
         }
 
+        remainingTasks = _exp3_initCount;
+
+
         initSystemMfpga(base_task_data);
 
         startSystemMfpga();
@@ -80,7 +83,6 @@ public:
         std::cout << "T_START: " << T_START << std::endl;
 
 
-        remainingTasks = _exp3_initCount;
 
         const int logFreq = 10000;
 

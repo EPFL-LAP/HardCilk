@@ -87,8 +87,11 @@ class MfpgaHardCilk(
 
           // Create a export decoupled IO for the port with the same port width
           val portExport =
-            if (port._2._3 == "Master") IO(DecoupledIO(UInt(portConfig.wData.W))).suggestName(portName)
-            else IO(Flipped(DecoupledIO(UInt(portConfig.wData.W)))).suggestName(portName)
+            if (port._2._3 == "Master")
+              IO(DecoupledIO(UInt(portConfig.wData.W))).suggestName(portName)
+            else
+              IO(Flipped(DecoupledIO(UInt(portConfig.wData.W))))
+                .suggestName(portName)
 
           // connect the port to the export
           portIO.asLite <> portExport
@@ -97,7 +100,9 @@ class MfpgaHardCilk(
           interfaceBuffer.addOne(
             hdlinfo.Interface(
               portName,
-              hdlinfo.InterfaceRole(if (port._2._3 == "Master") "sink" else "source"),
+              hdlinfo.InterfaceRole(
+                if (port._2._3 == "Master") "sink" else "source"
+              ),
               hdlinfo.InterfaceKind("readyValid[chext.elastic.Data]"),
               "clock",
               "reset",
@@ -297,7 +302,9 @@ object MfpgaHardCilkEmitter extends App {
       val fileContent = readFile(file.getAbsolutePath())
 
       if (fileName.startsWith("DualPortBRAM")) {
-        if ((isSimulation && fileName == "DualPortBRAM_sim.v") || (!isSimulation && fileName == "DualPortBRAM_xpm.v")) {
+        if (
+          (isSimulation && fileName == "DualPortBRAM_sim.v") || (!isSimulation && fileName == "DualPortBRAM_xpm.v")
+        ) {
           writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
         }
       } else if (listOfFilesForQuesta.contains(fileName)) {
@@ -428,7 +435,8 @@ object MfpgaHardCilkEmitter extends App {
         projectTemplate.renameTo(projectDestination)
 
         // Generate the HDL in the `outputDirPathSC/projects/${jsonName}/hdl`
-        new java.io.File(s"$outputDirPathSC/projects/${internalName}/hdl").mkdirs()
+        new java.io.File(s"$outputDirPathSC/projects/${internalName}/hdl")
+          .mkdirs()
         val fpgaModules = generateRTL(
           systemDescriptor,
           pathInputJsonFile,
@@ -451,13 +459,17 @@ object MfpgaHardCilkEmitter extends App {
           peHDLPathFiles.foreach { file =>
             val fileName = file.getName()
             val fileContent = readFile(file.getAbsolutePath())
-            writeFile(s"$outputDirPathSC/projects/${internalName}/include/$fileName", fileContent)
+            writeFile(
+              s"$outputDirPathSC/projects/${internalName}/include/$fileName",
+              fileContent
+            )
           }
         }
 
         // softlink "ln -s repos/jnbrq/sysc-switch/include/sysc_netw/" to "outputDirPathSC/projects/${jsonName}/include/sysc_netw"
-        val syscSwitchPath = "/home/shahawy/repos/jnbrq/sysc-switch/include/sysc_netw/"
-          //"/repos/jnbrq/sysc-switch/include/sysc_netw"
+        val syscSwitchPath =
+          "/home/shahawy/repos/jnbrq/sysc-switch/include/sysc_netw/"
+        // "/repos/jnbrq/sysc-switch/include/sysc_netw"
         val syscSwitchDestination =
           s"$outputDirPathSC/projects/${internalName}/include/sysc_netw"
         val syscSwitchCommand = s"ln -s $syscSwitchPath $syscSwitchDestination"
@@ -542,20 +554,40 @@ object mFPGAEntry extends App {
   )
 }
 
-object mFpga_Sweep1 extends App {
-  for (i <- (1 to 4)) {
-    MfpgaHardCilkEmitter.main(
-      Array[String](
-        f"taskDescriptors/sweep1/sweep1_${i}.json",
-        "-o",
-        "/beta/shahawy/output/",
-        "-r",
-        "32",
-        "-a",
-        "-q", // // original project
-        "paper_exp1"  // original project
-      )
+object sweep1_1_FPGA extends App {
+  MfpgaHardCilkEmitter.main(
+    Array[String](
+      "taskDescriptors/sweep1/sweep1_1.json",
+      "-o",
+      "output/",
+      "-r",
+      "32",
+      "-a",
+      "-q", // // original project
+      "paper_exp1" // original project
     )
+  )
+}
+
+object mFpga_Sweep1 extends App {
+  val arr = Array(
+    16,32,64,128
+  )
+  for (i <- (2 to 4)) {
+    for (j <- (0 to 3)) {
+      MfpgaHardCilkEmitter.main(
+        Array[String](
+          f"taskDescriptors/sweep1/sweep1_${i}_${arr(j)}.json",
+          "-o",
+          "output/",
+          "-r",
+          "32",
+          "-a",
+          "-q", // // original project
+          "paper_exp1" // original project
+        )
+      )
+    }
   }
 }
 
@@ -570,7 +602,7 @@ object mFpga_Sweep2 extends App {
         "32",
         "-a",
         "-q", // // original project
-        "paper_exp2"  // original project
+        "paper_exp2" // original project
       )
     )
   }
@@ -587,7 +619,7 @@ object mFpga_Sweep3 extends App {
         "32",
         "-a",
         "-q", // // original project
-        "paper_exp3"  // original project
+        "paper_exp3" // original project
       )
     )
   }

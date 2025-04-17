@@ -9,7 +9,7 @@
             "dynamicMemAlloc": false,
             "taskId": 0,
             
-            "numProcessingElements": 128,
+            "numProcessingElements": 64,
             "widthTask": 128,
             "widthMalloc": 0,
             "spawnServersCount": 0, 
@@ -39,6 +39,6 @@
     "memorySizeSim": 16,
     "targetFrequency": 250,
     "fpgaModel": "ALVEO_U55C",
-    "fpgaCount": 1,
-    "tasksMoveCount": 128
+    "fpgaCount": 2,
+    "tasksMoveCount": 32
 }
