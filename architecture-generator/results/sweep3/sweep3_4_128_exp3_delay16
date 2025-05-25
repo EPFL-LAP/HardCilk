@@ -1,0 +1,114 @@
+Found argument: 'exp3_delay' -> '16'
+MEMORIES SIZE: 8
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x200, end: 0x30d600
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d600, end: 0x61aa00
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61aa00, end: 0x927e00
+        Writing root task data to the scheduler server with data at address 200
+        Wrote root task data to the scheduler server
+        Initialized root task at scheduler server at address 0x0 with length 0x186a0, fifoHead 0x0, fifoTail 0x7, dataAddress 0x200
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927e00, end: 0xa1be600
+        continuation_queue_addr address start: 0xa1be600, end: 0xc7e4000
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927c00, end: 0xa1be400
+        continuation_queue_addr address start: 0xa1be400, end: 0xc7e3e00
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927c00, end: 0xa1be400
+        continuation_queue_addr address start: 0xa1be400, end: 0xc7e3e00
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927c00, end: 0xa1be400
+        continuation_queue_addr address start: 0xa1be400, end: 0xc7e3e00
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927c00, end: 0xa1be400
+        continuation_queue_addr address start: 0xa1be400, end: 0xc7e3e00
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927c00, end: 0xa1be400
+        continuation_queue_addr address start: 0xa1be400, end: 0xc7e3e00
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927c00, end: 0xa1be400
+        continuation_queue_addr address start: 0xa1be400, end: 0xc7e3e00
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized allocation server at address 0xc0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x927c00, end: 0xa1be400
+        continuation_queue_addr address start: 0xa1be400, end: 0xc7e3e00
+T_START: 686986 ns
+T_END: 21566986 ns
+nodesProcessed: 7846524
+remainingTasks: 0
+tasksSpawnedNext: 2241862
+tasksNotifiedFromA: 1921598
+tasksNotifiedFromB: 320264
+total notified: 2241862
+tasksSpawned: 7846517
+T_n_perfect: 0.00364303
+T_n: 0.02088
+Efficiency: 17.4474%
+Simulation wall time: 376.461 minutes
+
+Info: /OSCI/SystemC: Simulation stopped by user.

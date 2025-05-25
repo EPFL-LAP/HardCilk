@@ -61,12 +61,16 @@ public:
         // Log T_START
         std::cout << "T_START: " << T_START << std::endl;
 
-        const int logFreq = 10000;
+        const int logFreq = 30000;
+        int old_nodes_count = 0;
         while (remainingTasks > 0)
         {
             wait(task_args_0.delay * 2, SC_NS);
-            if(nodesProcessed % logFreq == 0){
+
+            if(nodesProcessed - old_nodes_count > logFreq){
                 std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
+                std::cout << "remainingTasks: " << remainingTasks << std::endl;
+                old_nodes_count = nodesProcessed;
             }
 
         }

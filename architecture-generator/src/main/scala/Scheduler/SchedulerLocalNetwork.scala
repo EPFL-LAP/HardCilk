@@ -28,7 +28,7 @@ class SchedulerLocalNetwork(
   assert(peCount >= vssCount || peCount == 1)
   // Create an array of indicies for the VSSs to be attached to in the stealing network,
   // the indicies should be between the indicies of the PEs with a mod operation.
-  var step = (peCount + vasCount) / vssCount
+  val step = (peCount + vasCount) / vssCount
 
   // if(step == 0) {
   //   step = 
@@ -37,6 +37,7 @@ class SchedulerLocalNetwork(
  // println(f"Vss Count: $vssCount, Step: $step")
 
   var vssIndicies = Array.tabulate(vssCount)(n => (n + n * step))
+
 
   // log vss indicies
   // for (i <- 0 until vssCount) {
@@ -134,7 +135,18 @@ class SchedulerLocalNetwork(
     var vssIndex = 0
     var ssIndex = 0
     var vasIndex = 0
+    
     var vasAddedToTheChainFlag = 0
+
+    var PEsPerVAS = 1.0
+    if(vasCount != 0){
+      PEsPerVAS = ceil(peCount.toDouble / vasCount.toDouble) 
+    }
+    //println(f"PEsPerVAS: ${PEsPerVAS}")
+
+    var PEsAdded = 0
+
+    //println(f"VAS count ${vasCount}")
     for (i <- 0 until (peCount + vssCount + vasCount)) {
       // println("Entered The for loop")
       if (vssIndicies.contains(i)) {
@@ -146,15 +158,21 @@ class SchedulerLocalNetwork(
         // println("\t\tConnecting a vas")
         vasAddedToTheChainFlag = 1
         stealNet.io.connSS(i) <> io.connVAS(vasIndex)
+        //println(f"A VAS was added at ${i}")
         vasIndex += 1
       } else if (ssIndex < peCount) {
         // println("\t\tConnecting a steal server")
         stealNet.io.connSS(i) <> stealServers(ssIndex).io.connNetwork
         ssIndex += 1
-        vasAddedToTheChainFlag = 0
+        PEsAdded += 1
+        if(PEsAdded.toDouble == PEsPerVAS){
+          vasAddedToTheChainFlag = 0
+          PEsAdded = 0
+        }
       } else if (vasIndex < vasCount) {
         // println("\t\tConnecting vas")
         stealNet.io.connSS(i) <> io.connVAS(vasIndex)
+        //println(f"A VAS was added at ${i}")
         vasIndex += 1
       }
     }
@@ -163,4 +181,39 @@ class SchedulerLocalNetwork(
   for (i <- 0 until vssCount) {
     stealNet.io.ntwDataUnitOccupancyVSS(i) <> io.ntwDataUnitOccupancyVSS(i)
   }
+
+  // val requestesGeneratedCounter = Module(new Counter64(peCount + vasCount + vssCount))
+  // val tasksTakenCounter =  Module(new Counter64(peCount + vasCount + vssCount))
+  // val requestesDigestedCounter = Module(new Counter64(peCount + vasCount + vssCount))
+  // val tasksGeneratedCounter = Module(new Counter64(peCount + vasCount + vssCount))
+
+  // val count = peCount + vasCount + vssCount
+  // for(i <- 0 until  count){
+  //   requestesGeneratedCounter.io.signals(i) := (stealNet.io.connSS(i).ctrl.stealReq.valid && stealNet.io.connSS(i).ctrl.stealReq.ready)
+  //   requestesDigestedCounter.io.signals(i) := (stealNet.io.connSS(i).ctrl.serveStealReq.valid && stealNet.io.connSS(i).ctrl.serveStealReq.ready)
+
+  //   tasksTakenCounter.io.signals(i) := stealNet.io.connSS(i).data.availableTask.fire
+  //   tasksGeneratedCounter.io.signals(i) := stealNet.io.connSS(i).data.qOutTask.fire
+  // }
+
+
+  // dontTouch(requestesGeneratedCounter.counter)
+  // dontTouch(tasksTakenCounter.counter)
+  // dontTouch(requestesDigestedCounter.counter)
+  // dontTouch(tasksGeneratedCounter.counter)
+
+  // val cyclesCounter = RegInit(0.U(64.W))
+  // cyclesCounter := cyclesCounter + 1.U
+  // when(cyclesCounter === 100000.U){
+  //   printf("_______\n")
+  //   printf("req gen = %d, req supp = %d, taskGen = %d, taskTaken = %d, width = %d \n", requestesGeneratedCounter.io.counter, 
+  //   requestesDigestedCounter.io.counter, 
+  //   tasksGeneratedCounter.io.counter, 
+  //   tasksTakenCounter.io.counter,
+  //   taskWidth.U)
+  //   printf("_______\n")
+  //   cyclesCounter := 0.U
+  // }
+  
+
 }

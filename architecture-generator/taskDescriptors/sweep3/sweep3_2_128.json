@@ -1,0 +1,63 @@
+{
+    "name": "paper_exp3",
+    "taskDescriptors": [
+        {
+            "name": "paper_exp3_task",
+            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp3",
+            "isRoot": true,
+            "isCont": true,
+            "dynamicMemAlloc": false,
+            "taskId": 0,
+            "numProcessingElements": 64,
+            "widthTask": 256,
+            "widthMalloc": 0,
+            "spawnServersCount": 8,
+            "sidesConfigs": [
+                {
+                    "sideType": "scheduler",
+                    "numVirtualServers": 1,
+                    "capacityVirtualQueue": 100000,
+                    "capacityPhysicalQueue": 64,
+                    "portWidth": 256
+                },
+                {
+                    "sideType": "allocator",
+                    "numVirtualServers": 4,
+                    "capacityVirtualQueue": 5000000,
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 64
+                },
+                {
+                    "sideType": "argumentNotifier",
+                    "numVirtualServers": 8,
+                    "capacityVirtualQueue": 8192,
+                    "capacityPhysicalQueue": 32,
+                    "portWidth": 64
+                }
+            ]
+        }
+    ],
+    "spawnList": {
+        "paper_exp3_task": [
+            "paper_exp3_task"
+        ]
+    },
+    "spawnNextList": {
+        "paper_exp3_task": [
+            "paper_exp3_task"
+        ]
+    },
+    "sendArgumentList": {
+        "paper_exp3_task": [
+            "paper_exp3_task"
+        ]
+    },
+    "mallocList": {},
+    "widthAddress": 64,
+    "widthContCounter": 32,
+    "memorySizeSim": 16,
+    "targetFrequency": 250,
+    "fpgaModel": "ALVEO_U55C",
+    "fpgaCount": 2,
+    "tasksMoveCount": 128
+}

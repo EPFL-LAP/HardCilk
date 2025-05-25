@@ -135,7 +135,7 @@ class SchedulerServer(
   }
 
   when(networkCongested || currLen > 16.U) {
-    io.serveRemote := true.B && maxLength =/= 0.U && !rPause
+    io.serveRemote := true.B && maxLength =/= 0.U && !rPause && currLen > 16.U
     io.getTasksFromRemote := false.B
   }.otherwise {
     io.serveRemote := false.B

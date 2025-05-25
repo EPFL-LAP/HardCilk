@@ -554,7 +554,8 @@ object mFPGAEntry extends App {
   )
 }
 
-object sweep1_1_FPGA extends App {
+
+object mFpga_Sweep1 extends App {
   MfpgaHardCilkEmitter.main(
     Array[String](
       "taskDescriptors/sweep1/sweep1_1.json",
@@ -567,9 +568,6 @@ object sweep1_1_FPGA extends App {
       "paper_exp1" // original project
     )
   )
-}
-
-object mFpga_Sweep1 extends App {
   val arr = Array(
     16,32,64,128
   )
@@ -592,35 +590,88 @@ object mFpga_Sweep1 extends App {
 }
 
 object mFpga_Sweep2 extends App {
-  for (i <- (0 to 4)) {
-    MfpgaHardCilkEmitter.main(
-      Array[String](
-        f"taskDescriptors/sweep2/sweep2_${i}.json",
-        "-o",
-        "/beta/shahawy/output/",
-        "-r",
-        "32",
-        "-a",
-        "-q", // // original project
-        "paper_exp2" // original project
-      )
+  // Single FPGA 1 PE of each for base
+  MfpgaHardCilkEmitter.main(
+    Array[String](
+      "taskDescriptors/sweep2/sweep2_0.json",
+      "-o",
+      "output/",
+      "-r",
+      "32",
+      "-a",
+      "-q", // // original project
+      "paper_exp2" // original project
     )
+  )
+
+  // Single FPGA 128 PE each
+  MfpgaHardCilkEmitter.main(
+    Array[String](
+      "taskDescriptors/sweep2/sweep2_1.json",
+      "-o",
+      "output/",
+      "-r",
+      "32",
+      "-a",
+      "-q", // // original project
+      "paper_exp2" // original project
+    )
+  )
+
+  val arr = Array(
+    16,32,64,128
+  )
+  // Multi FPGA runs with different values for tasks per request
+  for (i <- (2 to 4)) {
+    for (j <- (0 to 3)) {
+      MfpgaHardCilkEmitter.main(
+        Array[String](
+          f"taskDescriptors/sweep2/sweep2_${i}_${arr(j)}.json",
+          "-o",
+          "output/",
+          "-r",
+          "32",
+          "-a",
+          "-q", // // original project
+          "paper_exp2" // original project
+        )
+      )
+    }
   }
 }
 
 object mFpga_Sweep3 extends App {
-  for (i <- (1 to 4)) {
-    MfpgaHardCilkEmitter.main(
-      Array[String](
-        f"taskDescriptors/sweep3/sweep3_${i}.json",
-        "-o",
-        "/beta/shahawy/output/",
-        "-r",
-        "32",
-        "-a",
-        "-q", // // original project
-        "paper_exp3" // original project
-      )
+  MfpgaHardCilkEmitter.main(
+    Array[String](
+      "taskDescriptors/sweep3/sweep3_1.json",
+      "-o",
+      "output/",
+      "-r",
+      "32",
+      "-a",
+      "-q", // // original project
+      "paper_exp3" // original project
     )
+  )
+
+  val arr = Array(
+    16,32,64,128
+  )
+  // Multi FPGA runs with different values for tasks per request
+  for (i <- (2 to 4)) {
+    for (j <- (0 to 3)) {
+      MfpgaHardCilkEmitter.main(
+        Array[String](
+          f"taskDescriptors/sweep3/sweep3_${i}_${arr(j)}.json",
+          "-o",
+          "output/",
+          "-r",
+          "32",
+          "-a",
+          "-q", // // original project
+          "paper_exp3" // original project
+        )
+      )
+    }
   }
 }

@@ -19,7 +19,7 @@
                   "sideType": "scheduler",
                   "numVirtualServers": 1,
                   "capacityVirtualQueue": 100000,
-                  "capacityPhysicalQueue": 32,
+                  "capacityPhysicalQueue": 64,
                   "portWidth": 256
               },
               {

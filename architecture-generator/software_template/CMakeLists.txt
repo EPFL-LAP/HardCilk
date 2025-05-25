@@ -4,8 +4,8 @@ set(CMAKE_CXX_STANDARD 20)
 project(hardcilk)
 set(CMAKE_BUILD_TYPE Release)
 
-set(HC_VERILATOR_ARGS --no-timing --no-std-waiver --timescale 1ns/1ps -Wno-WIDTHEXPAND -Wno-STMTDLY -Wno-WIDTHTRUNC -Wno-WIDTHXZEXPAND -Wno-ASCRANGE -Wno-CASEINCOMPLETE -Wno-COMBDLY -Wno-PINMISSING --trace-fst -O3 -CFLAGS -O3 --threads 4)
-set(HC_SYSTEMC_COMPILE_DEFINITIONS VERILATED_TRACE_ENABLED)
+set(HC_VERILATOR_ARGS --no-timing --no-std-waiver --timescale 1ns/1ps -Wno-WIDTHEXPAND -Wno-STMTDLY -Wno-WIDTHTRUNC -Wno-WIDTHXZEXPAND -Wno-ASCRANGE -Wno-CASEINCOMPLETE -Wno-COMBDLY -Wno-PINMISSING  -O3 -CFLAGS -O3 --threads 4) # --trace-fst
+#set(HC_SYSTEMC_COMPILE_DEFINITIONS VERILATED_TRACE_ENABLED)
 
 # add more variables
 # maybe make these variables overridable

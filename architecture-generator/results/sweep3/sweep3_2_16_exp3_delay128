@@ -1,0 +1,96 @@
+Found argument: 'exp3_delay' -> '128'
+MEMORIES SIZE: 2
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION
+Return address set to 0x0
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x200, end: 0x30d600
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d600, end: 0x61aa00
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61aa00, end: 0x927e00
+        Initialized scheduler server at address c0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x927e00, end: 0xc35200
+        Initialized scheduler server at address 100 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0xc35200, end: 0xf42600
+        Initialized scheduler server at address 140 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0xf42600, end: 0x124fa00
+        Initialized scheduler server at address 180 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x124fa00, end: 0x155ce00
+        Initialized scheduler server at address 1c0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x155ce00, end: 0x186a200
+        Initialized scheduler server at address 200 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x186a200, end: 0x1b77600
+        Writing root task data to the scheduler server with data at address 200
+        Wrote root task data to the scheduler server
+        Initialized root task at scheduler server at address 0x0 with length 0x186a0, fifoHead 0x0, fifoTail 0x7, dataAddress 0x200
+        Initialized allocation server at address 0x240 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x1b77600, end: 0xb40de00
+        continuation_queue_addr address start: 0xb40de00, end: 0xda33800
+        Initialized allocation server at address 0x280 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0xda33800, end: 0x172ca000
+        continuation_queue_addr address start: 0x172ca000, end: 0x198efa00
+        Initialized allocation server at address 0x2c0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x198efa00, end: 0x23186200
+        continuation_queue_addr address start: 0x23186200, end: 0x257abc00
+        Initialized allocation server at address 0x300 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x257abc00, end: 0x2f042400
+        continuation_queue_addr address start: 0x2f042400, end: 0x31667e00
+Initializing task paper_exp3_task
+        Initialized scheduler server at address 0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x0, end: 0x30d400
+        Initialized scheduler server at address 40 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x30d400, end: 0x61a800
+        Initialized scheduler server at address 80 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x61a800, end: 0x927c00
+        Initialized scheduler server at address c0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x927c00, end: 0xc35000
+        Initialized scheduler server at address 100 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0xc35000, end: 0xf42400
+        Initialized scheduler server at address 140 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0xf42400, end: 0x124f800
+        Initialized scheduler server at address 180 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x124f800, end: 0x155cc00
+        Initialized scheduler server at address 1c0 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x155cc00, end: 0x186a000
+        Initialized scheduler server at address 200 with length 186a0, fifoTail 0, fifoHead 0,
+        Data address start: 0x186a000, end: 0x1b77400
+        Initialized allocation server at address 0x240 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x1b77400, end: 0xb40dc00
+        continuation_queue_addr address start: 0xb40dc00, end: 0xda33600
+        Initialized allocation server at address 0x280 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0xda33600, end: 0x172c9e00
+        continuation_queue_addr address start: 0x172c9e00, end: 0x198ef800
+        Initialized allocation server at address 0x2c0 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x198ef800, end: 0x23186000
+        continuation_queue_addr address start: 0x23186000, end: 0x257aba00
+        Initialized allocation server at address 0x300 with length 0x4c4b40
+        continuation_tasks_holder_addr address start: 0x257aba00, end: 0x2f042200
+        continuation_queue_addr address start: 0x2f042200, end: 0x31667c00
+T_START: 686230 ns
+T_END: 31406230 ns
+nodesProcessed: 7846524
+remainingTasks: 0
+tasksSpawnedNext: 2241862
+tasksNotifiedFromA: 1921598
+tasksNotifiedFromB: 320264
+total notified: 2241862
+tasksSpawned: 7846517
+T_n_perfect: 0.0291442
+T_n: 0.03072
+Efficiency: 94.8705%
+Simulation wall time: 527.178 minutes
+
+Info: /OSCI/SystemC: Simulation stopped by user.

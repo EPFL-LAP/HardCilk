@@ -257,19 +257,19 @@ object TestBenchHeaderTemplate {
     // create a map that stores the above mapping
     val taskTypeMap = getSchedulerMap(descriptor)
 
-    for (fpgaIndex <- 0 until descriptor.fpgaCount) {
-      for (task <- descriptor.taskDescriptors) {
+    // for (fpgaIndex <- 0 until descriptor.fpgaCount) {
+    //   for (task <- descriptor.taskDescriptors) {
 
-        readRegister += s"""            taskConsumedCounter += verilatedModule->${descriptor.name}->${descriptor.name}_${fpgaIndex}->${taskTypeMap
-            .get(task.name)
-            .get}->taskOutCounter->counter;\n"""
-        if (descriptor.selfSpawnedCount(task.name) > 0) {
-          readRegister += s"""            taskCreatedCounter += verilatedModule->${descriptor.name}->${descriptor.name}_${fpgaIndex}->${taskTypeMap
-              .get(task.name)
-              .get}->taskInCounter->counter;\n"""
-        }
-      }
-    }
+    //     readRegister += s"""            taskConsumedCounter += verilatedModule->${descriptor.name}->${descriptor.name}_${fpgaIndex}->${taskTypeMap
+    //         .get(task.name)
+    //         .get}->taskOutCounter->counter;\n"""
+    //     if (descriptor.selfSpawnedCount(task.name) > 0) {
+    //       readRegister += s"""            taskCreatedCounter += verilatedModule->${descriptor.name}->${descriptor.name}_${fpgaIndex}->${taskTypeMap
+    //           .get(task.name)
+    //           .get}->taskInCounter->counter;\n"""
+    //     }
+    //   }
+    // }
     readRegister += s"""        }\n"""
     readRegister += s"""    }\n"""
     readRegister += s"""    uint64_t taskCreatedCounter = 0;\n"""

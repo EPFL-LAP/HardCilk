@@ -88,12 +88,14 @@ public:
 
         // Measure simulation wall time start 
         auto start = std::chrono::high_resolution_clock::now();
-
+        int history = 0
         while (remainingTasks > 0)
         {
             wait(10000, SC_NS);
-            if(nodesProcessed % logFreq == 0){
+            if(nodesProcessed - history > nodesProcessed){
                 std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
+                std::cout << "remainingTasks: " << remainingTasks << std::endl;
+                history = nodesProcessed;
             }
             // std::cout << "nodesProcessed: " << nodesProcessed << std::endl;
             // std::cout << "remainingTasks: " << remainingTasks << std::endl;

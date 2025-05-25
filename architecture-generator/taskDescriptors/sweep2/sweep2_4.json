@@ -19,7 +19,7 @@
                     "sideType": "scheduler",
                     "numVirtualServers": 1,
                     "capacityVirtualQueue": 10000000,
-                    "capacityPhysicalQueue": 32,
+                    "capacityPhysicalQueue": 64,
                     "portWidth": 128
                 }
             ]
@@ -32,7 +32,7 @@
             "dynamicMemAlloc": false,
             "taskId": 1,
             
-            "numProcessingElements": 16,
+            "numProcessingElements": 64,
             "widthTask": 32,
             "widthMalloc": 0,
             "spawnServersCount": 2,

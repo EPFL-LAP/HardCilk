@@ -16,7 +16,7 @@ sc_time _mFpga_linkToFpgaPeriod = sc_time(8, SC_NS);
 
 uint32_t _exp1_baseDepth = 2;
 uint32_t _exp1_branchFactor = 7;
-uint32_t _exp1_initCount = 6;
+uint32_t _exp1_initCount = 7;
 uint32_t _exp1_delay = 32;
 
 #include <map>
@@ -131,7 +131,7 @@ int sc_main(int argc, char **argv)
     sc_start(SC_ZERO_TIME);
 
 #ifdef VERILATED_TRACE_ENABLED
-    auto* verilatedModule = static_cast<Vpaper_exp2*>(testBench.myModule->getVerilatedModule());
+    auto* verilatedModule = static_cast<Vpaper_exp1*>(testBench.myModule->getVerilatedModule());
     VerilatedFstC* tfp = new VerilatedFstSc;
     verilatedModule->trace(tfp, 99, 0);
     tfp->open(fmt::format("{}.fst", name).c_str());
