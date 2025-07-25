@@ -12,7 +12,7 @@ class ArgumentNotifierNetworkIO(addrWidth: Int, peCount: Int, vasNum: Int) exten
   val connPE = Vec(peCount, Flipped(DecoupledIO(UInt(addrWidth.W))))
 }
 
-class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasNum: Int, queueDepth: Int, cutCount: Int)
+class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasNum: Int, queueDepth: Int, cutCount: Int, multiDecrease: Boolean)
     extends Module {
 
   def highestPowerOf2(n: Int): Int = {
@@ -36,7 +36,7 @@ class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasN
   // isPow2(vasNum)
   require(peCount > 0)
   require(queueDepth > 0)
-  require(isPow2(addrWidth))
+  require(isPow2(addrWidth) || multiDecrease == true)
 
   private def connectZeros[T <: Data](bits: T) = {
     bits := 0.U(bits.getWidth.W).asTypeOf(bits)

@@ -40,8 +40,12 @@ class ArgumentNotifier(
     argRouteServersNumber: Int,
     contCounterWidth: Int,
     pePortWidth: Int,
-    cutCount: Int
+    cutCount: Int,
+    multiDecrease: Boolean
 ) extends Module {
+
+  print(f"ArgumentNotifier: addrWidth: ${addrWidth} \n")
+  print(f"ArgumentNotifier: pePortWidth: ${pePortWidth} \n")
 
   val io_export = IO(new ArgumentNotifierIO(pePortWidth = pePortWidth, peCount = peCount))
   val connStealNtw = IO(Vec(argRouteServersNumber, Flipped(new SchedulerNetworkClientIO(taskWidth))))
@@ -55,7 +59,8 @@ class ArgumentNotifier(
       peCount = peCount,
       vasNum = argRouteServersNumber,
       queueDepth = queueDepth,
-      cutCount = cutCount
+      cutCount = cutCount,
+      multiDecrease = multiDecrease
     )
   )
 
@@ -67,7 +72,8 @@ class ArgumentNotifier(
         counterWidth = contCounterWidth,
         sysAddressWidth = addrWidth,
         tagBitsShift = log2Ceil(taskWidth / 8),
-        wId = 2
+        wId = 2,
+        multiDecrease = multiDecrease
       )
     )
   }
