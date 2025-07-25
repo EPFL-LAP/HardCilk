@@ -89,7 +89,8 @@ class VitisModule(cfg: VitisModuleConfig) extends BlackBox {
 class VitisWriteBufferModule(
     cfg: VitisModuleConfig,
     fullSysGenDescriptor: FullSysGenDescriptor,
-    taskName: String
+    taskName: String,
+    variableSpawn: Boolean = false
 ) extends Module {
   override def desiredName: String = cfg.desiredName
 
@@ -97,18 +98,28 @@ class VitisWriteBufferModule(
 
   private val wSpawnNext = fullSysGenDescriptor.spawnNextList
     .get(taskName)
-    .map(_.map(m => fullSysGenDescriptor.taskDescriptors.find(_.name == m).map(_.widthTask)).map(_.get))
+    .map(
+      _.map(m =>
+        fullSysGenDescriptor.taskDescriptors.find(_.name == m).map(_.widthTask)
+      ).map(_.get)
+    )
     .map(_.max)
 
   private val pe = Module(new VitisModule(cfg))
 
+  println(pe.name)
+
   val io = IO(new chisel3.Record {
     val elements: SeqMap[String, Data] =
-      SeqMap.from(cfg.interfaces.withFilter(x => x.name != "spawnNext" && x.name != "argDataOut").map { interface =>
-        {
-          interface.name -> interface.chiselType
-        }
-      }) ++
+      SeqMap.from(
+        cfg.interfaces
+          .withFilter(x => x.name != "spawnNext" && x.name != "argDataOut")
+          .map { interface =>
+            {
+              interface.name -> interface.chiselType
+            }
+          }
+      ) ++
         Seq(
           if (cfg.is_ap_start) Some("ap_start" -> Input(Bool())) else None,
           if (cfg.is_ap_done) Some("ap_done" -> Output(Bool())) else None,
@@ -116,14 +127,20 @@ class VitisWriteBufferModule(
           if (cfg.is_ap_ready) Some("ap_ready" -> Output(Bool())) else None,
           wSpawnNext.map(w =>
             "m_axi_spawnNext" -> (axi4.Master(
-              new axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = w)
+              new axi4.Config(
+                wAddr = fullSysGenDescriptor.widthAddress,
+                wData = w
+              )
             ))
           ),
           pe.io.elements
             .get("argDataOut")
             .map(port => {
               "m_axi_argOut" -> (axi4.Master(
-                new axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = 64)
+                new axi4.Config(
+                  wAddr = fullSysGenDescriptor.widthAddress,
+                  wData = 64
+                )
               ))
             }),
           Some("ap_clk" -> Input(Clock())),
@@ -137,8 +154,16 @@ class VitisWriteBufferModule(
   )
 
   private val peTaskOut = ("taskOut", pe.io.elements.get("taskOut"))
-  private val peTaskOutGlobal = pe.io.elements.filter(_._1.startsWith("taskOutGlobal")).map(x => (x._1, Some(x._2)))
-  private val taskOuts = (Seq(peTaskOut) ++ peTaskOutGlobal.toSeq).filterNot(_._2.isEmpty)
+  private val peTaskOutGlobal = pe.io.elements
+    .filter(_._1.startsWith("taskOutGlobal"))
+    .map(x => (x._1, Some(x._2)))
+  private val taskOuts =
+    (Seq(peTaskOut) ++ peTaskOutGlobal.toSeq).filterNot(_._2.isEmpty)
+
+  println(pe.io.elements)
+
+  println(peTaskOut)
+  println(peTaskOutGlobal)
 
   wSpawnNext.foreach(w => {
     val mWriteBuffer = Module(
@@ -146,14 +171,18 @@ class VitisWriteBufferModule(
         new WriteBufferConfig(
           wAddr = fullSysGenDescriptor.widthAddress,
           wData = w,
-          wAllow = 32,
-          wAllowData = taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
+          wAllow = (if (variableSpawn) 0 else 32),
+          wAllowData =
+            taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
         )
       )
     )
 
     mWriteBuffer.s_pkg <> pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
-    mWriteBuffer.m_axi <> io.elements.get("m_axi_spawnNext").get.asInstanceOf[axi4.RawInterface]
+    mWriteBuffer.m_axi <> io.elements
+      .get("m_axi_spawnNext")
+      .get
+      .asInstanceOf[axi4.RawInterface]
 
     var idx = 0
     for (i <- 0 until taskOuts.length) {
@@ -168,9 +197,9 @@ class VitisWriteBufferModule(
     }
   })
 
-  // If a task has a taskOutGlobal but has no spawnNext, then connect the taskOutGlobal 
+  // If a task has a taskOutGlobal but has no spawnNext, then connect the taskOutGlobal
   // directly to the taskOutGlobal port
-  if(wSpawnNext.isEmpty) {
+  if (wSpawnNext.isEmpty) {
     for (i <- 0 until taskOuts.length) {
       taskOuts(i)._2 match {
         case Some(value) => {
@@ -196,8 +225,13 @@ class VitisWriteBufferModule(
           )
         )
 
-        mWriteBuffer.s_pkg <> pe.getPort("argDataOut").asInstanceOf[axi4s.Interface]
-        mWriteBuffer.m_axi <> io.elements.get("m_axi_argOut").get.asInstanceOf[axi4.RawInterface]
+        mWriteBuffer.s_pkg <> pe
+          .getPort("argDataOut")
+          .asInstanceOf[axi4s.Interface]
+        mWriteBuffer.m_axi <> io.elements
+          .get("m_axi_argOut")
+          .get
+          .asInstanceOf[axi4.RawInterface]
         pe.getPort("argOut") <> mWriteBuffer.s_allows(0)
         mWriteBuffer.m_allows(0) <> io.elements.get("argOut").get
       })
@@ -212,80 +246,149 @@ class VitisWriteBufferModule(
   // Connect buffer to outside //
 
   // Connect rest of the ports
-  pe.io.elements.withFilter(x => !((Seq("spawnNext", "argDataOut", "argOut") ++ taskOuts.map(_._1)).contains(x._1))).foreach {
-    case (name, port) => {
-      port <> io.elements.get(name).get
+  pe.io.elements
+    .withFilter(x =>
+      !((Seq("spawnNext", "argDataOut", "argOut") ++ taskOuts.map(_._1))
+        .contains(x._1))
+    )
+    .foreach {
+      case (name, port) => {
+        port <> io.elements.get(name).get
+      }
     }
-  }
 }
 
-/** An object with a function that when given a task descriptor, returns an array of VitisModules. The task descriptor has the
-  * path to the hdl directory and the name of the module. One function passes the path to another function that parses the
-  * <module>.v from the hdl directory and returns a vitisModuleConfig.
+/** An object with a function that when given a task descriptor, returns an
+  * array of VitisModules. The task descriptor has the path to the hdl directory
+  * and the name of the module. One function passes the path to another function
+  * that parses the <module>.v from the hdl directory and returns a
+  * vitisModuleConfig.
   */
 
 object VitisModuleFactory {
-  def apply(taskDescriptor: TaskDescriptor, fullSysGenDescriptor: FullSysGenDescriptor): Seq[VitisWriteBufferModule] = {
+  def apply(
+      taskDescriptor: TaskDescriptor,
+      fullSysGenDescriptor: FullSysGenDescriptor
+  ): Seq[VitisWriteBufferModule] = {
     val hdlPath = taskDescriptor.peHDLPath
     val moduleName = taskDescriptor.name
     val blackBoxCount = taskDescriptor.numProcessingElements
     val vitisModuleConfig = parseVitisModule(hdlPath, moduleName)
-    Seq.fill(blackBoxCount)(Module(new VitisWriteBufferModule(vitisModuleConfig, fullSysGenDescriptor, taskDescriptor.name)))
+    Seq.fill(blackBoxCount)(
+      Module(
+        new VitisWriteBufferModule(
+          vitisModuleConfig,
+          fullSysGenDescriptor,
+          taskDescriptor.name,
+          taskDescriptor.variableSpawn
+        )
+      )
+    )
   }
 
-  def parseVitisModule(hdlPath: String, moduleName: String): VitisModuleConfig = {
+  def extractModule(moduleName: String, filePath: String): Option[String] = {
+    val fileContent = scala.io.Source.fromFile(filePath).getLines.mkString("\n")
+
+    // Regular expression to find module definition
+    val modulePattern = s"(?s)\\bmodule\\s+$moduleName\\b(.*?)\\bendmodule\\b".r
+
+    modulePattern.findFirstMatchIn(fileContent) match {
+      case Some(matched) => Some(matched.group(1).trim)
+      case None          => None // Module not found
+    }
+  }
+
+  def extractSignalWidth(signalName: String, moduleContent: String): Int = {
+    // 1. Find the signal line
+    val signalRegex = s"""\\[([^\\]]+)\\]\\s+$signalName\\b""".r
+    val maybeMatch = signalRegex.findFirstMatchIn(moduleContent)
+
+    maybeMatch match {
+      case Some(matched) =>
+        val range =
+          matched.group(1).replaceAll("\\s", "") // e.g., "C_WIDTH-1:0"
+        val parts = range.split(":")
+        if (parts.length != 2) return 1
+
+        val msbRaw = parts(0)
+        val lsbRaw = parts(1)
+
+        val msb = getValueFromParamOrLiteral(msbRaw, moduleContent)
+        val lsb = getValueFromParamOrLiteral(lsbRaw, moduleContent)
+
+        (msb - lsb + 1).abs
+
+      case None => 0 // Signal not found
+    }
+  }
+
+  def getValueFromParamOrLiteral(expr: String, moduleContent: String): Int = {
+    // If it's just a number, return it
+    if (expr.matches("\\d+")) return expr.toInt
+
+    // If it's something like "PARAM-1", extract "PARAM" and subtract 1
+    val paramWithOffset = """(\w+)-(\d+)""".r
+    val paramAlone = """(\w+)""".r
+
+    expr match {
+      case paramWithOffset(param, offset) =>
+        findParameterValue(param, moduleContent) - offset.toInt
+      case paramAlone(param) =>
+        findParameterValue(param, moduleContent)
+      case _ =>
+        println(s"Unsupported format in MSB/LSB: '$expr'")
+        0
+    }
+  }
+
+  def findParameterValue(param: String, content: String): Int = {
+    val paramRegex = s"""parameter\\s+$param\\s*=\\s*(\\d+)\\s*;""".r
+    paramRegex.findFirstMatchIn(content) match {
+      case Some(m) => m.group(1).toInt
+      case None =>
+        println(s"Parameter '$param' not found.")
+        0
+    }
+  }
+
+  def lineContainsOutput(signalName: String, moduleContent: String): Boolean = {
+    val pattern = s"""(?i)(output).*\\b$signalName\\b""".r
+    pattern.findFirstIn(moduleContent).isDefined
+  }
+
+  def parseVitisModule(
+      hdlPath: String,
+      moduleName: String
+  ): VitisModuleConfig = {
     // read the <module>.v file from the hdlPath
-    val moduleContent = scala.io.Source.fromFile(s"${hdlPath}/${moduleName}.v").mkString
+
+    // val moduleContent = extractModule()
+    //   scala.io.Source.fromFile(s"${hdlPath}/${moduleName}.v").mkString
+
+    val moduleContent: String =
+      extractModule(s"${moduleName}", s"${hdlPath}/${moduleName}.v").getOrElse(
+        throw new RuntimeException("Module not found!")
+      )
 
     // search for parameters in the moduleContent with M_AXI_GMEM and create an Aximm_VitisInterface
-    var idWidth = 0
-    var addrWidth = 0
-    var dataWidth = 0
-    var awuserWidth = 0
-    var aruserWidth = 0
-    var wuserWidth = 0
-    var ruserWidth = 0
-    var buserWidth = 0
-    var userValue = 0
-    var protValue = 0
-    var cacheValue = 0
-    var wstrbWidth = 0
-    var axiWstrbWidth = 0
+    val idWidth = extractSignalWidth("m_axi_gmem_ARID", moduleContent)
+    val addrWidth = extractSignalWidth("m_axi_gmem_ARADDR", moduleContent)
+    val dataWidth = extractSignalWidth("m_axi_gmem_RDATA", moduleContent)
+    val awuserWidth = extractSignalWidth("m_axi_gmem_AWUSER", moduleContent)
+    val aruserWidth = extractSignalWidth("m_axi_gmem_ARUSER", moduleContent)
+    val wuserWidth = extractSignalWidth("m_axi_gmem_WUSER", moduleContent)
+    val ruserWidth = extractSignalWidth("m_axi_gmem_RUSER", moduleContent)
+    val buserWidth = extractSignalWidth("m_axi_gmem_BUSER", moduleContent)
+    val userValue = findParameterValue("C_M_AXI_GMEM_USER_VALUE", moduleContent)
+    val protValue = findParameterValue("C_M_AXI_GMEM_PROT_VALUE", moduleContent)
+    val cacheValue =
+      findParameterValue("C_M_AXI_GMEM_CACHE_VALUE", moduleContent)
+    val wstrbWidth = extractSignalWidth("m_axi_gmem_WSTRB", moduleContent)
 
-    // Find parameters that has M_AXI_GMEM in the name and assign the value to the corresponding variable
-    val M_AXI_GMEM_PARAMS =
-      moduleContent.split("\n").filter(line => line.contains("parameter") && line.contains("C_M_AXI_GMEM"))
-    M_AXI_GMEM_PARAMS.foreach { param =>
-      val paramSplit = param.split("=")
-      // remove the spaces and the word parameter from the paramName
-      val paramName = paramSplit(0).trim.drop(10).replaceAll("\\s+", "")
-      // remove the semi-colon at the end of the line
-      val paramValue = paramSplit(1).replaceAll("\\s+", "").replaceAll(";", "").trim
+    val arlen = extractSignalWidth("m_axi_gmem_ARLEN", moduleContent)
 
-      // if the string paramValue is a math function evaluate it then to int, otherwise to int
-      val paramValueInt = if (paramValue.contains("/")) {
-        val split = paramValue.split("/")
-
-        (split(0).drop(1).toInt / split(1).dropRight(1).toInt).toInt
-      } else {
-        paramValue.toInt
-      }
-      paramName match {
-        case "C_M_AXI_GMEM_ID_WIDTH"     => idWidth = paramValueInt
-        case "C_M_AXI_GMEM_ADDR_WIDTH"   => addrWidth = paramValueInt
-        case "C_M_AXI_GMEM_DATA_WIDTH"   => dataWidth = paramValueInt
-        case "C_M_AXI_GMEM_AWUSER_WIDTH" => awuserWidth = paramValueInt
-        case "C_M_AXI_GMEM_ARUSER_WIDTH" => aruserWidth = paramValueInt
-        case "C_M_AXI_GMEM_WUSER_WIDTH"  => wuserWidth = paramValueInt
-        case "C_M_AXI_GMEM_RUSER_WIDTH"  => ruserWidth = paramValueInt
-        case "C_M_AXI_GMEM_BUSER_WIDTH"  => buserWidth = paramValueInt
-        case "C_M_AXI_GMEM_USER_VALUE"   => userValue = paramValueInt
-        case "C_M_AXI_GMEM_PROT_VALUE"   => protValue = paramValueInt
-        case "C_M_AXI_GMEM_CACHE_VALUE"  => cacheValue = paramValueInt
-        case "C_M_AXI_GMEM_WSTRB_WIDTH"  => wstrbWidth = paramValueInt
-        case "C_M_AXI_WSTRB_WIDTH"       => axiWstrbWidth = paramValueInt
-      }
-    }
+    println(s"ARLEN ${arlen}")
+    // var axiWstrbWidth = extractSignalWidth("m_axi_gmem_ARID", moduleContent) // not used
 
     // Create an Aximm_VitisInterface
     val M_AXI_GMEM_INTERFACE = if (dataWidth > 0) {
@@ -301,7 +404,13 @@ object VitisModuleFactory {
             wUserAR = aruserWidth,
             wUserW = wuserWidth,
             wUserR = ruserWidth,
-            wUserB = buserWidth
+            wUserB = buserWidth,
+            axi3Compat = arlen <= 4,
+            hasQos = false || arlen > 4,
+            hasProt = false|| arlen > 4,
+            hasCache = false|| arlen > 4,
+            hasRegion = false|| arlen > 4,
+            hasLock = false|| arlen > 4
           )
         )
       )
@@ -309,37 +418,21 @@ object VitisModuleFactory {
       None
     }
 
-    val S_AXI_CONTROL_PARAMS =
-      moduleContent.split("\n").filter(line => line.contains("parameter") && line.contains("C_S_AXI_CONTROL"))
-    S_AXI_CONTROL_PARAMS.foreach { param =>
-      val paramSplit = param.split("=")
-      val paramName = paramSplit(0).trim.drop(10).replaceAll("\\s+", "")
-      val paramValue = paramSplit(1).replaceAll("\\s+", "").replaceAll(";", "").trim
 
-      // if the string paramValue is a math function evaluate it then to int, otherwise to int
-      val paramValueInt = if (paramValue.contains("/")) {
-        val split = paramValue.split("/")
-
-        (split(0).drop(1).toInt / split(1).dropRight(1).toInt).toInt
-      } else {
-        paramValue.toInt
-      }
-      paramName match {
-        case "C_S_AXI_CONTROL_DATA_WIDTH"  => dataWidth = paramValueInt
-        case "C_S_AXI_CONTROL_ADDR_WIDTH"  => addrWidth = paramValueInt
-        case "C_S_AXI_CONTROL_WSTRB_WIDTH" => wstrbWidth = paramValueInt
-      }
-    }
+    val control_data_width = 32
+      //extractSignalWidth("s_axi_control_RDATA", moduleContent) HARDCODED
+    val control_address_width = 4
+      //extractSignalWidth("s_axi_control_ARADDR", moduleContent) HARDCODED
 
     // Create an S_AXI_CONTROL interface if dataWidth > 0 otherwise None
-    val aximmInterface_s_axi_control = if (dataWidth > 0) {
+    val aximmInterface_s_axi_control = if (control_data_width > 0) {
       Some(
         Aximm_VitisInterface(
           "s_axi_control",
           InterfaceRole.slave,
           chext.amba.axi4.Config(
-            wData = dataWidth,
-            wAddr = addrWidth,
+            wData = control_data_width,
+            wAddr = control_address_width,
             lite = true,
             hasProt = false
           )
@@ -351,20 +444,26 @@ object VitisModuleFactory {
 
     // In the lines with output or input, find the width of the TDATA and create an Axis_VitisInterface with the name as  {name}_TDATA
     // Only the lines with output or input are considered
-    val tdataLines =
-      moduleContent.split("\n").filter(line => line.contains("TDATA") && (line.contains("output") || line.contains("input")))
-    val tdataInterfaces = tdataLines.map { line =>
-      val tdataWidth = line.split("\\[")(1).split(":")(0).toInt + 1
-      val tdataName = line.split(" ")(3).split("_")(0)
-
-      Axis_VitisInterface(
-        f"${tdataName}",
-        if (line.contains("output")) InterfaceRole.master else InterfaceRole.slave,
-        chext.amba.axi4s.Config(
-          wData = tdataWidth,
-          onlyRV = true
+    val tdataLines = moduleContent
+      .split("\n")
+      .filter { line =>
+        line.contains("TDATA") && line.matches(
+          """.*\[\s*[\w+\-*/]+\s*:\s*\d+\s*\].*"""
         )
-      )
+      }
+
+    val tdataRegex = raw"""^\s*(input|output)\s+(?:\w+\s+)?\[\d+:\d+\]\s+(\w+)_TDATA\s*;""".r
+
+    val tdataInterfaces = tdataLines.collect {
+      case line @ tdataRegex(direction, name) =>
+        val tdataWidth = extractSignalWidth(s"${name}_TDATA", moduleContent) 
+
+        Axis_VitisInterface(
+          name,
+          if (line.toLowerCase.contains("output")) InterfaceRole.master
+          else InterfaceRole.slave,
+          chext.amba.axi4s.Config(wData = tdataWidth, onlyRV = true)
+        )
     }
 
     // Search for the regex module <moduleName> (.*); and check ap_start, ap_done, ap_idle, ap_ready
@@ -373,20 +472,30 @@ object VitisModuleFactory {
     var is_ap_idle = false
     var is_ap_ready = false
 
-    val modulePattern: Regex = """module (\w+)\s*\(([\w\s,]+)\);""".r
-    modulePattern.findAllMatchIn(moduleContent).foreach { moduleMatch =>
-      val name = moduleMatch.group(1)
-      val content = moduleMatch.group(2)
-      if (name == moduleName) {
-        is_ap_start = content.contains("ap_start")
-        is_ap_done = content.contains("ap_done")
-        is_ap_idle = content.contains("ap_idle")
-        is_ap_ready = content.contains("ap_ready")
-      }
+    //val modulePattern: Regex = """module (\w+)\s*\(([\w\s,]+)\);""".r
+    //modulePattern.findAllMatchIn(moduleContent).foreach { moduleMatch =>
+      // val name = moduleMatch.group(1)
+      // val content = moduleMatch.group(2)
+      // if (name == moduleName) {
+        is_ap_start = moduleContent.contains("ap_start")
+        is_ap_done = moduleContent.contains("ap_done")
+        is_ap_idle = moduleContent.contains("ap_idle")
+        is_ap_ready = moduleContent.contains("ap_ready")
+      // }
+    //}
+
+    println(s"ap_start: ${is_ap_start}")
+
+    // Print the names of the interfaces
+    tdataInterfaces.foreach { x =>
+      println(x)
     }
 
     val config_seq =
-      (Seq(M_AXI_GMEM_INTERFACE, aximmInterface_s_axi_control).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
+      (Seq(
+        M_AXI_GMEM_INTERFACE,
+        aximmInterface_s_axi_control
+      ).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
 
     // Create the config with the interfaces
     VitisModuleConfig(
