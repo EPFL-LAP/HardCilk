@@ -24,7 +24,7 @@ class AxisUpscaler(dataWidthIn: Int, dataWidthOut: Int) extends Module {
   }
 
   // Make sure the data widths is power of two
-  assert(isPow2(dataWidthIn) && isPow2(dataWidthOut))
+  assert((isPow2(dataWidthIn) && isPow2(dataWidthOut)) || dataWidthIn == dataWidthOut)
   val upScaleFactor = dataWidthOut / dataWidthIn
 
   // Define the IO
@@ -108,21 +108,35 @@ class AxisDownscaler(dataWidthIn: Int, dataWidthOut: Int) extends Module {
 
 class AxisDataWidthConverter(dataWidthIn: Int, dataWidthOut: Int) extends Module {
 
-  assert(isPow2(dataWidthIn) && isPow2(dataWidthOut))
-
+  //assert((isPow2(dataWidthIn) && isPow2(dataWidthOut)) || dataWidthIn == dataWidthOut)
+  
   val io = IO(new AxisDataWidthConverterIO(dataWidthIn, dataWidthOut))
-  if (dataWidthIn < dataWidthOut) {
-    val upScaler = Module(new AxisUpscaler(dataWidthIn, dataWidthOut))
-    upScaler.io.dataIn <> io.dataIn
-    io.dataOut <> upScaler.io.dataOut
-  } else if (dataWidthIn > dataWidthOut) {
-    val downScaler = Module(new AxisDownscaler(dataWidthIn, dataWidthOut))
-    downScaler.io.dataIn <> io.dataIn
-    io.dataOut <> downScaler.io.dataOut
-  } else {
+
+  if((isPow2(dataWidthIn) && isPow2(dataWidthOut)) || dataWidthIn == dataWidthOut) {
+    //println("Axis convertsion can be done");
+    if (dataWidthIn < dataWidthOut) {
+      val upScaler = Module(new AxisUpscaler(dataWidthIn, dataWidthOut))
+      upScaler.io.dataIn <> io.dataIn
+      io.dataOut <> upScaler.io.dataOut
+    } else if (dataWidthIn > dataWidthOut) {
+      val downScaler = Module(new AxisDownscaler(dataWidthIn, dataWidthOut))
+      downScaler.io.dataIn <> io.dataIn
+      io.dataOut <> downScaler.io.dataOut
+    } else {
+      io.dataOut.TDATA := io.dataIn.TDATA
+      io.dataOut.TVALID := io.dataIn.TVALID
+      io.dataIn.TREADY := io.dataOut.TREADY
+    }
+  } else if(dataWidthOut < dataWidthIn){
+    println("Warning: Axis convertsion can be done with cutting data");
     io.dataOut.TDATA := io.dataIn.TDATA
     io.dataOut.TVALID := io.dataIn.TVALID
     io.dataIn.TREADY := io.dataOut.TREADY
+  } else{
+    println("Axis convertsion can't be done")
+    throw new Exception("Data width conversion not supported")
   }
+
+
 
 }
