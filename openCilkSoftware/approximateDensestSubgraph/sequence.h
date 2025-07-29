@@ -7,6 +7,7 @@
 
 #include <cilk/cilk.h>
 #include <cstddef>
+#include <iostream>
 #include <vector>
 
 template <typename T> class Monoid {
@@ -20,14 +21,14 @@ public:
 template <typename T> class Sequence {
 public:
   Sequence() = default;
-  Sequence(size_t size) : data(size) {}
-  Sequence(size_t size, const T &value) {
+  Sequence(int size) : data(size) {}
+  Sequence(int size, const T &value) {
     data.resize(size);
-    map([&](T &item, size_t, size_t) { item = value; });
+    map([&](T &item, int, int) { item = value; });
   }
-  Sequence(size_t size, std::function<T(size_t)> fn) {
+  Sequence(int size, std::function<T(int)> fn) {
     data.resize(size);
-    map([&](T &item, size_t index, size_t) { item = fn(index); });
+    map([&](T &item, int index, int) { item = fn(index); });
   }
 
   // Delete copy constructor and assignment operator
@@ -38,35 +39,41 @@ public:
   Sequence(Sequence &&) = default;
   Sequence &operator=(Sequence &&) = default;
 
-  void map(std::function<void(T &, size_t, size_t)> fn,
-           size_t block_size = BLOCK_SIZE, size_t start = 0, size_t end = -1) {
+  void map(std::function<void(T &, int, int)> fn, int block_size = BLOCK_SIZE,
+           int start = 0, int end = -1, int stride = 1) {
     if (end == -1)
       end = data.size();
-    if (end - start < block_size) {
-      for (size_t i = start; i < end; i++) {
-        fn(data[i], i, start / block_size);
+    if ((end - start) / stride < block_size) {
+      for (int i = start; i < end; i += stride) {
+        fn(data[i], i, start * stride / block_size);
       }
     } else {
-      size_t mid = (start + end) / 2;
-      cilk_spawn map(fn, block_size, start, mid);
-      cilk_spawn map(fn, block_size, mid, end);
-      cilk_sync;
+      int mid = (start + end) / 2;
+      // Mid has to be a multiple of stride
+      if ((mid - start) % stride != 0) {
+        mid += stride - ((mid - start) % stride);
+      }
+      cilk_scope {
+        cilk_spawn map(fn, block_size, start, mid, stride);
+        cilk_spawn map(fn, block_size, mid, end, stride);
+        cilk_sync;
+      }
     }
   }
 
-  T reduce(Monoid<T> monoid, size_t block_size = BLOCK_SIZE, 
-           size_t start = 0, size_t end = -1) {
+  T reduce(Monoid<T> monoid, int block_size = BLOCK_SIZE, int start = 0,
+           int end = -1) {
     if (end == -1)
       end = data.size();
     if (end - start < block_size) {
       T result = monoid.initial_value;
-      for (size_t i = start; i < end; i++) {
+      for (int i = start; i < end; i++) {
         result = monoid.combine(result, data[i]);
       }
       return result;
     }
     // Divide and conquer
-    size_t mid = (start + end) / 2;
+    int mid = (start + end) / 2;
     T left_result = cilk_spawn reduce(monoid, block_size, start, mid);
     T right_result = cilk_spawn reduce(monoid, block_size, mid, end);
     cilk_sync;
@@ -75,9 +82,9 @@ public:
 
   Sequence<T> subset(std::function<bool(T)> filter) {
     Sequence<bool> marked(data.size());
-    Sequence<size_t> marked_count(data.size() / BLOCK_SIZE + 1, 0);
+    Sequence<int> marked_count(data.size() / BLOCK_SIZE + 1, 0);
     // Mark and count how many vertices are marked in each worker
-    map([&](T vertex, size_t index, size_t work_id) {
+    map([&](T vertex, int index, int work_id) {
       marked.set(index, filter(vertex));
       if (marked.get(index)) {
         marked_count[work_id]++;
@@ -85,13 +92,13 @@ public:
     });
     // Compute the prefix sum of marked counts to determine the buffer size for
     // each worker
-    Sequence<size_t> marked_count_inclusive = marked_count.inclusive_scan();
-    Sequence<T> result(marked_count_inclusive.back());
+    marked_count.inclusive_scan_inplace();
+    Sequence<T> result(marked_count.back());
     // Fill the result sequence with the marked vertices, each worker writes to
     // its own part of the result
-    map([&](T vertex, size_t index, size_t work_id) {
+    map([&](T vertex, int index, int work_id) {
       if (marked.get(index)) {
-        result[marked_count_inclusive[work_id] - 1] = vertex;
+        result[marked_count[work_id] - 1] = vertex;
         marked_count[work_id]--;
       }
     });
@@ -104,55 +111,40 @@ public:
     return result;
   }
 
-  Sequence<T> inclusive_scan_serial() {
-    Sequence<T> result(data.size());
-    if (data.empty())
-      return result;
-
-    result[0] = data[0];
-    for (size_t i = 1; i < data.size(); ++i) {
-      result[i] = result[i - 1] + data[i];
-    }
-    return result;
+  void inclusive_scan_serial_inplace(int stride) {
+    for (int i = 2 * stride - 1; i < data.size(); i += stride) {
+      data[i] = data[i - stride] + data[i];
+    };
   }
 
-  Sequence<T> inclusive_scan(size_t block_size = BLOCK_SIZE) {
+  void inclusive_scan_inplace(int block_size = BLOCK_SIZE, int stride = 1) {
     // If the data size is smaller than the block size, use serial scan
-    if (data.size() < block_size) {
-      return inclusive_scan_serial();
+    if (data.size() / stride < block_size) {
+      return inclusive_scan_serial_inplace(stride);
     }
 
-    // Divice and conquer
-    // Step 1: Compute pairwise sums
-    Sequence<T> sums(data.size() / 2);
-    sums.map([&](T &item, size_t index, size_t work_id) {
-      item = data[2 * index] + data[2 * index + 1];
-    });
+    // Divide and conquer
+    // Step 1: Compute pairwise sums and assign to the right element
+    map(
+        [&](T &item, int index, int) {
+          item += data[index - stride];
+        },
+        block_size, 2 * stride - 1, data.size(), 2 * stride);
 
     // Step 2: Recursive inclusive scan on the pairwise sums
-    Sequence<T> scanned = sums.inclusive_scan(block_size);
+    inclusive_scan_inplace(block_size, stride * 2);
 
-    // Step 3: Fill output using scanned sums
-    Sequence<T> result(data.size());
-    scanned.map([&](T &item, size_t index, size_t work_id) {
-      result[2 * index] =
-          (index == 0) ? data[0] : scanned[index - 1] + data[2 * index];
-      result[2 * index + 1] = scanned[index];
-    });
+    // Step 3: Fill left elements with the scanned values
+    map([&](T &item, int index, int) { item += data[index - stride]; },
+        block_size, 3 * stride - 1, data.size(), 2 * stride);
 
-    // Handle odd element at the end (if data size is odd)
-    if (data.size() % 2 != 0) {
-      result[data.size() - 1] = result[data.size() - 2] + data[data.size() - 1];
-    }
-
-    return result;
   }
 
-  void resize(size_t new_size) { data.resize(new_size); }
+  void resize(int new_size) { data.resize(new_size); }
 
   void push_back(const T &value) { data.push_back(value); }
 
-  size_t size() const { return data.size(); }
+  int size() const { return data.size(); }
 
   auto begin() { return data.begin(); }
 
@@ -160,15 +152,11 @@ public:
 
   T &back() { return data.back(); }
 
-  T &operator[](size_t index) { return data[index]; }
+  T &operator[](int index) { return data[index]; }
 
-  void set(size_t index, const T &value) {
-    data[index] = value;
-  }
+  void set(int index, const T &value) { data[index] = value; }
 
-  T get(size_t index) const {
-    return data[index];
-  }
+  T get(int index) const { return data[index]; }
 
 private:
   std::vector<T> data;
