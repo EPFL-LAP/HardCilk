@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #ifndef BLOCK_SIZE
 #define BLOCK_SIZE 64
 #endif
@@ -22,16 +23,16 @@ public:
   Sequence(size_t size) : data(size) {}
   Sequence(size_t size, const T &value) {
     data.resize(size);
-    map([&](T &item, size_t) { item = value; });
+    map([&](T &item, size_t, size_t) { item = value; });
   }
   Sequence(size_t size, std::function<T(size_t)> fn) {
     data.resize(size);
-    map([&](T &item, size_t index) { item = fn(index); });
+    map([&](T &item, size_t index, size_t) { item = fn(index); });
   }
 
   // Delete copy constructor and assignment operator
-  Sequence(const Sequence &) = delete;
-  Sequence &operator=(const Sequence &) = delete;
+  Sequence(const Sequence &) = default;
+  Sequence &operator=(const Sequence &) = default;
 
   // Move constructor and assignment operator
   Sequence(Sequence &&) = default;
@@ -53,18 +54,55 @@ public:
     }
   }
 
-//   template <typename R>
-//   Sequence<R> map(std::function<R(const T &, size_t, size_t)> fn,
-//                   Monoid<R> reduce_fn, size_t block_size = BLOCK_SIZE,
-//                   size_t start = 0, size_t end = -1) {
-//     if (end == -1)
-//       end = data.size();
-//     if (end - start < block_size) {
+  T reduce(Monoid<T> monoid, size_t block_size = BLOCK_SIZE, 
+           size_t start = 0, size_t end = -1) {
+    if (end == -1)
+      end = data.size();
+    if (end - start < block_size) {
+      T result = monoid.initial_value;
+      for (size_t i = start; i < end; i++) {
+        result = monoid.combine(result, data[i]);
+      }
+      return result;
+    }
+    // Divide and conquer
+    size_t mid = (start + end) / 2;
+    T left_result = cilk_spawn reduce(monoid, block_size, start, mid);
+    T right_result = cilk_spawn reduce(monoid, block_size, mid, end);
+    cilk_sync;
+    return monoid.combine(left_result, right_result);
+  }
 
-//       for (size_t i = start; i < end; i++) {
-//       }
-//     }
-//   }
+  Sequence<T> subset(std::function<bool(T)> filter) {
+    Sequence<bool> marked(data.size());
+    Sequence<size_t> marked_count(data.size() / BLOCK_SIZE + 1, 0);
+    // Mark and count how many vertices are marked in each worker
+    map([&](T vertex, size_t index, size_t work_id) {
+      marked.set(index, filter(vertex));
+      if (marked.get(index)) {
+        marked_count[work_id]++;
+      }
+    });
+    // Compute the prefix sum of marked counts to determine the buffer size for
+    // each worker
+    Sequence<size_t> marked_count_inclusive = marked_count.inclusive_scan();
+    Sequence<T> result(marked_count_inclusive.back());
+    // Fill the result sequence with the marked vertices, each worker writes to
+    // its own part of the result
+    map([&](T vertex, size_t index, size_t work_id) {
+      if (marked.get(index)) {
+        result[marked_count_inclusive[work_id] - 1] = vertex;
+        marked_count[work_id]--;
+      }
+    });
+    return result;
+  }
+
+  Sequence<T> clone() const {
+    Sequence<T> result(data.size());
+    result.data = data;
+    return result;
+  }
 
   Sequence<T> inclusive_scan_serial() {
     Sequence<T> result(data.size());
@@ -123,6 +161,14 @@ public:
   T &back() { return data.back(); }
 
   T &operator[](size_t index) { return data[index]; }
+
+  void set(size_t index, const T &value) {
+    data[index] = value;
+  }
+
+  T get(size_t index) const {
+    return data[index];
+  }
 
 private:
   std::vector<T> data;

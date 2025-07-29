@@ -102,40 +102,22 @@ void vertexMap(Sequence<int> &vertices, std::function<void(int &)> func) {
  */
 Sequence<int> vertexSubset(Sequence<int> &vertices,
                            std::function<bool(int)> filter) {
-  Sequence<bool> marked(vertices.size());
-  Sequence<int> marked_count(vertices.size() / BLOCK_SIZE + 1, 0);
-  // Mark and count how many vertices are marked in each worker
-  vertices.map([&](int vertex, size_t index, size_t work_id) {
-    marked[index] = filter(vertex);
-    if (marked[index]) {
-      marked_count[work_id]++;
-    }
-  });
-  // Compute the prefix sum of marked counts to determine the buffer size for
-  // each worker
-  Sequence<int> marked_count_inclusive = marked_count.inclusive_scan();
-  Sequence<int> result(marked_count_inclusive.back());
-  // Fill the result sequence with the marked vertices, each worker writes to
-  // its own part of the result
-  vertices.map([&](int vertex, size_t index, size_t work_id) {
-    if (marked[index]) {
-      result[marked_count_inclusive[work_id] - 1] = vertex;
-      marked_count[work_id]--;
-    }
-  });
-  return result;
+  return vertices.subset(filter);
 }
 
 template <typename R>
-void nghReduce(Graph &g, Sequence<int> &vertex_subset,
-               std::function<R(int, int)> mapFn, R default_value,
-               std::function<bool(int)> condFn, Monoid<R> reduceFn,
-               std::function<std::optional<int>(int, R)> updateFn) {
-  Sequence<std::atomic<bool>> touched(g.getNumVertices(), false);
-  Sequence<Sequence<R>> neighbours_map(
-      vertex_subset.size(), [&](Sequence<R> &neighbours, size_t index) {
-        neighbours.resize(g.getNumVertices(), default_value);
-      });
+Sequence<int> nghReduce(Graph &g, Sequence<int> &vertex_subset,
+                        std::function<R(int, int)> mapFn, R default_value,
+                        std::function<bool(int)> condFn, Monoid<R> reduceFn,
+                        std::function<std::optional<int>(int, R)> updateFn) {
+  Sequence<std::atomic<bool>> touched(g.getNumVertices());
+  touched.map([&](std::atomic<bool> &item, size_t index, size_t) {
+    item.store(false, std::memory_order_relaxed);
+  });
+  // Map each edge from vertex_subset
+  Sequence<Sequence<R>> neighbours_map(vertex_subset.size(), [&](size_t index) {
+    return Sequence<R>(g.getNumVertices(), default_value);
+  });
   vertex_subset.map([&](int vertex, size_t index, size_t work_id) {
     g.getNeighbors(vertex).map(
         [&](int neighbor, size_t ngh_index, size_t ngh_work_id) {
@@ -145,9 +127,11 @@ void nghReduce(Graph &g, Sequence<int> &vertex_subset,
           }
         });
   });
+  // Create the set of neighbors
   Sequence<int> neighbours = vertexSubset(g.vertices, [&](int vertex) {
     return touched[vertex].load(std::memory_order_relaxed);
   });
+  // Reduce the neighbors
   Sequence<R> result(neighbours.size());
   neighbours.map([&](int vertex, size_t index, size_t work_id) {
     R value = reduceFn.initial_value;
@@ -157,4 +141,36 @@ void nghReduce(Graph &g, Sequence<int> &vertex_subset,
       }
     }
   });
+  // Apply update function
+  Sequence<std::optional<int>> updates(neighbours.size());
+  neighbours.map([&](int vertex, size_t index, size_t work_id) {
+    updates[index] = updateFn(vertex, result[index]);
+  });
+  // Filter the updates
+  Sequence<std::optional<int>> filtered_updates = updates.subset(
+      [&](std::optional<int> update) { return update.has_value(); });
+  // Map the filtered updates to the result
+  Sequence<int> final_result(filtered_updates.size());
+  filtered_updates.map(
+      [&](std::optional<int> update, size_t index, size_t work_id) {
+        final_result[index] = update.value();
+      });
+  // Return the final result
+  return final_result;
+}
+
+void nghCount(Graph &g, Sequence<int> &vertex_subset,
+              std::function<bool(int)> condFn,
+              std::function<std::optional<int>(int, int)> updateFn) {
+  nghReduce<int>(
+      g, vertex_subset,
+      [&](int vertex, int neighbor) {
+        return 1; // Count each edge
+      },
+      0, condFn, Monoid<int>(0, [](int a, int b) { return a + b; }), updateFn);
+}
+
+int density(Sequence<int> &degrees, Sequence<int> &vertex_subset) {
+  return degrees.reduce(Monoid<int>(0, [](int a, int b) { return a + b; })) /
+         vertex_subset.size();
 }
