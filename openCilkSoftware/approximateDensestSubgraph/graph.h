@@ -110,53 +110,9 @@ Sequence<int> nghReduce(Graph &g, Sequence<int> &vertex_subset,
                         std::function<R(int, int)> mapFn, R default_value,
                         std::function<bool(int)> condFn, Monoid<R> reduceFn,
                         std::function<std::optional<int>(int, R)> updateFn) {
-  Sequence<std::atomic<bool>> touched(g.getNumVertices());
-  touched.map([&](std::atomic<bool> &item, size_t index, size_t) {
-    item.store(false, std::memory_order_relaxed);
-  });
-  // Map each edge from vertex_subset
-  Sequence<Sequence<R>> neighbours_map(vertex_subset.size(), [&](size_t index) {
-    return Sequence<R>(g.getNumVertices(), default_value);
-  });
-  vertex_subset.map([&](int vertex, size_t index, size_t work_id) {
-    g.getNeighbors(vertex).map(
-        [&](int neighbor, size_t ngh_index, size_t ngh_work_id) {
-          if (condFn(neighbor)) {
-            neighbours_map[index][neighbor] = mapFn(vertex, neighbor);
-            touched[neighbor].store(true, std::memory_order_relaxed);
-          }
-        });
-  });
-  // Create the set of neighbors
-  Sequence<int> neighbours = vertexSubset(g.vertices, [&](int vertex) {
-    return touched[vertex].load(std::memory_order_relaxed);
-  });
-  // Reduce the neighbors
-  Sequence<R> result(neighbours.size());
-  neighbours.map([&](int vertex, size_t index, size_t work_id) {
-    R value = reduceFn.initial_value;
-    for (size_t i = 0; i < vertex_subset.size(); ++i) {
-      if (neighbours_map[i][vertex] != default_value) {
-        value = reduceFn.combine(value, neighbours_map[i][vertex]);
-      }
-    }
-  });
-  // Apply update function
-  Sequence<std::optional<int>> updates(neighbours.size());
-  neighbours.map([&](int vertex, size_t index, size_t work_id) {
-    updates[index] = updateFn(vertex, result[index]);
-  });
-  // Filter the updates
-  Sequence<std::optional<int>> filtered_updates = updates.subset(
-      [&](std::optional<int> update) { return update.has_value(); });
-  // Map the filtered updates to the result
-  Sequence<int> final_result(filtered_updates.size());
-  filtered_updates.map(
-      [&](std::optional<int> update, size_t index, size_t work_id) {
-        final_result[index] = update.value();
-      });
-  // Return the final result
-  return final_result;
+  // 1. Parallel for over all u,v pairs and their mapped value
+  // 2. Sort?
+  // 3. Histogram?
 }
 
 void nghCount(Graph &g, Sequence<int> &vertex_subset,
