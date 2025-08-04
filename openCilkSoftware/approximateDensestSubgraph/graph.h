@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -113,6 +114,50 @@ Sequence<int> nghReduce(Graph &g, Sequence<int> &vertex_subset,
   // 1. Parallel for over all u,v pairs and their mapped value
   // 2. Sort?
   // 3. Histogram?
+  auto n_work = (vertex_subset.size() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  Sequence<int> neighbor_counts(n_work + 1, 0);
+  vertex_subset.map([&](int vertex, size_t index, size_t work_id) {
+    auto neighbors = g.getNeighbors(vertex);
+    for (auto neighbor : neighbors) {
+      if (condFn(neighbor)) {
+        neighbor_counts[work_id + 1]++;
+      }
+    }
+  });
+  neighbor_counts.inclusive_scan_inplace();
+  Sequence<std::pair<int, R>> mapped_pairs;
+  vertex_subset.map([&](int vertex, size_t index, size_t work_id) {
+    auto neighbors = g.getNeighbors(vertex);
+    for (auto neighbor : neighbors) {
+      if (condFn(neighbor)) {
+        R value = mapFn(vertex, neighbor);
+        mapped_pairs[neighbor_counts[work_id]++] = {neighbor, value};
+      }
+    }
+  });
+  mapped_pairs.sort([](const auto &a) { return a.first; },
+                    std::ceil(std::log(g.getNumVertices()) + 1));
+  Sequence<std::pair<int, R>> reduced_pairs = histogram(mapped_pairs, reduceFn);
+  auto n_work2 = (reduced_pairs.size() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  Sequence<Sequence<int>> updated_neighbors(n_work2 + 1);
+  Sequence<int> updated_neighbor_counts(n_work2 + 1, 0);
+  reduced_pairs.map([&](std::pair<int, R> &pair, size_t index, size_t work_id) {
+    auto val = updateFn(pair.first, pair.second);
+    if (val.has_value()) {
+      updated_neighbors[work_id + 1].push_back(pair.first);
+      updated_neighbor_counts[work_id + 1]++;
+    }
+  });
+  updated_neighbor_counts.inclusive_scan_inplace();
+  Sequence<int> result(updated_neighbor_counts.back());
+  updated_neighbors.map(
+      [&](Sequence<int> &neighbors, size_t index, size_t work_id) {
+        neighbors.map([&](int &neighbor, size_t idx, size_t) {
+          result[updated_neighbor_counts[work_id]++] = neighbor;
+        });
+      });
+
+  return result;
 }
 
 void nghCount(Graph &g, Sequence<int> &vertex_subset,
