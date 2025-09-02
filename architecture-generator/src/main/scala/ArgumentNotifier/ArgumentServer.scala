@@ -10,12 +10,14 @@ import chext.elastic.ConnectOp._
 
 import Util._
 
-class ArgumentServerIO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int, wId: Int) extends Bundle {
+class ArgumentServerIO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int, wId: Int, multiDecrease: Boolean) extends Bundle {
   val connNetwork = Flipped(DecoupledIO(UInt(sysAddressWidth.W)))
   val connStealNtw = Flipped(new SchedulerNetworkClientIO(taskWidth))
 
-  val m_axi_counter = axi4.full.Master(cfg = axi4.Config(wId, sysAddressWidth, taskWidth))
-  val m_axi_task = axi4.full.Master(cfg = axi4.Config(wId, sysAddressWidth, taskWidth))
+  val new_sys_address_width = if(multiDecrease) (sysAddressWidth - counterWidth - 1) else sysAddressWidth
+
+  val m_axi_counter = axi4.full.Master(cfg = axi4.Config(wId, new_sys_address_width, taskWidth))
+  val m_axi_task = axi4.full.Master(cfg = axi4.Config(wId, new_sys_address_width, taskWidth))
 
   val done = Output(Bool())
 }
@@ -29,7 +31,7 @@ class ArgumentServer(
     multiDecrease: Boolean = false
 ) extends Module {
 
-  val io = IO(new ArgumentServerIO(taskWidth, counterWidth, sysAddressWidth, wId))
+  val io = IO(new ArgumentServerIO(taskWidth, counterWidth, sysAddressWidth, wId, multiDecrease))
 
   // Implementation
   io.m_axi_task.aw.noenq()
