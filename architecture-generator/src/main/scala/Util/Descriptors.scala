@@ -113,7 +113,7 @@ case class TaskDescriptor(
   assert(dynamicMemAlloc && widthMalloc > 0 || !dynamicMemAlloc && widthMalloc == 0)
 
   // Assert that the peHDLPath exists on the filesystem
-  assert(new java.io.File(peHDLPath).exists)
+//  assert(new java.io.File(peHDLPath).exists)
   
   if (isCont) {
 

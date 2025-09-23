@@ -280,7 +280,6 @@ object VitisModuleFactory {
           vitisModuleConfig,
           fullSysGenDescriptor,
           taskDescriptor.name,
-          taskDescriptor.variableSpawn
         )
       )
     )

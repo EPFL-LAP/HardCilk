@@ -15,6 +15,10 @@ import axi4.Ops._
 import axi4.lite.components._
 import chict.ict_segm._
 
+import chext.amba.axi4s
+
+import axi4s.Casts._
+
 import io.circe.syntax._
 import io.circe.generic.auto._
 import scala.collection.mutable.ArrayBuffer
@@ -99,60 +103,62 @@ class HardCilk(
     var j = 0
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       //println(task.mgmtBaseAddresses)
+      if (task.peHDLPath.nonEmpty) {
 
-      // Create the black boxes for the task PEs.
-      val peArray = VitisModuleFactory(task, fullSysGenDescriptor)
-      peMap += (task.name -> peArray)
+        // Create the black boxes for the task PEs.
+        val peArray = VitisModuleFactory(task, fullSysGenDescriptor)
+        peMap += (task.name -> peArray)
 
-      // Export the PEs m_axi_gmem and s_axi_control interfaces
+        // Export the PEs m_axi_gmem and s_axi_control interfaces
 
-      for (i <- 0 until task.numProcessingElements) {
-        val pe = peArray(i)
-        val peName = f"${task.name}_${i}"
+        for (i <- 0 until task.numProcessingElements) {
+          val pe = peArray(i)
+          val peName = f"${task.name}_${i}"
 
-        pe.io.elements
-          .get("m_axi_spawnNext")
-          .map(port => {
-            interfacesPE.addOne(port.asInstanceOf[axi4.RawInterface].asFull)
-          })
+          pe.io.elements
+            .get("m_axi_spawnNext")
+            .map(port => {
+              interfacesPE.addOne(port.asInstanceOf[axi4.RawInterface].asFull)
+            })
 
-        pe.io.elements
-          .get("m_axi_argOut")
-          .map(port => {
-            interfacesPE.addOne(port.asInstanceOf[axi4.RawInterface].asFull)
-          })
+          pe.io.elements
+            .get("m_axi_argOut")
+            .map(port => {
+              interfacesPE.addOne(port.asInstanceOf[axi4.RawInterface].asFull)
+            })
 
-        if (task.hasAXI) {
-          interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
-          val pes_axi_control = IO(chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]))
-            .suggestName(f"${peName}_s_axi_control")
+          if (task.hasAXI) {
+            interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
+            val pes_axi_control = IO(chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]))
+              .suggestName(f"${peName}_s_axi_control")
 
-          interfaceBuffer.addOne(
-            hdlinfo.Interface(
-              f"${peName}_s_axi_control",
-              hdlinfo.InterfaceRole.slave,
-              hdlinfo.InterfaceKind("axi4"),
-              "clock",
-              "reset",
-              Map("config" -> hdlinfo.TypedObject(pes_axi_control.cfg))
+            interfaceBuffer.addOne(
+              hdlinfo.Interface(
+                f"${peName}_s_axi_control",
+                hdlinfo.InterfaceRole.slave,
+                hdlinfo.InterfaceKind("axi4"),
+                "clock",
+                "reset",
+                Map("config" -> hdlinfo.TypedObject(pes_axi_control.cfg))
+              )
             )
-          )
 
-          pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
-          interfacesAxiControl.addOne(pes_axi_control)
-        }
-
-        // Connect the ap signals
-        pe.getPort("ap_clk").asInstanceOf[Clock] := clock
-        pe.getPort("ap_rst_n").asInstanceOf[Bool] := ~reset.asBool
-        try {
-          pe.getPort("ap_start").asInstanceOf[Bool] := true.B
-        } catch {
-          case e: Exception => {
-            // println(f"This module has no ap_start. ${e}")
+            pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+            interfacesAxiControl.addOne(pes_axi_control)
           }
-        }
 
+          // Connect the ap signals
+          pe.getPort("ap_clk").asInstanceOf[Clock] := clock
+          pe.getPort("ap_rst_n").asInstanceOf[Bool] := ~reset.asBool
+          try {
+            pe.getPort("ap_start").asInstanceOf[Bool] := true.B
+          } catch {
+            case e: Exception => {
+              // println(f"This module has no ap_start. ${e}")
+            }
+          }
+
+        }
       }
 
       schedulerMap += (task.name -> Module(
@@ -211,7 +217,8 @@ class HardCilk(
             argRouteServersNumber = task.getNumServers("argumentNotifier"),
             contCounterWidth = fullSysGenDescriptor.widthContCounter,
             pePortWidth = task.getPortWidth("argumentNotifier"),
-            cutCount = argumentNotifierCutCount
+            cutCount = argumentNotifierCutCount,
+            multiDecrease = false
           )
         ))
 
@@ -425,52 +432,90 @@ class HardCilk(
 
     for (connection <- systemConnectionsDescriptor.connections) {
       try {
-        val physicalSourcePort = connection.srcPort.parentType match {
-          case "HardCilk" => {
-            connection.srcPort.portType match {
-              case "taskIn" | "taskOut" | "taskInGlobal" =>
-                schedulerMap(connection.srcPort.parentName).io_export
-                  .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
-              case "closureOut" =>
-                closureAllocatorMap(connection.srcPort.parentName).io_export
-                  .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
-              case "mallocOut" =>
-                memoryAllocatorMap(connection.srcPort.parentName).io_export
-                  .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
-              case "argIn" =>
-                argumentNotifierMap(connection.srcPort.parentName).io_export
-                  .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
+        val pePort = connection.dstPort.parentType match {
+          case "HardCilk" => connection.srcPort
+          case "PE" => connection.dstPort
+        }
+        val peExists = peMap.contains(pePort.parentName)
+
+        if (peExists) {
+          // Connect the PE to the port
+          val physicalSourcePort = connection.srcPort.parentType match {
+            case "HardCilk" => {
+              connection.srcPort.portType match {
+                case "taskIn" | "taskOut" | "taskInGlobal" =>
+                  schedulerMap(connection.srcPort.parentName).io_export
+                    .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
+                case "closureOut" =>
+                  closureAllocatorMap(connection.srcPort.parentName).io_export
+                    .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
+                case "mallocOut" =>
+                  memoryAllocatorMap(connection.srcPort.parentName).io_export
+                    .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
+                case "argIn" =>
+                  argumentNotifierMap(connection.srcPort.parentName).io_export
+                    .getPort(connection.srcPort.portType, connection.srcPort.portIndex)
+              }
+            }
+            case "PE" => {
+              peMap(connection.srcPort.parentName)(connection.srcPort.parentIndex).getPort(connection.srcPort.portType)
             }
           }
-          case "PE" => {
-            peMap(connection.srcPort.parentName)(connection.srcPort.parentIndex).getPort(connection.srcPort.portType)
-          }
-        }
 
-        val physicalDestinationPort = connection.dstPort.parentType match {
-          case "HardCilk" => {
-            connection.dstPort.portType match {
-              case "taskIn" | "taskOut" | "taskInGlobal" =>
-                schedulerMap(connection.dstPort.parentName).io_export
-                  .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
-              case "closureOut" =>
-                closureAllocatorMap(connection.dstPort.parentName).io_export
-                  .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
-              case "mallocOut" =>
-                memoryAllocatorMap(connection.dstPort.parentName).io_export
-                  .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
-              case "argIn" =>
-                argumentNotifierMap(connection.dstPort.parentName).io_export
-                  .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
+          val physicalDestinationPort = connection.dstPort.parentType match {
+            case "HardCilk" => {
+              connection.dstPort.portType match {
+                case "taskIn" | "taskOut" | "taskInGlobal" =>
+                  schedulerMap(connection.dstPort.parentName).io_export
+                    .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
+                case "closureOut" =>
+                  closureAllocatorMap(connection.dstPort.parentName).io_export
+                    .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
+                case "mallocOut" =>
+                  memoryAllocatorMap(connection.dstPort.parentName).io_export
+                    .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
+                case "argIn" =>
+                  argumentNotifierMap(connection.dstPort.parentName).io_export
+                    .getPort(connection.dstPort.portType, connection.dstPort.portIndex)
+              }
+            }
+            case "PE" => {
+              peMap(connection.dstPort.parentName)(connection.dstPort.parentIndex).getPort(connection.dstPort.portType)
             }
           }
-          case "PE" => {
-            peMap(connection.dstPort.parentName)(connection.dstPort.parentIndex).getPort(connection.dstPort.portType)
+
+          physicalSourcePort <> physicalDestinationPort
+        } else {
+          // Expose the port as I/O
+          val (port, isSrc) = connection.srcPort.parentType match {
+            case "HardCilk" => (connection.srcPort, true)
+            case "PE" => (connection.dstPort, false)
+          }
+
+          val physicalPort = port.portType match {
+            case "taskIn" | "taskOut" | "taskInGlobal" =>
+              schedulerMap(port.parentName).io_export.getPort(port.portType, port.portIndex)
+            case "closureOut" =>
+              closureAllocatorMap(port.parentName).io_export.getPort(port.portType, port.portIndex)
+            case "mallocOut" =>
+              memoryAllocatorMap(port.parentName).io_export.getPort(port.portType, port.portIndex)
+            case "argIn" =>
+              argumentNotifierMap(port.parentName).io_export.getPort(port.portType, port.portIndex)
+          }
+
+          if (isSrc) {
+            val export_source = IO(axi4s.Master(physicalPort.cfg)).suggestName(
+              f"${port.parentName}_${port.portType}_${port.portIndex}"
+            )
+
+            export_source <> physicalPort
+          } else {
+            val import_sink = IO(axi4s.Slave(physicalPort.cfg)).suggestName(
+              f"${port.parentName}_${port.portType}_${port.portIndex}"
+            )
+            physicalPort <> import_sink
           }
         }
-
-        physicalSourcePort <> physicalDestinationPort
-
       } catch {
         case e: Exception => {
           println(e)
@@ -615,11 +660,13 @@ object HardCilkEmitter extends App {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
       val peHDLPath = task.peHDLPath
-      val peHDLPathFiles = new java.io.File(peHDLPath).listFiles()
-      peHDLPathFiles.foreach { file =>
-        val fileName = file.getName()
-        val fileContent = readFile(file.getAbsolutePath())
-        writeFile(s"$outputDirPathRTL/$fileName", fileContent)
+      if (peHDLPath.nonEmpty) {
+        val peHDLPathFiles = new java.io.File(peHDLPath).listFiles()
+        peHDLPathFiles.foreach { file =>
+          val fileName = file.getName()
+          val fileContent = readFile(file.getAbsolutePath())
+          writeFile(s"$outputDirPathRTL/$fileName", fileContent)
+        }
       }
     }
 
