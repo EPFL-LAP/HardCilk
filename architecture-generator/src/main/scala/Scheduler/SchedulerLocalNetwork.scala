@@ -1,16 +1,15 @@
 package Scheduler
 
 import chisel3._
-import Scheduler.SchedulerClient
 import Util._
-import Scheduler.SchedulerNetwork
 import scala.math._
 
-class SchedulerLocalNetworkIO(peCount: Int, vssCount: Int, vasCount: Int, taskWidth: Int, queueMaxLength: Int) extends Bundle {
-  val connPE = Vec(peCount, new DequeInterface(taskWidth, queueMaxLength))
+class SchedulerLocalNetworkIO(peCount: Int, vssCount: Int, vasCount: Int, taskWidth: Int, queueDepth: Int) extends Bundle {
+  val connPE = Vec(peCount, new DequeInterface(taskWidth, queueDepth))
   val connVSS = Vec(vssCount, new SchedulerNetworkClientIO(taskWidth)) // Connection to virtual steal server.
   val connVAS = Vec(vasCount, new SchedulerNetworkClientIO(taskWidth)) // Connection to virtual argument servers.
   val ntwDataUnitOccupancyVSS = Vec(vssCount, Output(Bool()))
+  val lengths_of_hardware_queues = Vec(peCount, Output(UInt(8.W)))
 }
 
 class SchedulerLocalNetwork(
@@ -18,13 +17,13 @@ class SchedulerLocalNetwork(
     vssCount: Int,
     vasCount: Int,
     taskWidth: Int,
-    queueMaxLength: Int,
+    queueDepth: Int,
     qRamReadLatency: Int,
     qRamWriteLatency: Int,
     spawnsItself: Boolean,
     successiveNetworkConfig: Boolean
 ) extends Module {
-  val io = IO(new SchedulerLocalNetworkIO(peCount, vssCount, vasCount, taskWidth, queueMaxLength))
+  val io = IO(new SchedulerLocalNetworkIO(peCount, vssCount, vasCount, taskWidth, queueDepth))
 
   assert(peCount >= vssCount)
   // Create an array of indicies for the VSSs to be attached to in the stealing network,
@@ -40,24 +39,24 @@ class SchedulerLocalNetwork(
   // Instantiate the stealing network.
   val stealNet = Module(new SchedulerNetwork(taskWidth, peCount + vasCount + vssCount, vssIndicies))
 
-  var minLengthThresh = min(max((0.2 * queueMaxLength).asInstanceOf[Int], 1), 4)
+  var minLengthThresh = min(max((0.2 * queueDepth).asInstanceOf[Int], 1), 8)
 
-  var maxLengthThresh = max((0.7 * queueMaxLength).asInstanceOf[Int], 1)
+  var maxLengthThresh = max((0.7 * queueDepth).asInstanceOf[Int], 1)
 
-  // if (!spawnsItself) {
-  //   minLengthThresh = (0.8 * queueMaxLength).asInstanceOf[Int]
-  //   maxLengthThresh = queueMaxLength - 1
-  // }
+  if (!spawnsItself) {
+    minLengthThresh = (0.3 * queueDepth).asInstanceOf[Int]
+    maxLengthThresh = queueDepth - 1
+  }
 
-  assert(minLengthThresh < queueMaxLength)
-  assert(maxLengthThresh <= queueMaxLength)
+  assert(minLengthThresh < queueDepth)
+  assert(maxLengthThresh <= queueDepth)
 
   // Instantiate the stealing servers.
   val stealServers = Seq.fill(peCount)(
     Module(
       new SchedulerClient(
         taskWidth,
-        queueMaxLength,
+        queueDepth,
         minLengthThresh,
         maxLengthThresh,
         peCount + vasCount + vssCount,
@@ -67,12 +66,15 @@ class SchedulerLocalNetwork(
   )
 
   // Instantiate the task queues.
-  // N.B. The plus two for the queueMaxLength is a quick (and less complex) solution for the circular queue pointer arithmetic
-  val taskQueues = Seq.fill(peCount)(Module(new Deque(taskWidth, queueMaxLength + 2, qRamReadLatency, qRamWriteLatency)))
+  // N.B. The plus two for the queueDepth is a quick (and less complex) solution for the circular queue pointer arithmetic
+  val taskQueues = Seq.fill(peCount)(Module(new Deque(taskWidth, queueDepth + 2, qRamReadLatency, qRamWriteLatency)))
 
   // Connect the task queues to the output of the module (connPE)
   for (i <- 0 until peCount) {
     taskQueues(i).io.connVec(0) <> io.connPE(i) // connVec(0) has priority in popping.
+
+    
+    io.lengths_of_hardware_queues(i) := taskQueues(i).io.connVec(0).currLength
   }
 
   // Connect the stealing servers to the task queues

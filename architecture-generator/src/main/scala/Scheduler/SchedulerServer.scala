@@ -9,7 +9,7 @@ import chext.amba.axi4
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
 
-class SchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth: Int) extends Bundle {
+class SchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth: Int, peCount: Int) extends Bundle {
   val connNetwork = Flipped(new SchedulerNetworkClientIO(taskWidth))
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
   val read_address = DecoupledIO(UInt(sysAddressWidth.W))
@@ -21,6 +21,9 @@ class SchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth
   val write_last = Output(UInt(1.W))
   val ntwDataUnitOccupancy = Input(Bool())
   val paused = Output(Bool())
+  val lengths_of_hardware_queues = Vec(peCount, Input(UInt(8.W)))
+  val serveRemote = Output(Bool())         // A signal from the VSS to the RemoteTaskServer
+  val getTasksFromRemote = Output(Bool())  // A signal from the VSS to the RemoteTaskServer
 }
 
 // N.B: For correct execution
@@ -57,7 +60,7 @@ class SchedulerServer(
   }
 
   val regBlock = new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
-  val io = IO(new SchedulerServerIO(taskWidth, regBlock, sysAddressWidth))
+  val io = IO(new SchedulerServerIO(taskWidth, regBlock, sysAddressWidth, peCount))
 
   io.axi_mgmt.suggestName("S_AXI_MGMT")
 
@@ -79,6 +82,7 @@ class SchedulerServer(
   private val addrShift = RegInit((log2Ceil(taskWidth / 8)).U)
   private val taskQueueBuffer = Module(new Queue(UInt(), nBeats))
   private val memDataCounter = RegInit(0.U(5.W))
+  private val queuesUtil = RegInit(0.U(64.W))
 
   regBlock.base(0x00)
   regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
@@ -88,6 +92,30 @@ class SchedulerServer(
   regBlock.reg(fifoHeadReg, read = true, write = true, desc = "The head register of the FIFO")
   regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
   regBlock.reg(currLen, read = true, write = true, desc = "A register that holds the current length of the FIFO")
+  regBlock.reg(queuesUtil, read = true, write = true, desc = "A register that holds the lengths of different hardware queues")
+
+  
+
+  // queuesUtils register is only done for debugging small number of PEs to check the utilization of local BRAM queues per PE
+  if (peCount <= 8) {
+    val newQueuesUtil = Wire(UInt(64.W))
+    newQueuesUtil := io.lengths_of_hardware_queues.reduceLeft(Cat(_, _))
+    queuesUtil := newQueuesUtil
+  }
+
+
+  // Logic to decide whether to serve or get tasks from remote FPGAs
+  when(networkCongested || currLen > 16.U) {
+    io.serveRemote := true.B && maxLength =/= 0.U && !rPause && currLen > 16.U
+    io.getTasksFromRemote := false.B
+  }.otherwise {
+    io.serveRemote := false.B
+    io.getTasksFromRemote := true.B && maxLength =/= 0.U && !rPause
+  }
+
+
+
+
 
   io.paused := rPause
 
