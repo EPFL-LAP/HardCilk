@@ -16,7 +16,7 @@ class ArgumentServerIO(taskWidth: Int, counterWidth: Int, sysAddressWidth: Int, 
 
   val new_sys_address_width = if(multiDecrease) (sysAddressWidth - counterWidth - 1) else sysAddressWidth
 
-  val m_axi_counter = axi4.full.Master(cfg = axi4.Config(wId, new_sys_address_width, taskWidth))
+  val m_axi_counter = axi4.full.Master(cfg = axi4.Config(wId, new_sys_address_width, taskWidth)) // why width data is taskWidth?
   val m_axi_task = axi4.full.Master(cfg = axi4.Config(wId, new_sys_address_width, taskWidth))
 
   val done = Output(Bool())
@@ -197,6 +197,7 @@ class ArgumentServer(
         out.id := in.id
         out.len := 0.U
         out.size := log2Ceil(counterWidth / 8).U
+        out.burst := 1.U // INCR
       }
     }
   }
@@ -273,6 +274,7 @@ class ArgumentServer(
             out.addr := in.addr
             out.id := in.id
             out.size := log2Ceil(counterWidth / 8).U
+            out.burst := 1.U // INCR
           }
         }
 
@@ -296,6 +298,7 @@ class ArgumentServer(
         out.addr := in.addr
         out.size := log2Ceil(taskWidth / 8).U
         out.len := 0.U
+        out.burst := 1.U // INCR
 
         accept()
       }
