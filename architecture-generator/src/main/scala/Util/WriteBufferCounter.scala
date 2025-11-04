@@ -102,7 +102,7 @@ class WriteBufferCounter(
         protected def onTransform: Unit = {
           out.addr := in.asTypeOf(wb_t).addr
           out.size := in.asTypeOf(wb_t).size
-          out.burst := axi4.BurstType.FIXED
+          out.burst := axi4.BurstType.INCR
           out.len := 0.U
         }
       }
@@ -131,7 +131,7 @@ class WriteBufferCounter(
         protected def onTransform: Unit = {
           out := 0.U.asTypeOf(out)
           out.addr := in._2.addr
-          out.burst := axi4.BurstType.FIXED
+          out.burst := axi4.BurstType.INCR
           out.size := in._1.asTypeOf(wb_t).size
         }
       }
@@ -164,7 +164,7 @@ class WriteBufferCounter(
     }
 
     val token = Wire(DecoupledIO(Bool()))
-    new elastic.Replicate(replIn, token) {
+    new elastic.Replicate(replIn, token, wAllow) {
       protected def onReplicate: Unit = {
         len := in
         out := true.B
