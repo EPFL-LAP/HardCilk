@@ -69,7 +69,8 @@ class Scheduler(
     argRouteServersCreateTasks: Boolean =false,
     override val mfpgaSupport: Boolean = false,
     maxNumnberToStealOrServe: Int = 256,
-    override val taskId: Int = 0
+    override val taskId: Int = 0,
+    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
 ) extends Module with SchedulerHasMfpgaSupport {
 
   val vssAxiFullCfg = axi4.Config(
@@ -361,12 +362,7 @@ class Scheduler(
       getOutsideSpawnNetwork.get.io.connSS(outTaskSpawnIndicies(i)) <> globalsTaskBuffers(i - argRouteServersNumber).io.connStealNtw
     }
   }
-
-  // Build mfPGA connections if enabled
-  if (mfpgaSupport) {
-    buildMfpgaConnections()
-  }
-
+  buildMfpgaConnections()
 }
 
 

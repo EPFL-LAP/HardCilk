@@ -21,10 +21,8 @@ import axi4s.Casts._
   *      shall then send the tasks to the network
   */
 
-class RemoteTaskServerIO(taskWidth: Int) extends Bundle {
+class RemoteTaskServerIO(taskWidth: Int, axisCfgTaskAndReq : axi4s.Config) extends Bundle {
   assert((taskWidth + 14) < 512, "Task width is too large for the streaming interface in the RemoteTaskServer")
-  val axisCfgTaskAndReq =
-    axi4s.Config(wData = 512, wDest = 4) // task plus 8 bits for task valid and request value (8 bits for AXIS compat)
   val s_axis_taskAndReq = axi4s.Slave(axisCfgTaskAndReq)
   val m_axis_taskAndReq = axi4s.Master(axisCfgTaskAndReq)
   val connNetwork_0 = Flipped(new SchedulerNetworkClientIO(taskWidth)) // Connection to the stealing Network
@@ -43,15 +41,13 @@ class RemoteTaskServerIO(taskWidth: Int) extends Bundle {
 class RemoteTaskServer(
     taskWidth: Int,
     peCount: Int,
+    axisCfgTaskAndReq : axi4s.Config,
     taskIndex: Int = 0,
     coolDownTime: Int = 0,
-    maxNumnberToStealOrServe: Int = 256
+    maxNumnberToStealOrServe: Int = 256    
 ) extends Module {
 
-  val io = IO(new RemoteTaskServerIO(taskWidth))
-
-  val axisCfgTaskAndReq =
-    axi4s.Config(wData = 512, wDest = 4)
+  val io = IO(new RemoteTaskServerIO(taskWidth, axisCfgTaskAndReq))
 
 
   val servingRemote = RegInit(false.B)

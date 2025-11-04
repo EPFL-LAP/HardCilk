@@ -43,7 +43,8 @@ class ArgumentNotifier(
     cutCount: Int,
     multiDecrease: Boolean,
     override val mfpgaSupport: Boolean,
-    debug: Boolean = false
+    debug: Boolean = false,
+    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
 ) extends Module with  NotifierHasMfpgaSupport {
 
   print(f"ArgumentNotifier: addrWidth: ${addrWidth} \n")

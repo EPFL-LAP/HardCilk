@@ -20,6 +20,11 @@ trait NotifierHasMfpgaSupport extends Module {
   val argRouteServers: Seq[ArgumentServerMfpgaWrapper]
   val argRouteServersNumber: Int
   val taskWidth: Int
+  val axisCfgTaskAndReq: axi4s.Config 
+
+  val m_axis_remote = if(mfpgaSupport) Some(IO(axi4s.Master(axisCfgTaskAndReq))) else None
+  val s_axis_remote = if(mfpgaSupport) Some(IO(axi4s.Slave(axisCfgTaskAndReq))) else None
+  val fpgaIndexInputReg = if(mfpgaSupport) Some(IO(Input(UInt(8.W)))) else None
 
   def buildMfpgaConnections(): Unit = {
     val master_arbiter = Module(
@@ -37,24 +42,19 @@ trait NotifierHasMfpgaSupport extends Module {
     }
     
 
-    val m_axis_remote = IO(axi4s.Master(argRouteServers.head.io.axisCfgTaskAndReq))
-    val s_axis_remote = IO(axi4s.Slave(argRouteServers.head.io.axisCfgTaskAndReq))
-    val fpgaIndexInputReg = IO(Input(UInt(8.W)))
-    
-
     // Connect the m_axis_remote to the master of the arbiter
-    m_axis_remote.asFull <> master_arbiter.io.sink
+    m_axis_remote.get.asFull <> master_arbiter.io.sink
 
 
     for (i <- 0 until argRouteServersNumber) {
       // Connect the axi_mgmt port for all the argument servers
-      fpgaIndexInputReg <> argRouteServers(i).io.fpgaIndexInputReg.get
+      fpgaIndexInputReg.get <> argRouteServers(i).io.fpgaIndexInputReg.get
 
       // Make the slave ports of the arbiter connect to the master ports of the argument servers
       master_arbiter.io.sources(i) <> argRouteServers(i).io.m_axis_remote.get.asFull
     }
 
-    new elastic.Fork(s_axis_remote.asFull) {
+    new elastic.Fork(s_axis_remote.get.asFull) {
       override def onFork(): Unit = {
         elastic.Demux(
           source = fork(in),
