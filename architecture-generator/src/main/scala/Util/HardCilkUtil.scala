@@ -39,6 +39,19 @@ object HardCilkUtil {
     }
   }
 
+  def getPhysicalWBPort(
+      port: PortDescriptor,
+      spawnNextWBs: Map[String, Seq[WriteBuffer]],
+      sendArgumentWBs: Map[String, Seq[WriteBuffer]]
+  ): chisel3.Data = {
+    port.parentType match {
+      case "spawnNextWB" =>
+        spawnNextWBs(port.parentName)(port.parentIndex).getPort(port.portType, port.portIndex)
+      case "sendArgumentWB" =>
+        sendArgumentWBs(port.parentName)(port.parentIndex).getPort(port.portType, port.portIndex)
+    }
+  }
+
   /**
    * Finds the physical Chisel port for any component (HardCilk subsystem or PE).
    */
@@ -48,7 +61,9 @@ object HardCilkUtil {
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
       memAllocs: Map[String, Allocator],
-      pes: Map[String, Seq[VitisWriteBufferModule]]
+      pes: Map[String, Seq[VitisWriteBufferModule]],
+      spawnNextWBs: Map[String, Seq[WriteBuffer]],
+      sendArgumentWBs: Map[String, Seq[WriteBuffer]]
   ): chisel3.Data = {
     port.parentType match {
       case "HardCilk" =>
@@ -57,6 +72,8 @@ object HardCilkUtil {
       case "PE" =>
         pes(port.parentName)(port.parentIndex)
           .getPort(port.portType)
+      case "spawnNextWB" | "sendArgumentWB" =>
+        getPhysicalWBPort(port, spawnNextWBs, sendArgumentWBs)
     }
   }
 

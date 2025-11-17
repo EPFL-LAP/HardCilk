@@ -15,6 +15,7 @@ import axi4.Ops._
 import AXIHelpers._
 import Util.AddressTransformConfig
 import io.circe.generic.auto._
+import Util.WriteBuffer
 
 /**
  * A trait that encapsulates the HBM AXI interconnect generation logic.
@@ -47,7 +48,9 @@ trait HasHBMInterconnect extends Module {
       schedulerMap: Map[String, Scheduler],
       closureAllocatorMap: Map[String, Allocator],
       argumentNotifierMap: Map[String, ArgumentNotifier],
-      memoryAllocatorMap: Map[String, Allocator]
+      memoryAllocatorMap: Map[String, Allocator],
+      spawnNextWBMap: Map[String, Seq[WriteBuffer]],
+      sendArgumentWBMap: Map[String, Seq[WriteBuffer]]
   ): Unit = {
     
     // [This is the code block from CleanHardCilk.scala, line 316 to 512]
@@ -64,6 +67,20 @@ trait HasHBMInterconnect extends Module {
           interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
         }
       }
+    }
+
+    spawnNextWBMap.foreach {
+      case (taskName, wbArray) =>
+        wbArray.foreach { wb =>
+          interfacesPE.addOne(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+        }
+    }
+
+    sendArgumentWBMap.foreach {
+      case (taskName, wbArray) =>
+        wbArray.foreach { wb =>
+          interfacesPE.addOne(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+        }
     }
     
     val interfacesScheduler = schedulerMap.values.flatMap(_.io_internal.vss_axi_full).to(ArrayBuffer)

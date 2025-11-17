@@ -22,7 +22,8 @@ lazy val root = (project in file("."))
     ) ++ Seq(
       "io.circe" %% "circe-core",
       "io.circe" %% "circe-generic",
-      "io.circe" %% "circe-parser"
+      "io.circe" %% "circe-parser",
+      "io.circe" %% "circe-generic-extras" // <-- add this
     ).map(_ % circeVersion),
     scalacOptions ++= Seq(
       "-language:reflectiveCalls",

@@ -1,78 +1,108 @@
 {
-    "name": "fibonacci",
-    "taskDescriptors": [
+  "fpgaModel": "ALVEO_U55C",
+  "mallocList": {},
+  "memorySizeSim": 16,
+  "name": "fibonacci",
+  "sendArgumentList": {
+    "fib": [
+      "fib_cont0"
+    ],
+    "fib_cont0": [
+      "fib_cont0"
+    ]
+  },
+  "spawnList": {
+    "fib": [
+      "fib"
+    ]
+  },
+  "spawnNextList": {
+    "fib": [
+      "fib_cont0"
+    ]
+  },
+  "targetFrequency": 300,
+  "taskDescriptors": [
+    {
+      "spawnServersCount" : 1,
+      "dynamicMemAlloc": false,
+      "isCont": true,
+      "isRoot": false,
+      "name": "fib_cont0",
+      "numProcessingElements": 1,
+      "peHDLPath": "",
+      "sidesConfigs": [
         {
-            "name": "fib",
-            "peHDLPath": "/home/shahawy/Desktop/HardCilk/hw_ws/vitis_hls/fibonacci/fib/fib/hls/syn/verilog",
-            "isRoot": true,
-            "isCont": false,
-            "dynamicMemAlloc": false,
-
-            "numProcessingElements": 32,
-            "widthTask": 128,
-            "widthMalloc": 0,
-            "sidesConfigs": [
-                {
-                    "sideType": "scheduler",
-                    "numVirtualServers": 1,
-                    "capacityVirtualQueue": 512,
-                    "capacityPhysicalQueue": 64,
-                    "portWidth": 128
-                }
-            ]
-            
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 256,
+          "sideType": "scheduler"
         },
         {
-            "name": "sum",
-            "peHDLPath": "/home/shahawy/Desktop/HardCilk/hw_ws/vitis_hls/fibonacci/sum/sum/hls/syn/verilog",
-            "isRoot": false,
-            "isCont": true,
-            "dynamicMemAlloc": false,
-
-            "numProcessingElements": 16,
-            "widthTask": 256,
-            "widthMalloc": 0,
-
-            "sidesConfigs": [
-                {
-                    "sideType": "scheduler",
-                    "numVirtualServers": 1,   
-                    "capacityVirtualQueue": 512,
-                    "capacityPhysicalQueue": 64,
-                    "portWidth": 256
-                },
-                {
-                    "sideType": "allocator",
-                    "numVirtualServers": 4,  
-                    "capacityVirtualQueue": 1024,
-                    "capacityPhysicalQueue": 16,
-                    "portWidth": 64
-                },
-                {
-                    "sideType": "argumentNotifier",
-                    "numVirtualServers": 16,  
-                    "capacityVirtualQueue": 512,
-                    "capacityPhysicalQueue": 32,
-                    "portWidth": 64
-                }
-            ]
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 128,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "sideType": "argumentNotifier"
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 256,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "sideType": "allocator"
         }
-    ],
-    "spawnList": {
-        "fib": ["fib"]
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 256,
+      "hasAXI": false,
+      "taskId": 0,
+      "generateArgOutWriteBuffer": true,
+      "argumentSizeList": [
+        32
+      ]
     },
-    "spawnNextList": {
-        "fib": ["sum"]
-    },
-    "sendArgumentList": {
-        "fib": ["sum"],
-        "sum": ["sum"]
-    },
-    "mallocList": {
-    },
-    "widthAddress":64,
-    "widthContCounter":32,
-    "memorySizeSim": 16,
-    "targetFrequency": 300,
-    "fpgaModel": "ALVEO_U55C"
+    {
+      "spawnServersCount" : 0,
+      "dynamicMemAlloc": false,
+      "isCont": false,
+      "isRoot": true,
+      "name": "fib",
+      "numProcessingElements": 1,
+      "peHDLPath": "",
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 256,
+          "numVirtualServers": 1,
+          "portWidth": 256,
+          "sideType": "scheduler"
+        }
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 256,
+      "hasAXI": false,
+      "isAIE": false,
+      "generateSpawnNextWriteBuffer": false,
+      "generateArgOutWriteBuffer": false,
+      "argumentSizeList": [
+        32
+      ],
+      "taskId": 1
+    }
+  ],
+  "widthAddress": 64,
+  "widthContCounter": 32,
+  "isVitisProject": true,
+  "keepAXI4Interfaces": true,
+  "mFPGASynth": false,
+  "mFPGASimulation": false,
+  "maximumAXIPorts": 30,
+  "hasAXIDMAInput": false,
+  "transformAXI": false,
+  "transformPattern": [],
+  "widthAXIAddress": 64
 }

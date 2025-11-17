@@ -20,6 +20,7 @@ import chext.amba.axi4.lite.components.{Upscale, UpscaleConfig}
 
 
 import HardCilkBuilder.PortToExport
+import Util.WriteBuffer
 
 class HardCilk(
     override val fullSysGenDescriptor: FullSysGenDescriptor, // Made public for trait
@@ -90,19 +91,19 @@ class HardCilk(
   connectPEs(peMap)
 
   val portsToExport = builder.connectSubsystems(
-    schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap
+    schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap, spawnNextWBMap, sendArgumentWBMap
   )
 
 
 
   exportMissingPEPorts(
-    portsToExport, schedulerMap, allocatorMap, notifierMap, memAllocatorMap
+    portsToExport, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap, spawnNextWBMap, sendArgumentWBMap
   )
 
   connectGlobalSignals(schedulerMap, allocatorMap, memAllocatorMap, notifierMap)
   
   // This call now invokes the method from the HasHBMInterconnect trait
-  buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap)
+  buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, spawnNextWBMap, sendArgumentWBMap)
   
   exportPEControl(peMap)
   generateHdlInfo()
@@ -119,7 +120,10 @@ class HardCilk(
       scheds: Map[String, Scheduler],
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
-      memAllocs: Map[String, Allocator]
+      memAllocs: Map[String, Allocator],
+      pes: Map[String, Seq[VitisWriteBufferModule]],
+      spawnNextWBs: Map[String, Seq[WriteBuffer]],
+      sendArgumentWBs: Map[String, Seq[WriteBuffer]]
   ): Unit = {
     
     if (portsToExport.nonEmpty) {
@@ -130,39 +134,29 @@ class HardCilk(
       val subPortDesc = port.subsystemPortDescriptor
       val pePortDesc = port.pePortDescriptor
 
-      val subsystemPort = getPhysicalSubsystemPort(
-        subPortDesc, scheds, allocs, notifiers, memAllocs
+      val subsystemPort = getPhysicalPort(
+        subPortDesc, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs
       )
 
       /**
        * First, handle if directly the port is exported
       */
 
+      val newIO = IO(chiselTypeOf(subsystemPort)) 
+      val ioName = f"BindTo_PE_${pePortDesc.parentName}_${pePortDesc.parentIndex}_${pePortDesc.portType}"
+      newIO.suggestName(ioName)
+      println(s"  ... exporting ${ioName}")
 
-      if(!needsWriteBuffer(port, fullSysGenDescriptor)){
-        val newIO = IO(chiselTypeOf(subsystemPort)) 
-        val ioName = f"BindTo_PE_${pePortDesc.parentName}_${pePortDesc.parentIndex}_${pePortDesc.portType}"
-        newIO.suggestName(ioName)
-        println(s"  ... exporting ${ioName}")
-
-        if (port.isSource) {
-          newIO <> subsystemPort
-          exportedPeHdlinfoPorts += hdlinfo.Port(
-            ioName, hdlinfo.PortDirection.input, hdlinfo.PortKind.data, associatedClock = "clock"
-          )
-        } else {
-          subsystemPort <> newIO
-          exportedPeHdlinfoPorts += hdlinfo.Port(
-            ioName, hdlinfo.PortDirection.output, hdlinfo.PortKind.data, associatedClock = "clock"
-          )
-        }
-      }
-      /**
-       * Otherwise, handle if writeBuffers are needed
-      */
-      else{
-        // #TODO
-        
+      if (port.isSource) {
+        newIO <> subsystemPort
+        exportedPeHdlinfoPorts += hdlinfo.Port(
+          ioName, hdlinfo.PortDirection.input, hdlinfo.PortKind.data, associatedClock = "clock"
+        )
+      } else {
+        subsystemPort <> newIO
+        exportedPeHdlinfoPorts += hdlinfo.Port(
+          ioName, hdlinfo.PortDirection.output, hdlinfo.PortKind.data, associatedClock = "clock"
+        )
       }
     }
   }
