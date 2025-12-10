@@ -35,7 +35,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       argNotifierFactories: Map[String, () => ArgumentNotifier],
       memAllocatorFactories: Map[String, () => Allocator],
       spawnNextWBFactories: Map[String, () => Seq[WriteBuffer]],
-      sendArgumentWBFactories: Map[String, () => Seq[WriteBuffer]]
+      sendArgumentWBFactories: Map[String, () => Seq[WriteBuffer]],
+      remoteStreamToMemFactories: Map[String, () => RemoteStreamToMem]
   )
 
   /** defineBlueprint() remains unchanged */
@@ -96,7 +97,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           pePortWidth = 64, // <-- HARDCODED
           cutCount = argCutCount,
           multiDecrease = task.variableSpawn,
-          mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation
+          mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
+          taskID = task.taskId 
         ))
       }.toMap
     
@@ -170,6 +172,24 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         })
       }.toMap
 
+    val remoteStreamToMemFactories = desc.taskDescriptors
+      .filter { task =>
+        task.generateArgOutWriteBuffer &&
+        (desc.mFPGASimulation || desc.mFPGASynth)
+      }
+      .map { task =>
+        task.name -> (() => {
+          val remoteStreamToMem = new RemoteStreamToMem(
+            new RemoteStreamToMemConfig(
+              addressWidth = 64,
+              localModulesCount = task.numProcessingElements,
+              taskId = task.taskId,
+              axiDataWidth = task.argumentSizeList.head
+            ))
+          remoteStreamToMem
+        })
+      }.toMap
+
     SubsystemBlueprint(
       peFactories, 
       schedulerFactories, 
@@ -177,7 +197,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       argNotifierFactories, 
       memAllocatorFactories,
       spawnNextWBFactories,
-      sendArgumentWBFactories
+      sendArgumentWBFactories,
+      remoteStreamToMemFactories
     )
   }
 
@@ -194,7 +215,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       pes: Map[String, Seq[VitisWriteBufferModule]]
   ): Seq[PortToExport] = {
     
-    println(s"[HardCilkBuilder] Connecting ${scheds.size} schedulers, ${allocs.size} allocators, ${notifiers.size} notifiers, ${memAllocs.size} memAllocs")
+    println(s"[HardCilk:Builder:197] Connecting ${scheds.size} schedulers, ${allocs.size} allocators, ${notifiers.size} notifiers, ${memAllocs.size} memAllocs")
     
     val portsToExport = new scala.collection.mutable.ArrayBuffer[PortToExport]()
 
@@ -229,6 +250,11 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           )
 
           physicalSourcePort <> physicalDestinationPort
+
+          // Log the connection
+          println("[HardCilk:Builder:237] Connected " +
+            s"${connection.srcPort.parentType}(${connection.srcPort.parentName}).${connection.srcPort.portType}.${connection.srcPort.portIndex} " +
+            s"--> ${connection.dstPort.parentType}(${connection.dstPort.parentName}).${connection.dstPort.portType}.${connection.dstPort.portIndex}")
 
         } catch {
           case e: Exception => {

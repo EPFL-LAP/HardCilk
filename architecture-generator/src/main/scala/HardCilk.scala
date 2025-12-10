@@ -85,6 +85,11 @@ class HardCilk(
     case (name, factory) => name -> factory()
   }
 
+  val remoteStreamToMemMap = blueprint.remoteStreamToMemFactories.map { 
+    case (name, factory) => name -> Module(factory())
+  }
+
+
   val demux = instantiateManagementDemux()
   connectManagement(demux, schedulerMap, allocatorMap, memAllocatorMap)
   connectPEs(peMap)
@@ -102,7 +107,7 @@ class HardCilk(
   connectGlobalSignals(schedulerMap, allocatorMap, memAllocatorMap, notifierMap)
   
   // This call now invokes the method from the HasHBMInterconnect trait
-  buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap)
+  buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, remoteStreamToMemMap)
   
   exportPEControl(peMap)
   generateHdlInfo()
@@ -203,14 +208,14 @@ class HardCilk(
       new chext.elastic.Transform(s_axil_mgmt_upscale.m_axi.ar, demux.s_axil.ar) {
         protected override def onTransform: Unit = {
           out := in
-          out.addr := in.addr - offset.U
+          out.addr := in.addr - Mux(in.addr > 0.U, offset.U, 0.U) // This was done to have addr 0 (mapped for HLS registers to not hang the axi transaction)
         }
       }
       demux.s_axil.r :=> s_axil_mgmt_upscale.m_axi.r
       new chext.elastic.Transform(s_axil_mgmt_upscale.m_axi.aw, demux.s_axil.aw) {
         protected override def onTransform: Unit = {
           out := in
-          out.addr := in.addr - offset.U
+          out.addr := in.addr - Mux(in.addr > 0.U, offset.U, 0.U) // This was done to have addr 0 (mapped for HLS registers to not hang the axi transaction)
         }
       }
       s_axil_mgmt_upscale.m_axi.w :=> demux.s_axil.w
@@ -368,7 +373,4 @@ class HardCilk(
     write.write(hdlinfoModule.asJson.toString())
     write.close()
   }
-
-  // --- Run Initialization ---
-  //initialize()
 }

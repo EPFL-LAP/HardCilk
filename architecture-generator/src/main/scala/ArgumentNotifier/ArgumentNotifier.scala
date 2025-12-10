@@ -42,6 +42,7 @@ class ArgumentNotifier(
     pePortWidth: Int,
     cutCount: Int,
     multiDecrease: Boolean,
+    taskID: Int,
     override val mfpgaSupport: Boolean,
     debug: Boolean = false,
     override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
@@ -77,7 +78,8 @@ class ArgumentNotifier(
         tagBitsShift = log2Ceil(taskWidth / 8),
         wId = 2,
         multiDecrease = multiDecrease,
-        mfpgaSupport = mfpgaSupport
+        mfpgaSupport = mfpgaSupport,
+        taskID = taskID
       )
     )
   }
@@ -134,7 +136,8 @@ object ArgumentNotifierEmitter extends App {
       pePortWidth = 64,
       cutCount = 2,
       multiDecrease = false,
-      mfpgaSupport = true
+      mfpgaSupport = true,
+      taskID = 0
     ),
     Array(
       "--target-dir=output/mfPGA-scheduler/"

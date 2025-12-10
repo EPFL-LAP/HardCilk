@@ -54,15 +54,22 @@ trait NotifierHasMfpgaSupport extends Module {
       master_arbiter.io.sources(i) <> argRouteServers(i).io.m_axis_remote.get.asFull
     }
 
-    new elastic.Fork(s_axis_remote.get.asFull) {
-      override def onFork(): Unit = {
-        elastic.Demux(
-          source = fork(in),
-          sinks =  argRouteServers map (_.io.s_axis_remote.get.asFull),
-          select = fork((in.data & "h3FFFFFFFF".U) >> log2Ceil(taskWidth / 8).U) // select the upper bits of the address
-        )
+    val selWidth = log2Ceil(argRouteServers.length)
+    if(argRouteServersNumber > 1){
+      new elastic.Fork(s_axis_remote.get.asFull) {
+        override def onFork(): Unit = {
+          elastic.Demux(
+            source = fork(in),
+            sinks =  argRouteServers map (_.io.s_axis_remote.get.asFull),
+            select = fork(((in.data.asTypeOf(new remoteArgumentNotificationType).address & "h3FFFFFFFF".U) >> log2Ceil(taskWidth / 8).U)(selWidth - 1, 0)) // select the upper bits of the address
+          )
+        }
       }
+    } else {
+      // Connect the single server to the slave port of the arbiter
+      s_axis_remote.get.asFull <> argRouteServers.head.io.s_axis_remote.get.asFull
     }
+
 
   }
 }

@@ -21,6 +21,16 @@ import chext.elastic
 import chext.amba.axi4s
 import axi4s.Casts._
 import Util._
+import HardCilk.globalFunctionIds
+
+class remoteArgumentNotificationType extends Bundle {
+  val fpgaId = UInt(4.W)
+  val taskId = UInt(4.W)
+  val globalFunctionId = globalFunctionIds()
+  val address = UInt(64.W)
+  val padding = UInt((512 - fpgaId.getWidth - taskId.getWidth - globalFunctionId.getWidth - address.getWidth).W)  
+  assert(this.getWidth == 512, "remoteArgumentNotificationType width must be 512 bits")
+}
 
 class ArgumentServerMfpgaWrapperIO(
     taskWidth: Int,
@@ -42,7 +52,7 @@ class ArgumentServerMfpgaWrapperIO(
 
 
   val axisCfgTaskAndReq =
-    axi4s.Config(wData = 512, wDest = 4) // task plus 8 bits for task valid and request value (8 bits for AXIS compat)
+    axi4s.Config(wData = 512, wDest = 4) 
   val m_axis_remote = if (mfpgaSupport) Some(axi4s.Master(axisCfgTaskAndReq)) else None
   val s_axis_remote = if (mfpgaSupport) Some(axi4s.Slave(axisCfgTaskAndReq)) else None
 
@@ -54,6 +64,7 @@ class ArgumentServerMfpgaWrapper(
     sysAddressWidth: Int,
     tagBitsShift: Int,
     wId: Int,
+    taskID: Int,
     multiDecrease: Boolean = false,
     mfpgaSupport: Boolean
 ) extends Module {
@@ -116,15 +127,25 @@ class ArgumentServerMfpgaWrapper(
     // connect the enq of the remoteQRec to s_axis_remote
     io.s_axis_remote.get.TREADY := remoteQRec.io.enq.ready
     remoteQRec.io.enq.valid := io.s_axis_remote.get.TVALID
-    remoteQRec.io.enq.bits := io.s_axis_remote.get.TDATA
+    remoteQRec.io.enq.bits := io.s_axis_remote.get.TDATA.asTypeOf(new remoteArgumentNotificationType).address
 
     io.m_axis_remote.get.asFull.bits := 0.U(io.m_axis_remote.get.asFull.bits.getWidth.W).asTypeOf(io.m_axis_remote.get.asFull.bits)
 
     // connect the deq of the remoteQSend to m_axis_remote
     remoteQSend.io.deq.ready := io.m_axis_remote.get.TREADY 
     io.m_axis_remote.get.TVALID := remoteQSend.io.deq.valid
-    io.m_axis_remote.get.TDATA := Cat(Fill(13, 0.U(1.W)), 1.U(1.W), Fill(512 - 14 - 64, 0.U(1.W)) ,remoteQSend.io.deq.bits)
-    io.m_axis_remote.get.TDEST.get := remoteQSend.io.deq.bits(sysAddressWidth - 5, 56) // Important bug fix here, TDEST sets in specific address range
+    
+    // Create the packet to send over m_axis_remote
+    val remotePacket = Wire(new remoteArgumentNotificationType)
+    remotePacket.fpgaId := io.fpgaIndexInputReg.get(3, 0) // The address of the sending FPGA
+    remotePacket.taskId := taskID.U(4.W)
+    remotePacket.globalFunctionId := globalFunctionIds.argumentNotifier
+    remotePacket.address := remoteQSend.io.deq.bits
+    remotePacket.padding := 0.U
+
+    io.m_axis_remote.get.TDATA := remotePacket.asUInt
+    
+    io.m_axis_remote.get.TDEST.get := remoteQSend.io.deq.bits(64 - 5, 56) // Important bug fix here, TDEST sets in specific address range
 
     // When connNetwork is valid, check the upper 8 bits of the address
     // If it is equal to rFPGAIndex, then it is a local address, so enqueue it to localQ
@@ -134,7 +155,7 @@ class ArgumentServerMfpgaWrapper(
       override def onFork(): Unit = {
         elastic.Demux(
           source = fork(in),
-          sinks =  Seq(remoteQSend.io.enq, localQ.io.enq),
+          sinks =  Seq(remoteQSend.io.enq, localQ.io.enq), 
           select = fork(in(sysAddressWidth - 5, 56) === io.fpgaIndexInputReg.get) // In the upper byte of the address, select the lower 4 bits
         )
       }

@@ -4,10 +4,12 @@ import chisel3._
 import chisel3.util._
 import Util._
 
+
 import chext.amba.axi4s
 import chext.elastic
 import chext.util.BitOps._
 import axi4s.Casts._
+
 
 /** RemoteTaskServer What does this moudle shall do? (No operations can be reverted, it shall continue to the end to stop
   * deadlocks)
@@ -35,6 +37,19 @@ class RemoteTaskServerIO(taskWidth: Int, axisCfgTaskAndReq : axi4s.Config) exten
   val numTasksToStealOrServe = Input(UInt(32.W))
 }
 
+import HardCilk.globalFunctionIds
+
+
+class taskRequestReplyType(taskWidth: Int) extends Bundle {
+  val fpgaId = UInt(4.W)
+  val taskId = UInt(4.W)
+  val globalFunctionId = globalFunctionIds()
+  val taskData = UInt(taskWidth.W)
+  val isRequest = Bool()
+  val padding = UInt((512 - fpgaId.getWidth - taskId.getWidth - globalFunctionId.getWidth - taskData.getWidth - isRequest.getWidth).W)  
+  assert(this.getWidth == 512, "taskRequestReplyType width must be 512 bits")
+}
+
 // Problem Request forwarding is not working correctly.
 // Probable solution is to directly go from the demux to the arbiter if not serving remote
 
@@ -42,7 +57,7 @@ class RemoteTaskServer(
     taskWidth: Int,
     peCount: Int,
     axisCfgTaskAndReq : axi4s.Config,
-    taskIndex: Int = 0,
+    taskIndex: Int,
     coolDownTime: Int = 0,
     maxNumnberToStealOrServe: Int = 256    
 ) extends Module {
@@ -89,10 +104,10 @@ class RemoteTaskServer(
   taskWaitingSlave.asFull.ready := false.B
 
   // A queue to hold the tasks that are received from the remote FPGAs
-  val queueForReceivingTasks = Module(new Queue(UInt(512.W), maxNumnberToStealOrServe))
+  val queueForReceivingTasks = Module(new Queue(UInt(taskWidth.W), maxNumnberToStealOrServe))
   // Connect the queue slave to the taskWaitingSlave from the demux
   queueForReceivingTasks.io.enq.valid := taskWaitingSlave.TVALID
-  queueForReceivingTasks.io.enq.bits := taskWaitingSlave.TDATA(taskWidth, 0)
+  queueForReceivingTasks.io.enq.bits := taskWaitingSlave.TDATA.asTypeOf(new taskRequestReplyType(taskWidth)).taskData
   taskWaitingSlave.TREADY := queueForReceivingTasks.io.enq.ready
 
   // Connect the queue master to the writeTaskToNetwork so that it reaches the local network
@@ -120,13 +135,17 @@ class RemoteTaskServer(
   // Send a request to the m_axis_port
   when(fetchingRemote && networkWriterReady && !requestSent) {
     taskRequestingMaster.TVALID := true.B
-    // Task Index is from index
-    taskRequestingMaster.TDATA := Cat(
-      taskIndex.U(4.W),
-      io.fpgaIndexInputReg,
-      true.B /*signfying a request if true, task if false*/,
-      Fill(499, 0.U)
-    )
+    
+    // Create a request packet using the new taskRequestReplyType bundle
+    val taskRequestPacket = Wire(new taskRequestReplyType(taskWidth))
+    taskRequestPacket.fpgaId := io.fpgaIndexInputReg(3,0)
+    taskRequestPacket.taskId := taskIndex.U(4.W)
+    taskRequestPacket.globalFunctionId := globalFunctionIds.scheduler
+    taskRequestPacket.taskData := 0.U(taskWidth.W)
+    taskRequestPacket.isRequest := true.B
+    taskRequestPacket.padding := 0.U
+    taskRequestingMaster.TDATA := taskRequestPacket.asUInt
+   
     taskRequestingMaster.TDEST.get := ((io.fpgaIndexInputReg + 1.U) % io.fpgaCountInputReg) // Task request is always sent to the next FPGA
     when(taskRequestingMaster.TREADY) {
       requestSent := true.B
@@ -183,14 +202,18 @@ class RemoteTaskServer(
   // Connect the deq of the queue to the taskServingMaster
   queueForSendingTasks.io.deq.ready := taskServingMaster.TREADY
   taskServingMaster.TVALID := queueForSendingTasks.io.deq.valid
+
+  // pack the tak reply using the new taskRequestReplyType bundle
+  val taskReplyPacket = Wire(new taskRequestReplyType(taskWidth))
+  taskReplyPacket.fpgaId := io.fpgaIndexInputReg(3,0)
+  taskReplyPacket.taskId := taskIndex.U(4.W)
+  taskReplyPacket.globalFunctionId := globalFunctionIds.scheduler
+  taskReplyPacket.taskData := queueForSendingTasks.io.deq.bits
+  taskReplyPacket.isRequest := false.B
+  taskReplyPacket.padding := 0.U
+
   // Now the data should be comproised of taskIndex, taskData, and the fact that this is a valid data
-  taskServingMaster.TDATA := Cat(
-    taskIndex.U(4.W),
-    io.fpgaIndexInputReg,
-    false.B,
-    Fill(512 - taskWidth - 13, 0.U),
-    queueForSendingTasks.io.deq.bits
-  )
+  taskServingMaster.TDATA := taskReplyPacket.asUInt
   taskServingMaster.TDEST.get := fpgaToServe
 
 
@@ -229,7 +252,7 @@ class RemoteTaskServer(
     taskRequestListener.asFull.ready := true.B
     when(taskRequestListener.asFull.valid) {
       // TDATA from 512 - 4 till 512-12 is the fpga index
-      fpgaToServe := taskRequestListener.TDATA(511 - 4, 511 - 11)
+      fpgaToServe := taskRequestListener.asTypeOf(new taskRequestReplyType(taskWidth)).fpgaId
       activelyServing := true.B
 
     }.elsewhen(!io.serveRemote) {
@@ -267,12 +290,14 @@ class RemoteTaskServer(
     flaggedByServingRemote := requestForwardSlaveSupressSelfRequest.asFull.valid
   //}
 
-  val s_axis_taskAndReqMarked = Wire(Irrevocable(new chext.amba.axi4s.FullChannel(io.s_axis_taskAndReq.cfg)))
+  //val s_axis_taskAndReqMarked = Wire(Irrevocable(new chext.amba.axi4s.FullChannel(io.s_axis_taskAndReq.cfg)))
+
+  val s_axis_taskAndReqMarked = Wire(Irrevocable(new chext.amba.axi4s.FullChannel(io.s_axis_taskAndReq.cfg.copy(wData = 520))))
 
   new elastic.Arrival(io.s_axis_taskAndReq.asFull, s_axis_taskAndReqMarked) {
     protected def onArrival: Unit = {
       out := in
-      out.data := in.data.msbN(14) ## Cat(servingRemote, activelyServing) ## 0.U((512 - 16 - 256).W) ## in.data.lsbN(256)
+      out.data := Cat(servingRemote, activelyServing) ## in.data
       accept()
     }
   }
@@ -280,12 +305,15 @@ class RemoteTaskServer(
   // A demux to separate requests from tasks
   new elastic.Fork(s_axis_taskAndReqMarked) {
     override def onFork(): Unit = {
-      val isRequest = in.data(511 - 12, 511 - 12) === 1.U /*Check the 13th bit of TDATA*/ 
-      val isSelfRequest = (in.data(507, 511 - 11) === io.fpgaIndexInputReg) && isRequest
+      // Create a wire to hold the parsed packet
+      val taskRequest = Wire(new taskRequestReplyType(taskWidth))
+      taskRequest := in.data(511, 0).asTypeOf(new taskRequestReplyType(taskWidth))
 
-      val isServingRemote = in.data.dropMsbN(14).msbN(1).asBool
-      val isActivelyServing = in.data.dropMsbN(15).msbN(1).asBool
+      val isRequest = taskRequest.isRequest 
+      val isSelfRequest = (taskRequest.fpgaId === io.fpgaIndexInputReg) && isRequest
 
+      val isServingRemote = in.data.dropMsbN(7).msbN(1).asBool
+      val isActivelyServing = in.data.dropMsbN(6).msbN(1).asBool
       elastic.Demux(
         source = fork(in),
         sinks = Seq(elastic.SinkBuffer(taskWaitingSlave.asFull), elastic.SinkBuffer(taskRequestListener.asFull), elastic.SinkBuffer(requestForwardSlave.asFull), elastic.SinkBuffer(requestForwardSlaveSupressSelfRequest.asFull)),

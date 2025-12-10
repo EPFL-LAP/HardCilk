@@ -165,6 +165,13 @@ case class TaskDescriptor(
     if (dynamicMemAlloc) {
        require(getNumServers("memoryAllocator") > 0, s"Task '$name' (DynMem): must have > 0 memoryAllocator servers")
     }
+    
+    if(generateArgOutWriteBuffer) {
+      require(!argumentSizeList.isEmpty, s"Task '$name': argumentSizeList must not be empty!")
+      require(argumentSizeList.head > 0, s"Task '$name': argumentWidth must be > 0 to has a write buffer!")
+    }
+    
+
   }
 }
 
@@ -190,7 +197,8 @@ case class FullSysGenDescriptor(
     hasAXIDMAInput: Boolean = false,
     transformAXI: Boolean = false,
     transformPattern: List[Int] = List(),
-    widthAXIAddress: Int = 34
+    widthAXIAddress: Int = 34,
+    fpgaCountSim: Int = 1
 ) {
   // --- All helper logic is kept here ---
   
@@ -420,6 +428,23 @@ case class FullSysGenDescriptor(
     require(mallocList.keys.forall(taskNames.contains), "mallocList contains unknown task names")
     
     require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
+
+    // Check if the system is supposed to support MFPGA, and has argument notification is that
+    // tasks with argument notifiers must have contigous ids startting from ID zero
+    if(mFPGASynth || mFPGASimulation) {
+      // Create a list of the tasks with argument notifiers
+      val id_list = taskDescriptors.filter(_.getNumServers("argumentNotifier") > 0).map(_.taskId)
+
+      // Require that id_list is contigous starting with ID 0
+      var decesion = true
+      for(i <- 0 until id_list.length - 1) {
+        if(id_list(i) + 1 != id_list(i + 1)) {
+          decesion = false
+        }
+      }
+      require(decesion,"To support mfpga the IDs of tasks with argument notifiers must be contigous and starting from zero.\n")
+
+    }
   }
 }
 

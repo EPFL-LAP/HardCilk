@@ -366,7 +366,8 @@ class HardCilk_old(
 
             cutCount = argumentNotifierCutCount,
             multiDecrease = task.variableSpawn,
-            mfpgaSupport = false
+            mfpgaSupport = false,
+            taskID = 0
           )
         ))
 
