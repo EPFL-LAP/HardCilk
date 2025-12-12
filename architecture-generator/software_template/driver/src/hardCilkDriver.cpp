@@ -122,10 +122,10 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     // Log the information of calling this function
     std::cout << "Managing scheduler server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << " and maxLength " << maxLength << std::endl;
 
-    freed_mem_blocks.push_back(freedMemBlock{addr, maxLength * taskDescriptor.widthTask / 8}); // Free the memory and write it in bytes.
+    //freed_mem_blocks.push_back(freedMemBlock{addr, maxLength * taskDescriptor.widthTask / 8}); // Free the memory and write it in bytes.
 
     // Allocate double the maxLength of the scheduler server
-    uint64_t new_addr = allocateMemFPGA(2 * maxLength * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
+    uint64_t new_addr = memory_->allocateMemFPGA(2 * maxLength * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
 
     // Read the data from the scheduler server to the cpu
     void *data = malloc(maxLength * taskDescriptor.widthTask / 8);
@@ -191,7 +191,7 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
     if (addresses.size() < size)
     {
         int left_size = size - addresses.size();
-        uint64_t continuation_tasks_holder_addr = allocateMemFPGA(left_size * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
+        uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(left_size * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
         taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, left_size));
 
         for (auto i = 0; i < left_size; i++)
@@ -232,7 +232,7 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
     if (addresses.size() < size)
     {
         int left_size = size - addresses.size();
-        uint64_t continuation_tasks_holder_addr = allocateMemFPGA(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 512);
+        uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 512);
 
         std::vector<uint8_t> zeros(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 0);
         memory_->copyToDevice(continuation_tasks_holder_addr, zeros.data(), zeros.size());
@@ -259,53 +259,6 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
     return 0;
 }
 
-uint64_t hardCilkDriver::allocateMemFPGA(uint64_t size, uint64_t alignment /** alignment is a byte value */)
-{
-
-    // Check if any memory freed by the processor can be used, if yes return and remove it from the freed memory
-    for (auto it = freed_mem_blocks.begin(); it != freed_mem_blocks.end(); it++)
-    {
-        if (it->size >= size)
-        {
-
-            auto reminder = it->addr % alignment;
-            auto offset = (reminder == 0) ? 0 : alignment - reminder;
-
-            if (it->size - offset < size)
-            {
-                continue;
-            }
-
-            uint64_t addr = it->addr + offset;
-            it->addr += (size + offset);
-            it->size -= (size + offset);
-            if (it->size == 0)
-            {
-                freed_mem_blocks.erase(it);
-            }
-            return addr;
-        }
-    }
-    // If no memory is freed by the processor, allocate new memory
-    // Align the memory to the alignment
-    auto reminder = free_mem_base_addr % alignment;
-    auto offset = (reminder == 0) ? 0 : alignment - reminder;
-    free_mem_base_addr += offset;
-    uint64_t addr = free_mem_base_addr;
-    free_mem_base_addr += size;
-    assert(free_mem_base_addr < 0x3FFFFFFFF);
-
-    for (auto pair : trackMalloc)
-    {
-        if (addr >= pair.first && addr < pair.second)
-        {
-            throw("invalid allocation");
-        }
-    }
-    trackMalloc.push_back(std::pair<uint64_t, uint64_t>(addr, addr + size));
-
-    return addr;
-}
 
 int hardCilkDriver::setReturnAddr(uint64_t addr)
 {
@@ -394,7 +347,7 @@ int hardCilkDriver::sanityCheck()
         }
     }
     // Write a 100 element array of 0xDAAADDDDD to the memory and read it back
-    uint64_t addr = allocateMemFPGA(100 * sizeof(uint64_t), sizeof(uint64_t));
+    uint64_t addr = memory_->allocateMemFPGA(100 * sizeof(uint64_t), sizeof(uint64_t));
     uint64_t data[100];
     for (int i = 0; i < 100; i++)
     {

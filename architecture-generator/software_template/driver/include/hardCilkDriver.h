@@ -30,11 +30,6 @@ public:
 
     hardCilkDriver(Memory *memory);
 
-    static bool defaultDoneCondition(int32_t val)
-    {
-        return val < 0;
-    }
-
 
     // template <typename T> int init_system(std::vector<T>);
     #include "hardCilkDriver.tpp"
@@ -45,16 +40,12 @@ public:
 
     int setReturnAddr(uint64_t addr);
 
-    /**
-     * @brief Allocate memory on the FPGA. This function is used to allocate memory on the FPGA.
-     *
-     * @param size The size of the memory in bytes to allocate
-     */
-    uint64_t allocateMemFPGA(uint64_t size, uint64_t alignment /** alignment is a byte value */);
+
 
     ~hardCilkDriver();
     
     Memory *memory_;
+    FullSysGenDescriptor descriptor;
 
 protected:
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
@@ -78,7 +69,7 @@ protected:
 
     int waitPaused(uint64_t addr);
 
-    FullSysGenDescriptor descriptor;
+    
 
     const uint8_t alloc_server_rpause_shift = 0x0;
     const uint8_t alloc_server_raddr_shift = 0x8;
@@ -96,8 +87,9 @@ protected:
     const uint8_t scheduler_server_processorInterrupt_shift = 0x28;
     const uint8_t scheduler_server_currLen_shift = 0x30;
 
-    uint64_t free_mem_base_addr = 0x0;
-    std::vector<freedMemBlock> freed_mem_blocks;
+    int fpgaId_ = 0;
+    int taskId_ = 0;
+
     std::vector<uint64_t> return_addresses;
 };
 

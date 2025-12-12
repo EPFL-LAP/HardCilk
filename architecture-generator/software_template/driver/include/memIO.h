@@ -13,6 +13,8 @@ struct Memory : std::enable_shared_from_this<Memory> {
     virtual uint32_t readReg32(uint64_t addr) = 0;
     virtual uint64_t readReg64(uint64_t addr) = 0;
 
+    virtual uint64_t allocateMemFPGA(uint64_t size, uint64_t alignment) = 0;
+
     std::shared_ptr<Memory> offset(int64_t offset);
 
     virtual ~Memory() = default;

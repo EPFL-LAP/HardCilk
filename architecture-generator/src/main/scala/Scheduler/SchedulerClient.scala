@@ -255,7 +255,12 @@ class SchedulerClient(
         tasksGivenAwayCount := tasksGivenAwayCount + 1.U
         stateReg := state.init
       }.otherwise {
-        stateReg := state.giveAwayTask
+        when(io.connQ.currLength < minLengthThresh.U){
+          stolenTaskReg := giveTaskReg
+          stateReg := state.pushTask
+        }.otherwise{
+          stateReg := state.giveAwayTask
+        }
       }
 
       io.connNetwork.data.qOutTask.valid := true.B // data is valid for the network.

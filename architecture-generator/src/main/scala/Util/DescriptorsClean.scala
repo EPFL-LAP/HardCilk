@@ -118,7 +118,7 @@ case class TaskDescriptor(
     widthMalloc: Int = 0, // Defaulted
     variableSpawn: Boolean = false, // Defaulted
     sidesConfigs: List[SideConfig],
-    mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
+    var mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     spawnServersCount: Int = 0, // Defaulted
     hasAXI: Boolean = true,
     isAIE: Boolean = false,
@@ -201,41 +201,60 @@ case class FullSysGenDescriptor(
     fpgaCountSim: Int = 1
 ) {
   // --- All helper logic is kept here ---
-  
   // Assign base addresses
   var j = 0
+  val base = if (isVitisProject) 0x10 else 0x0
+  
+
   taskDescriptors.foreach(task => {    
+    task.mgmtBaseAddresses = MemSystemDescriptor() 
     val numSchedulerServers = task.getNumServers("scheduler")
     for (i <- j until j + numSchedulerServers) {
-      task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ (i << 6)
+      task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
     }
     j += numSchedulerServers
+    println("J value after scheduler: " + j)
 
     if(task.spawnServersCount > 0) {
       for (i <- j until j + task.spawnServersCount ) {
-        task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ (i << 6)
+        task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
       }
       j += task.spawnServersCount 
     }
+    println("J value after spawner servers: " + j)
 
 
     if (task.isCont) {
       val numAllocationServers = task.getNumServers("allocator")
       for (i <- j until j + numAllocationServers) {
         task.mgmtBaseAddresses.allocationServersBaseAddresses =
-          task.mgmtBaseAddresses.allocationServersBaseAddresses :+ (i << 6)
+          task.mgmtBaseAddresses.allocationServersBaseAddresses :+ ((i << 6) + base)
       }
       j += numAllocationServers
     }
+    println("J value after allocator: " + j)
+
+
     if (task.dynamicMemAlloc) {
       val numMemoryAllocatorServers = task.getNumServers("memoryAllocator")
       for (i <- j until j + numMemoryAllocatorServers) {
         task.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses =
-          task.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses :+ (i << 6)
+          task.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses :+ ((i << 6) + base)
       }
       j += numMemoryAllocatorServers
     }
+    println("J value after memory allocator: " + j)
   })
+
+  // For each task log base addresses
+  taskDescriptors.foreach(
+    task => 
+      println(f"Task: ${task.name}:  task.mgmtBaseAddresses: ${task.mgmtBaseAddresses}")
+    )
+
+  def getMfpgaBaseAddress(): Int = {
+    (j << 6) + base
+  }
 
   // Helper functions
   def selfSpawnedCount(task_name: String): Int = {

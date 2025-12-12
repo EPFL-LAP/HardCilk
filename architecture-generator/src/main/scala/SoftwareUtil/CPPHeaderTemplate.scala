@@ -33,7 +33,7 @@ object CppHeaderTemplate {
          |        return 0;
          |    }
          |
-         |    int getCapacityVirtualQueue(const std::string& sideType) const {
+         |    uint64_t getCapacityVirtualQueue(const std::string& sideType) const {
          |        assert(sideType == "scheduler" || sideType == "allocator" || 
          |               sideType == "argumentNotifier" || sideType == "memoryAllocator");
          |        for (const auto& config : sidesConfigs) {
@@ -128,6 +128,14 @@ object CppHeaderTemplate {
        |        return numSlaves;
        |    }
        |
+       |    uint64_t getMfpgaBaseAddress() const
+       |    {
+       |        return 0x${descriptor.getMfpgaBaseAddress().toHexString.toUpperCase};
+       |    }
+       |
+       |
+       |    
+       |
        |};
        |
        |#endif // FULLSYS_DESCRIPTOR_H
@@ -147,10 +155,13 @@ object CppHeaderTemplate {
   }
 
   private def generateMemSystemDescriptor(memDesc: MemSystemDescriptor): String = {
-    s"""{
-       |    {${memDesc.schedulerServersBaseAddresses.mkString(", ")}},
-       |    {${memDesc.allocationServersBaseAddresses.mkString(", ")}},
-       |    {${memDesc.memoryAllocatorServersBaseAddresses.mkString(", ")}}
-       |}""".stripMargin
+  def hex(xs: Seq[Int]) =
+    xs.map(addr => f"0x${addr.toHexString.toUpperCase}").mkString(", ")
+
+  s"""{
+     |    {${hex(memDesc.schedulerServersBaseAddresses)}},
+     |    {${hex(memDesc.allocationServersBaseAddresses)}},
+     |    {${hex(memDesc.memoryAllocatorServersBaseAddresses)}}
+     |}""".stripMargin
   }
 }

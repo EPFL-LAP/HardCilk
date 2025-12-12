@@ -1,64 +1,62 @@
 #pragma once
 
-#include <hardCilkDriver.h>
+#include <mFpgaHardCilkDriver.h>
 #include <stdio.h>
 #define DEBUG_LINE printf("line %d\n", __LINE__);
 
 
 
 // Define the struct for the fib arguments
-struct fib_args {
-    // The continuation address
-    uint64_t cont;
-    // The n value
-    uint64_t n;
-    //uint32_t Padding = 0;
+struct fib_task {
+  uint64_t cont;
+  uint32_t n;
+  uint8_t _padding[20];
 };
 
 // Define the struct for the sum arguments
 struct sum_args {
-    // The counter
-    uint32_t join_counter;
-
-    // The first summand
-    int32_t x;
-
-    // The second summand
-    int32_t y;
-
-    // Padding 1
-    uint32_t pad1 = 0;
-
-    // Padding 2
-    uint64_t pad2 = 0;
-
-    // The continuation address
-    uint64_t cont;
+  uint32_t _counter;
+  uint32_t f1;
+  uint64_t cont;
+  uint32_t f2;
+  uint8_t _padding[12];
 };
 
-class fibonacciDriver: public hardCilkDriver
+bool condition(int32_t val)
+{
+    return val != 0;
+}
+
+class fibonacciDriver: public mFpgaHardCilkDriver
 {
     public:
     
-    fibonacciDriver(Memory * memory): hardCilkDriver(memory) {}
+    fibonacciDriver(std::vector<Memory *> memories): mFpgaHardCilkDriver(memories) {}
 
-    int run_test_bench() override {
+    int run_test_bench_mFpga() override {
         sum_args sum_args_0 = {0, 0, 0, 0, 0, 0};
-        uint64_t addr = allocateMemFPGA(sizeof(sum_args_0), sizeof(sum_args_0));
-        memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(&sum_args_0), sizeof(sum_args_0));
+        uint64_t addr =  memories_[0]->allocateMemFPGA(sizeof(sum_args_0), sizeof(sum_args_0));
+        
+        memories_[0]->copyToDevice(addr, reinterpret_cast<const uint8_t*>(&sum_args_0), sizeof(sum_args_0));
 
         // Create the fib base task using fib args
-        fib_args args = {addr+0x4, 10 };
+        fib_task args = {addr+0x4, 15, {0}};
 
-        std::vector<fib_args> base_task_data = {args};
+        std::vector<fib_task> base_task_data = {args};
         
         // Initialize the system
-        initSystem(base_task_data);
+        initSystemMfpga(base_task_data, &condition);
 
-        startSystem();
+        startSystemMfpga();
         
         // Run the management loop
-        managementLoop();
+        managementLoopMfpga();
+
+        // read the result from the FPGA at addr + 0x4 (Reading is done in 64-bit chunks)
+        uint64_t result = 0;
+        memories_[0]->copyFromDevice(reinterpret_cast<uint8_t*>(&result), addr, sizeof(result)); 
+        result = result >> 32; // Shift to get the result from the sum_args structure
+        std::cout << "Result: " << result << std::endl;
 
         return 0;
     }

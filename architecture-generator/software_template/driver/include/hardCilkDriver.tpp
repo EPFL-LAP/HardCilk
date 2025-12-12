@@ -18,14 +18,19 @@
 */
 
 
-template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolean function that is applied to an int64  */ bool (*condition)(int32_t) = defaultDoneCondition){
+template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolean function that is applied to an int64  */ bool (*condition)(int32_t),  const int fpgaId = 0, const int taskId = 0, const bool no_base_task = false){
 
     // set the boolean function in the class
     condition_ = condition;
+    fpgaId_ = fpgaId;
+    taskId_ = taskId;
+
 
     // Set the return addresses of the driver
-    for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
-        setReturnAddr(taskData->cont);
+    if(!no_base_task){
+        for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
+            setReturnAddr(taskData->cont);
+        }
     }
 
     // Initialize the different servers
@@ -37,7 +42,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             // Allocate memory for all the scheduler servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++){
                 // Allocate memory for the scheduler server
-                uint64_t addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 512);
+                uint64_t addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 512);
                 
                 // Write zeros to the allocated memory 
                 std::vector <uint8_t> zeros(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 0);
@@ -64,7 +69,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Log also the start and the end of the data address addr
                 printf("        Data address start: 0x%lx, end: 0x%lx\n", addr, addr + taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8);
             }
-            if(taskDescriptor.isRoot){
+            if(taskDescriptor.isRoot && !no_base_task){
                 // Read the address registered at the first virtual server of the task and write the data to that address
                 uint64_t data_queue_address = memory_->readReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_raddr_shift);
                 printf("        Writing root task data to the scheduler server with data at address %lx\n", data_queue_address);
@@ -85,13 +90,15 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             // Allocate memory for all the allocation servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++){
                 // First allocate memory to carry the continuation tasks
-                uint64_t continuation_tasks_holder_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, 512);
-                uint64_t continuation_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, 512);
+                uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, 512);
+                uint64_t continuation_queue_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, 512);
                 
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
                 std::vector<uint64_t> addresses;
                 for(auto i = 0; i < taskDescriptor.getCapacityVirtualQueue("allocator"); i++){
-                    addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8);
+                    uint64_t addr = continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8;
+                    addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56); // address space for the fpgaId
+                    addresses.push_back(addr);
                 }
 
                 // Write the addresses to the continuation queue
@@ -119,8 +126,8 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 
                 uint64_t address_bytes = descriptor.widthAddress/8ull;
 
-                uint64_t  pre_allocated_memory_queue_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * address_bytes, 512);
-                uint64_t  pre_allocated_memory_addr = allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 512);
+                uint64_t  pre_allocated_memory_queue_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * address_bytes, 512);
+                uint64_t  pre_allocated_memory_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 512);
 
                 // We need to write zeros to the pre_allocated_memory_addr    
                 std::vector<uint8_t> zeros(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 0);
@@ -130,7 +137,9 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Create an array of 64 bit addresses that has the addresses of the pre-allocated memory allocated in the previous step
                 std::vector<uint64_t> addresses;
                 for(uint64_t i = 0; i < taskDescriptor.getCapacityVirtualQueue("memoryAllocator"); i++){
-                    addresses.push_back(pre_allocated_memory_addr + i * byte_count);
+                    uint64_t addr = pre_allocated_memory_addr + i * byte_count; 
+                    addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56); // address space for the fpgaId
+                    addresses.push_back(addr);
                 }
 
                 // log the last address of the addresses vector
@@ -166,7 +175,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
     }
     
 
-    assert(free_mem_base_addr < 0x3FFFFFFFF);
+    //assert(free_mem_base_addr < 0x3FFFFFFFF);
 
     return 0;
 }

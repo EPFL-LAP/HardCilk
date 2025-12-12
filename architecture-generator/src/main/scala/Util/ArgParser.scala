@@ -98,6 +98,7 @@ object ArgParserExample extends App {
         else
           s"${jsonName}_hardcilk_output"
       val outputDirPath = s"${cfg.output_dir}/$outputDirName"
+      val outputDirPathSC = s"${cfg.output_dir}/$outputDirName/software"
       println(s"Parsed config: $cfg")
       println(s"Will use output dir: $outputDirPath")
       // Example: pass `cfg` to HardCilkEmitter or other components

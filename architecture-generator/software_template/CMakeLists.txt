@@ -9,6 +9,10 @@ set(HC_SYSTEMC_COMPILE_DEFINITIONS VERILATED_TRACE_ENABLED)
 # add more variables
 # maybe make these variables overridable
 
+
+set(HC_ENABLE_SYSTEMC_TARGETS OFF)
+set(HC_ENABLE_PCIE_TARGETS OFF)
+
 if(NOT DEFINED HC_ENABLE_SYSTEMC_TARGETS)
     set(
         HC_ENABLE_SYSTEMC_TARGETS ON
@@ -22,6 +26,14 @@ if(NOT DEFINED HC_ENABLE_PCIE_TARGETS)
         HC_ENABLE_PCIE_TARGETS ON
         CACHE BOOL
         "Enables SystemC targets, requires sctlm, verilator, and SystemC."
+    )
+endif()
+
+if(NOT DEFINED HC_ENABLE_XRT_TARGETS)
+    set(
+        HC_ENABLE_XRT_TARGETS ON
+        CACHE BOOL
+        "Enable XRT Targets"
     )
 endif()
 

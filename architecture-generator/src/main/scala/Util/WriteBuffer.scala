@@ -17,7 +17,8 @@ class WriteBufferConfig(
     val wData: Int,
     val wAllow: Int,
     val wAllowData: Seq[Int],
-    val nOutstanding: Int = 63
+    val nOutstanding: Int = 63,
+    val isRemoteWriteBuffer: Boolean = false
 ) {
 
   assert(isPow2(wData) && wData >= 8, "Data payload must be sized power of 2 and at least 8 bits.")
@@ -69,27 +70,16 @@ class WriteBuffer(
   val s_allows = cfgAxisAllows.map(c => IO(axi4s.Slave(c)))
   val m_allows = cfgAxisAllows.map(c => IO(axi4s.Master(c)))
 
-  // Implementation
-  if (wAllow == 0) {
-    val wb = Module(
-      new WriteBufferLast(
-        new WriteBufferLastConfig(
-          wAddr = wAddr,
-          wData = wData,
-          wAllowData = wAllowData,
-          nOutstanding = nOutstanding
-        )
-      )
-    )
+  val fpgaId = if(isRemoteWriteBuffer) Some(IO(Input(UInt(4.W)))) else None
+  val memReqToRemote = if(isRemoteWriteBuffer) Some(IO(DecoupledIO(new MemReq(64, wData)))) else None
+  val writeRespFromRemote = if(isRemoteWriteBuffer) Some(IO(Flipped(DecoupledIO(new WriteResp())))) else None
 
-    wb.m_axi :=> m_axi
-    s_pkg.asLite :=> wb.s_pkg.asLite
-    s_allows.zip(wb.s_allows).foreach(x => x._1.asLite :=> x._2.asLite)
-    wb.m_allows.zip(m_allows).foreach(x => x._1.asLite :=> x._2.asLite)
-  } else {
+
+  // Implementation
+  if(isRemoteWriteBuffer){
     val wb = Module(
-      new WriteBufferCounter(
-        new WriteBufferCounterConfig(
+      new RemoteWriteBuffer(
+        new RemoteWriteBufferConfig(
           wAddr = wAddr,
           wData = wData,
           wAllow = wAllow,
@@ -97,11 +87,47 @@ class WriteBuffer(
         )
       )
     )
-
     wb.m_axi :=> m_axi
     s_pkg.asLite :=> wb.s_pkg.asLite
     s_allows.zip(wb.s_allows).foreach(x => x._1.asLite :=> x._2.asLite)
     wb.m_allows.zip(m_allows).foreach(x => x._1.asLite :=> x._2.asLite)
+    wb.fpgaId := fpgaId.get 
+    wb.memReqToRemote <> memReqToRemote.get
+    wb.memRespFromRemote <> writeRespFromRemote.get
+  } else {
+    if (wAllow == 0) {
+      val wb = Module(
+        new WriteBufferLast(
+          new WriteBufferLastConfig(
+            wAddr = wAddr,
+            wData = wData,
+            wAllowData = wAllowData,
+            nOutstanding = nOutstanding
+          )
+        )
+      )
+
+      wb.m_axi :=> m_axi
+      s_pkg.asLite :=> wb.s_pkg.asLite
+      s_allows.zip(wb.s_allows).foreach(x => x._1.asLite :=> x._2.asLite)
+      wb.m_allows.zip(m_allows).foreach(x => x._1.asLite :=> x._2.asLite)
+    } else {
+      val wb = Module(
+        new WriteBufferCounter(
+          new WriteBufferCounterConfig(
+            wAddr = wAddr,
+            wData = wData,
+            wAllow = wAllow,
+            wAllowData = wAllowData
+          )
+        )
+      )
+
+      wb.m_axi :=> m_axi
+      s_pkg.asLite :=> wb.s_pkg.asLite
+      s_allows.zip(wb.s_allows).foreach(x => x._1.asLite :=> x._2.asLite)
+      wb.m_allows.zip(m_allows).foreach(x => x._1.asLite :=> x._2.asLite)
+    }
   }
 }
 
