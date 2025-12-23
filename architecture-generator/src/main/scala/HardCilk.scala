@@ -20,6 +20,7 @@ import chext.amba.axi4.lite.components.{Upscale, UpscaleConfig}
 
 
 import HardCilkBuilder.PortToExport
+import Util.WriteBuffer
 
 class HardCilk(
     override val fullSysGenDescriptor: FullSysGenDescriptor, // Made public for trait
@@ -39,7 +40,7 @@ class HardCilk(
 
   val paused = IO(Output(Bool())).suggestName("paused")
   val done   = IO(Output(Bool())).suggestName("done")
-  
+
   // These are now concrete implementations for the trait's abstract members
   val axiOuts = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
   val axiXDMA = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
@@ -62,30 +63,30 @@ class HardCilk(
 
   val blueprint = builder.defineBlueprint()
 
-  val peMap = blueprint.peFactories.map { 
-    case (name, factory) => name -> factory() 
-  }
-  val schedulerMap = blueprint.schedulerFactories.map { 
-    case (name, factory) => name -> Module(factory()) 
-  }
-  val allocatorMap = blueprint.allocatorFactories.map { 
-    case (name, factory) => name -> Module(factory()) 
-  }
-  val notifierMap = blueprint.argNotifierFactories.map { 
-    case (name, factory) => name -> Module(factory()) 
-  }
-  val memAllocatorMap = blueprint.memAllocatorFactories.map { 
-    case (name, factory) => name -> Module(factory()) 
-  }
-
-  val spawnNextWBMap = blueprint.spawnNextWBFactories.map { 
+  val peMap = blueprint.peFactories.map {
     case (name, factory) => name -> factory()
   }
-  val sendArgumentWBMap = blueprint.sendArgumentWBFactories.map { 
+  val schedulerMap = blueprint.schedulerFactories.map {
+    case (name, factory) => name -> Module(factory())
+  }
+  val allocatorMap = blueprint.allocatorFactories.map {
+    case (name, factory) => name -> Module(factory())
+  }
+  val notifierMap = blueprint.argNotifierFactories.map {
+    case (name, factory) => name -> Module(factory())
+  }
+  val memAllocatorMap = blueprint.memAllocatorFactories.map {
+    case (name, factory) => name -> Module(factory())
+  }
+
+  val spawnNextWBMap = blueprint.spawnNextWBFactories.map {
+    case (name, factory) => name -> factory()
+  }
+  val sendArgumentWBMap = blueprint.sendArgumentWBFactories.map {
     case (name, factory) => name -> factory()
   }
 
-  val remoteStreamToMemMap = blueprint.remoteStreamToMemFactories.map { 
+  val remoteStreamToMemMap = blueprint.remoteStreamToMemFactories.map {
     case (name, factory) => name -> Module(factory())
   }
 
@@ -95,27 +96,27 @@ class HardCilk(
   connectPEs(peMap)
 
   val portsToExport = builder.connectSubsystems(
-    schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap
+    schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap, spawnNextWBMap, sendArgumentWBMap
   )
 
 
 
   exportMissingPEPorts(
-    portsToExport, schedulerMap, allocatorMap, notifierMap, memAllocatorMap
+    portsToExport, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap, spawnNextWBMap, sendArgumentWBMap
   )
 
   connectGlobalSignals(schedulerMap, allocatorMap, memAllocatorMap, notifierMap)
-  
+
   // This call now invokes the method from the HasHBMInterconnect trait
-  buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, remoteStreamToMemMap)
-  
+  buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, spawnNextWBMap, sendArgumentWBMap, remoteStreamToMemMap)
+
   exportPEControl(peMap)
   generateHdlInfo()
 
   if(fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth){
     buildMfpgaConnections()
   }
-    
+
 
   // --- Private Helper Methods for Initialization ---
 
@@ -124,9 +125,12 @@ class HardCilk(
       scheds: Map[String, Scheduler],
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
-      memAllocs: Map[String, Allocator]
+      memAllocs: Map[String, Allocator],
+      pes: Map[String, Seq[VitisWriteBufferModule]],
+      spawnNextWBs: Map[String, Seq[WriteBuffer]],
+      sendArgumentWBs: Map[String, Seq[WriteBuffer]]
   ): Unit = {
-    
+
     if (portsToExport.nonEmpty) {
       println(s"[CleanHardCilk] Exporting ${portsToExport.length} ports for missing PEs...")
     }
@@ -135,39 +139,29 @@ class HardCilk(
       val subPortDesc = port.subsystemPortDescriptor
       val pePortDesc = port.pePortDescriptor
 
-      val subsystemPort = getPhysicalSubsystemPort(
-        subPortDesc, scheds, allocs, notifiers, memAllocs
+      val subsystemPort = getPhysicalPort(
+        subPortDesc, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs
       )
 
       /**
        * First, handle if directly the port is exported
       */
 
+      val newIO = IO(chiselTypeOf(subsystemPort))
+      val ioName = f"BindTo_PE_${pePortDesc.parentName}_${pePortDesc.parentIndex}_${pePortDesc.portType}"
+      newIO.suggestName(ioName)
+      println(s"  ... exporting ${ioName}")
 
-      if(!needsWriteBuffer(port, fullSysGenDescriptor)){
-        val newIO = IO(chiselTypeOf(subsystemPort)) 
-        val ioName = f"BindTo_PE_${pePortDesc.parentName}_${pePortDesc.parentIndex}_${pePortDesc.portType}"
-        newIO.suggestName(ioName)
-        println(s"  ... exporting ${ioName}")
-
-        if (port.isSource) {
-          newIO <> subsystemPort
-          exportedPeHdlinfoPorts += hdlinfo.Port(
-            ioName, hdlinfo.PortDirection.input, hdlinfo.PortKind.data, associatedClock = "clock"
-          )
-        } else {
-          subsystemPort <> newIO
-          exportedPeHdlinfoPorts += hdlinfo.Port(
-            ioName, hdlinfo.PortDirection.output, hdlinfo.PortKind.data, associatedClock = "clock"
-          )
-        }
-      }
-      /**
-       * Otherwise, handle if writeBuffers are needed
-      */
-      else{
-        // #TODO
-        
+      if (port.isSource) {
+        newIO <> subsystemPort
+        exportedPeHdlinfoPorts += hdlinfo.Port(
+          ioName, hdlinfo.PortDirection.input, hdlinfo.PortKind.data, associatedClock = "clock"
+        )
+      } else {
+        subsystemPort <> newIO
+        exportedPeHdlinfoPorts += hdlinfo.Port(
+          ioName, hdlinfo.PortDirection.output, hdlinfo.PortKind.data, associatedClock = "clock"
+        )
       }
     }
   }
@@ -196,7 +190,7 @@ class HardCilk(
     } else {
       IO(axi4.Slave(axiCfgCtrl)).suggestName("s_axil_mgmt_hardcilk")
     }
-    
+
     if (fullSysGenDescriptor.isVitisProject) {
 
       val s_axil_mgmt_upscale = Module(
@@ -310,13 +304,13 @@ class HardCilk(
     val memoryAllocatorPaused =
       if (memoryAllocatorMap.isEmpty) false.B
       else memoryAllocatorMap.map(_._2.io_paused).reduce(_ || _)
-    
+
     paused := schedulerPaused || closureAllocatorPaused || memoryAllocatorPaused
-    
+
     if (argumentNotifierMap.nonEmpty) {
       done := argumentNotifierMap.map(_._2.io_export.done).reduce(_ || _)
     } else {
-      done := false.B 
+      done := false.B
     }
   }
 
@@ -359,14 +353,14 @@ class HardCilk(
         Port("paused", PortDirection.output, PortKind.data),
         Port("done", PortDirection.output, PortKind.data)
       )
-      
+
       Module(
         fullSysGenDescriptor.name,
         basicPorts ++ exportedPeHdlinfoPorts.toSeq, // Use our buffer
-        interfaceBuffer.toSeq 
+        interfaceBuffer.toSeq
       )
     }
-    
+
     val write = new java.io.PrintWriter(
       f"${outputDirPathRTL}/${fullSysGenDescriptor.name}.hdlinfo.json"
     )

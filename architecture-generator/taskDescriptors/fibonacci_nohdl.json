@@ -30,7 +30,7 @@
       "isRoot": false,
       "name": "fib_cont0",
       "numProcessingElements": 1,
-      "peHDLPath": "/home/eryilmaz/repos/fib/src/verilog/fib_cont0/",
+      "peHDLPath": "",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -71,7 +71,7 @@
       "isRoot": true,
       "name": "fib",
       "numProcessingElements": 1,
-      "peHDLPath": "/home/eryilmaz/repos/fib/src/verilog/fib/",
+      "peHDLPath": "",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,

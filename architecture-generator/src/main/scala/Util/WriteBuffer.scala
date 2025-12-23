@@ -129,6 +129,15 @@ class WriteBuffer(
       wb.m_allows.zip(m_allows).foreach(x => x._1.asLite :=> x._2.asLite)
     }
   }
+
+  def getPort(name: String, index: Int): chisel3.Data = {
+    name match {
+      case "m_axi" => m_axi
+      case "s_pkg" => s_pkg
+      case "s_allows" => s_allows(index)
+      case "m_allows" => m_allows(index)
+    }
+  }
 }
 
 object WriteBufferEmitter extends App {

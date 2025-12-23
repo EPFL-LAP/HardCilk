@@ -5,7 +5,7 @@ ThisBuild / version := "0.1.0"
 ThisBuild / organization := "epfl-lap"
 
 val chiselVersion = "6.0.0"
-val chiseltestVersion = "6.0-SNAPSHOT"
+val chiseltestVersion = "6.0.0"
 val circeVersion = "0.14.1"
 
 lazy val root = (project in file("."))
@@ -22,7 +22,8 @@ lazy val root = (project in file("."))
     ) ++ Seq(
       "io.circe" %% "circe-core",
       "io.circe" %% "circe-generic",
-      "io.circe" %% "circe-parser"
+      "io.circe" %% "circe-parser",
+      "io.circe" %% "circe-generic-extras" // <-- add this
     ).map(_ % circeVersion),
     scalacOptions ++= Seq(
       "-language:reflectiveCalls",

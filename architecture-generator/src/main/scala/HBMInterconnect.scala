@@ -15,6 +15,7 @@ import axi4.Ops._
 import AXIHelpers._
 import Util.AddressTransformConfig
 import io.circe.generic.auto._
+import Util.WriteBuffer
 import Util.RemoteStreamToMem
 
 /**
@@ -35,9 +36,9 @@ trait HasHBMInterconnect extends Module {
   val interfaceBuffer: ArrayBuffer[hdlinfo.Interface]
   val axiOuts: ArrayBuffer[axi4.RawInterface]
   val axiXDMA: ArrayBuffer[axi4.RawInterface]
-  
+
   // This is an "output" var that this trait will update
-  var numHbmPortExports: Int 
+  var numHbmPortExports: Int
 
   /**
    * This method is now part of the trait. It contains the exact logic
@@ -49,14 +50,16 @@ trait HasHBMInterconnect extends Module {
       closureAllocatorMap: Map[String, Allocator],
       argumentNotifierMap: Map[String, ArgumentNotifier],
       memoryAllocatorMap: Map[String, Allocator],
+      spawnNextWBMap: Map[String, Seq[WriteBuffer]],
+      sendArgumentWBMap: Map[String, Seq[WriteBuffer]],
       remoteMemAccessMap: Map[String, RemoteStreamToMem]
   ): Unit = {
-    
+
     // [This is the code block from CleanHardCilk.scala, line 316 to 512]
-    
+
     val interfacesPE = new ArrayBuffer[axi4.full.Interface]()
 
-    
+
     peMap.foreach { case (taskName, peArray) =>
       val task = fullSysGenDescriptor.taskDescriptors.find(_.name == taskName).get
       peArray.foreach { pe =>
@@ -67,14 +70,28 @@ trait HasHBMInterconnect extends Module {
         }
       }
     }
-    
+
+    spawnNextWBMap.foreach {
+      case (taskName, wbArray) =>
+        wbArray.foreach { wb =>
+          interfacesPE.addOne(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+        }
+    }
+
+    sendArgumentWBMap.foreach {
+      case (taskName, wbArray) =>
+        wbArray.foreach { wb =>
+          interfacesPE.addOne(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+        }
+    }
+
     val interfacesScheduler = schedulerMap.values.flatMap(_.io_internal.vss_axi_full).to(ArrayBuffer)
     schedulerMap.values.foreach { s =>
       if (s.spawnerServerAXI.isDefined) {
         interfacesScheduler.addAll(s.spawnerServerAXI.get)
       }
     }
-    
+
     val interfacesClosureAllocator = closureAllocatorMap.values.flatMap(_.io_internal.vcas_axi_full).to(ArrayBuffer)
     val interfacesArgumentNotifier = argumentNotifierMap.values.flatMap(_.axi_full_argRoute).to(ArrayBuffer)
     val interfacesMemoryAllocator = memoryAllocatorMap.values.flatMap(_.io_internal.vcas_axi_full).to(ArrayBuffer)
@@ -90,7 +107,7 @@ trait HasHBMInterconnect extends Module {
 
     val totalPorts =
       interfacesPE.length + interfacesMemoryAllocator.length + interfacesScheduler.length + interfacesClosureAllocator.length + interfacesArgumentNotifier.length + interfacesRemoteMemAccess.length
-    
+
     // log the number of total ports
     println(s"[HBM:Interconnect:92] Total ports: $totalPorts")
 
@@ -108,7 +125,7 @@ trait HasHBMInterconnect extends Module {
         val serverMux = math.max(0, numHBMPorts - peMux)
 
         val pePortsPerMux = if (peMux > 0 && interfacesPE.length > 0) 1.0 * interfacesPE.length / peMux else 1.0
-        
+
         interfacesPE.zipWithIndex
           .groupBy(x => (x._2.toDouble / pePortsPerMux).toInt)
           .foreach(x => {
@@ -127,7 +144,7 @@ trait HasHBMInterconnect extends Module {
     }
 
 
-    if (false){//!isSimulation) { 
+    if (false){//!isSimulation) {
       val xdma_axi = IO(axi4.Slave(cfgXDMA)).suggestName("s_axi_xdma")
       hbmSlaves(numHBMPorts - 1).addOne(
         axi4.full.SlaveBuffer(xdma_axi.asFull, axi4.BufferConfig.all(8))
@@ -193,7 +210,7 @@ trait HasHBMInterconnect extends Module {
           }
 
           val axiOut = IO(axi4.Master(mux.m_axi.cfg)).suggestName(f"m_axi_${i}%02d")
-          
+
           if (addressTransformFlag) {
             val addressTransform = Module(new Util.AddressTransform(
               AddressTransformConfig(
@@ -227,7 +244,7 @@ trait HasHBMInterconnect extends Module {
             )
           )
           axi4.full.SlaveBuffer(AxiUserYanker(hbmSlave.head), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
-          
+
           if (addressTransformFlag) {
              val addressTransform = Module(new Util.AddressTransform(
               AddressTransformConfig(
@@ -247,7 +264,7 @@ trait HasHBMInterconnect extends Module {
             } else{
               protocolConverter.m_axi :=> axiOut.asFull
             }
-            
+
           }
 
           interfaceBuffer.addOne(
