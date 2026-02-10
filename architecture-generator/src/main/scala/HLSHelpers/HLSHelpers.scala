@@ -15,6 +15,7 @@ import chext.amba.axi4.full.components.ProtocolConverter
 import chext.amba.axi4.full.components.ProtocolConverterConfig
 import chext.amba.axi4.full.components.MuxConfig
 import HLSHelpers.VitisModuleFactory_Emitter.fullSysGenDescriptor
+import java.util.regex.Pattern
 
 trait VitisInterface {
   def name: String
@@ -68,6 +69,24 @@ class VitisModule(cfg: VitisModuleConfig) extends BlackBox {
   override def desiredName: String = cfg.desiredName
 
   import scala.collection.immutable.SeqMap
+
+  // Report the cfg interfaces
+  println(s"[HLS:HELPERS:108] Vitis Module: ${cfg.desiredName}")
+  cfg.interfaces.foreach { interface =>
+    println(s"[HLS:HELPERS:108] Vitis Module Interface: ${interface.name} - Role: ${interface.role}")
+  }
+  if(cfg.is_ap_start) {
+    println(s"[HLS:HELPERS:109] Vitis Module has ap_start")
+  }
+  if(cfg.is_ap_done) {
+    println(s"[HLS:HELPERS:110] Vitis Module has ap_done")
+  }
+  if(cfg.is_ap_idle) {
+    println(s"[HLS:HELPERS:111] Vitis Module has ap_idle")
+  }
+  if(cfg.is_ap_ready) {
+    println(s"[HLS:HELPERS:112] Vitis Module has ap_ready")
+  }
 
   val io = IO(new chisel3.Record {
     val elements: SeqMap[String, Data] =
@@ -251,7 +270,7 @@ class VitisWriteBufferModule(
         mWriteBuffer.m_allows(0) <> io.elements.get("argOut").get
 
         if(cfg.hasRemoteWriteBuffer) {
-          mWriteBuffer.fpgaId.get := io.elements.get("fpgaId").get
+          mWriteBuffer.fpgaId.get := RegNext(io.elements.get("fpgaId").get)
           mWriteBuffer.memReqToRemote.get <> io.elements.get("memReqToRemote").get
           mWriteBuffer.writeRespFromRemote.get <> io.elements.get("writeRespFromRemote").get
         }
@@ -458,7 +477,7 @@ object VitisModuleFactory {
 
 
     // Create an S_AXI_CONTROL interface if dataWidth > 0 otherwise None
-    val aximmInterface_s_axi_control = if (dataWidth > 0) {
+    val aximmInterface_s_axi_control = if (false) {  // Skip this export for now.
       Some(
         Aximm_VitisInterface(
           "s_axi_control",
@@ -510,14 +529,27 @@ object VitisModuleFactory {
       // val name = moduleMatch.group(1)
       // val content = moduleMatch.group(2)
       // if (name == moduleName) {
-        is_ap_start = moduleContent.contains("ap_start")
-        is_ap_done = moduleContent.contains("ap_done")
-        is_ap_idle = moduleContent.contains("ap_idle")
-        is_ap_ready = moduleContent.contains("ap_ready")
+
+
+    val ModuleRegex = s"""(?s)module\\s+$moduleName\\s*\\((.*?)\\);""".r
+
+    // apply the regex on the moduleContent
+    val moduleDefinitionMatch = ModuleRegex.findFirstMatchIn(moduleContent)
+    if (moduleDefinitionMatch.isDefined) {
+      println(s"[HLS:HELPERS:480] Found module definition for ${moduleName}")
+    }
+
+    // print moduleDefinitionMatch
+    println(s"[HLS:HELPERS:483] Module Definition Match: ${moduleDefinitionMatch}")
+
+    is_ap_start = moduleDefinitionMatch.contains("ap_start")
+    is_ap_done = moduleDefinitionMatch.contains("ap_done")
+    is_ap_idle = moduleDefinitionMatch.contains("ap_idle")
+    is_ap_ready = moduleDefinitionMatch.contains("ap_ready")
       // }
     //}
 
-    println(s"[HLS:HELPERS:491] ap_start: ${is_ap_start}")
+    println(s"[HLS:HELPERS:480] Found module: ${is_ap_start}")
 
     // Print the names of the interfaces
     tdataInterfaces.foreach { x =>
@@ -531,6 +563,7 @@ object VitisModuleFactory {
       ).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
 
     // Create the config with the interfaces
+    val hasArgumentWriteBuffer_ = taskDescriptor.generateArgOutWriteBuffer && (fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth)
     VitisModuleConfig(
       moduleName,
       config_seq,
@@ -538,8 +571,8 @@ object VitisModuleFactory {
       is_ap_done,
       is_ap_idle,
       is_ap_ready,
-      taskDescriptor.generateArgOutWriteBuffer & (fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth),
-      taskDescriptor.argumentSizeList.head,
+      hasArgumentWriteBuffer_,
+      if(hasArgumentWriteBuffer_) taskDescriptor.argumentSizeList.head else 0,
       taskDescriptor.generateArgOutWriteBuffer
     )
   }

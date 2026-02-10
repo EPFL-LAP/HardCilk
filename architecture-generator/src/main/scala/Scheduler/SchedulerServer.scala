@@ -83,6 +83,7 @@ class SchedulerServer(
   private val taskQueueBuffer = Module(new Queue(UInt(), nBeats))
   private val memDataCounter = RegInit(0.U(5.W))
   private val queuesUtil = RegInit(0.U(64.W))
+  private val enableMfpgaSteal = RegInit(0.U(64.W))
 
   regBlock.base(0x00)
   regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
@@ -90,11 +91,12 @@ class SchedulerServer(
   regBlock.reg(maxLength, read = true, write = true, desc = "Max length currently available for the FIFO")
   regBlock.reg(fifoTailReg, read = true, write = true, desc = "The tail register of the FIFO")
   regBlock.reg(fifoHeadReg, read = true, write = true, desc = "The head register of the FIFO")
-  regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
+  //regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
+  regBlock.reg(enableMfpgaSteal, read = true, write = true, desc = "Enables mFPGA stealing")
   regBlock.reg(currLen, read = true, write = true, desc = "A register that holds the current length of the FIFO")
   regBlock.reg(queuesUtil, read = true, write = true, desc = "A register that holds the lengths of different hardware queues")
 
-  
+  val interruptCondition = (enableMfpgaSteal(63) =/= 0.U)
 
   // queuesUtils register is only done for debugging small number of PEs to check the utilization of local BRAM queues per PE
   if (peCount <= 8) {
@@ -106,11 +108,11 @@ class SchedulerServer(
 
   // Logic to decide whether to serve or get tasks from remote FPGAs
   when(networkCongested || currLen > 16.U) {
-    io.serveRemote := true.B && maxLength =/= 0.U && !rPause && currLen > 16.U
+    io.serveRemote := true.B && maxLength =/= 0.U && !rPause && currLen > 16.U && enableMfpgaSteal(0) =/= 0.U
     io.getTasksFromRemote := false.B
   }.otherwise {
     io.serveRemote := false.B
-    io.getTasksFromRemote := true.B && maxLength =/= 0.U && !rPause
+    io.getTasksFromRemote := true.B && maxLength =/= 0.U && !rPause && enableMfpgaSteal(0) =/= 0.U
   }
 
 
@@ -163,7 +165,7 @@ class SchedulerServer(
   // transition of FSM
   when(stateReg === state.init) {
 
-    when(procInterrupt =/= 0.U) {
+    when(interruptCondition) {
       stateReg := state.processInterruptState
       rPause := "hFFFFFFFFFFFFFFFF".U
     }.elsewhen((currLen === maxLength && networkCongested) || maxLength < (nBeats.U + currLen)) {
@@ -199,7 +201,7 @@ class SchedulerServer(
 
       stateReg := state.takeInTask
 
-    }.elsewhen(!networkCongested) {
+    }.elsewhen(!networkCongested || interruptCondition) {
 
       stateReg := state.init
 
@@ -267,7 +269,7 @@ class SchedulerServer(
 
     when(io.connNetwork.data.qOutTask.ready) {
       stateReg := state.init
-    }.elsewhen(networkCongested) {
+    }.elsewhen(networkCongested || interruptCondition) {
       stateReg := state.init
     }.otherwise {
       stateReg := state.giveAwayTask
@@ -277,7 +279,7 @@ class SchedulerServer(
 
     when(io.connNetwork.ctrl.serveStealReq.ready) {
       stateReg := state.giveAwayTask
-    }.elsewhen(networkCongested) {
+    }.elsewhen(networkCongested || interruptCondition) {
       stateReg := state.init
     }.elsewhen(procInterrupt =/= 0.U) {
       stateReg := state.init

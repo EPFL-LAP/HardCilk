@@ -1,0 +1,93 @@
+{
+  "fpgaModel": "ALVEO_U55C",
+  "mallocList": {},
+  "memorySizeSim": 16,
+  "name": "triangleCount",
+  "sendArgumentList": {
+    "vertex_map": [
+      "triangle"
+    ]
+  },
+  "spawnList": {
+    "triangle": [
+      "vertex_map"
+    ]
+  },
+  "spawnNextList": {
+    
+  },
+  "targetFrequency": 300,
+  "taskDescriptors": [
+    {
+      "spawnServersCount" : 0,
+      "dynamicMemAlloc": false,
+      "isCont": true,
+      "isRoot": true,
+      "name": "triangle",
+      "numProcessingElements": 1,
+      "peHDLPath": "/beta/shahawy/mfpga_ws/benchmarks/triangleCount/HLS/triangle/triangle/hls/syn/verilog",
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 256,
+          "sideType": "scheduler"
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 128,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "sideType": "argumentNotifier"
+        }
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 256,
+      "hasAXI": true,
+      "taskId": 0,
+      "generateArgOutWriteBuffer": false      
+    },
+    {
+      "spawnServersCount" : 1,
+      "dynamicMemAlloc": false,
+      "isCont": false,
+      "isRoot": false,
+      "name": "vertex_map",
+      "numProcessingElements": 8,
+      "peHDLPath": "/beta/shahawy/mfpga_ws/benchmarks/triangleCount/HLS/vertex_map/vertex_map/hls/syn/verilog",
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 256,
+          "sideType": "scheduler"
+        }
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 256,
+      "hasAXI": true,
+      "isAIE": false,
+      "generateSpawnNextWriteBuffer": false,
+      "generateArgOutWriteBuffer": true,
+      "argumentSizeList": [
+        32
+      ],
+      "taskId": 1
+    }
+  ],
+  "widthAddress": 64,
+  "widthContCounter": 32,
+  "isVitisProject": true,
+  "keepAXI4Interfaces": true,
+  "mFPGASynth": true,
+  "mFPGASimulation": true,
+  "maximumAXIPorts": 30,
+  "hasAXIDMAInput": false,
+  "transformAXI": false,
+  "transformPattern": [],
+  "widthAXIAddress": 34
+}

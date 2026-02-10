@@ -53,7 +53,7 @@ object TclQuestaSim {
         val portName = f"m_axi_${i}%02d"
         // Add an axi firewall to the connection, checking slave side transactions
         tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:axi_firewall:1.2 axi_firewall_${i}")
-        tclWriteln(f"set_property CONFIG.FIREWALL_MODE {SI_SIDE} [get_bd_cells axi_firewall_${i}]")
+        tclWriteln(f"set_property -dict [list  CONFIG.FIREWALL_MODE {SI_SIDE}   CONFIG.NUM_READ_OUTSTANDING {128} CONFIG.NUM_WRITE_OUTSTANDING {128}]  [get_bd_cells axi_firewall_${i}]")
         tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins axi_firewall_${i}/M_AXI] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
         tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${portName}] [get_bd_intf_pins axi_firewall_${i}/S_AXI]")
         

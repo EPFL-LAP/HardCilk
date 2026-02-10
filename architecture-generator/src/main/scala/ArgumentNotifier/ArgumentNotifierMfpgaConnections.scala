@@ -8,7 +8,9 @@ import chext.amba.axi4s
 import axi4s.Casts._
 import chisel3.util.log2Ceil
 
-
+import chext.amba.axi4
+import chext.amba.axi4.lite.components.RegisterBlock
+import axi4.Ops._
 
 /**
  * A trait that encapsulates the mfPGA-specific extensions to the Argument Notifier module.
@@ -25,6 +27,9 @@ trait NotifierHasMfpgaSupport extends Module {
   val m_axis_remote = if(mfpgaSupport) Some(IO(axi4s.Master(axisCfgTaskAndReq))) else None
   val s_axis_remote = if(mfpgaSupport) Some(IO(axi4s.Slave(axisCfgTaskAndReq))) else None
   val fpgaIndexInputReg = if(mfpgaSupport) Some(IO(Input(UInt(8.W)))) else None
+
+  val s_axis_mfgpa_argument_notifier = if(mfpgaSupport) Some(Seq.fill(argRouteServersNumber)(IO(axi4.lite.Slave(axi4.Config(wAddr = 6, wData=64, lite=true))))) else None
+  
 
   def buildMfpgaConnections(): Unit = {
     val master_arbiter = Module(
@@ -43,7 +48,7 @@ trait NotifierHasMfpgaSupport extends Module {
     
 
     // Connect the m_axis_remote to the master of the arbiter
-    m_axis_remote.get.asFull <> master_arbiter.io.sink
+    elastic.SinkBuffer(m_axis_remote.get.asFull) <> master_arbiter.io.sink
 
 
     for (i <- 0 until argRouteServersNumber) {
@@ -52,6 +57,7 @@ trait NotifierHasMfpgaSupport extends Module {
 
       // Make the slave ports of the arbiter connect to the master ports of the argument servers
       master_arbiter.io.sources(i) <> argRouteServers(i).io.m_axis_remote.get.asFull
+      s_axis_mfgpa_argument_notifier.get(i) <> argRouteServers(i).io.axi_mgmt.get
     }
 
     val selWidth = log2Ceil(argRouteServers.length)

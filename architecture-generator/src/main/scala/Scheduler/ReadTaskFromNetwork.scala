@@ -32,6 +32,8 @@ class ReadTaskFromNetwork(
   val startTokenReceived = RegInit(false.B) 
   val readTasksCountReg = RegInit(0.U(32.W))
 
+  
+
   when(!startTokenReceived){
     io.readTasksCount.ready := true.B
     when(io.readTasksCount.valid){
@@ -40,6 +42,10 @@ class ReadTaskFromNetwork(
     }
   }
 
+  val SeenNoRequestOrTask = RegInit(0.U(32.W))
+  val allowSpecialRequestsCount = RegInit(0.U(32.W))
+  val tasksRead = RegInit(0.U(32.W))
+
   // to take a task u need to write a network request first  
   val allowCount = RegInit(0.U(32.W))
   when(startTokenReceived && allowCount < readTasksCountReg && io.m_axis_task.ready) {
@@ -47,9 +53,22 @@ class ReadTaskFromNetwork(
     when(io.connNetwork.ctrl.stealReq.ready){
       allowCount := allowCount + 1.U
     }
+  }.otherwise{
+    // Special requests when no requests or tasks are seen for a long time
+    when(SeenNoRequestOrTask >= 32.U && allowSpecialRequestsCount === 0.U){
+      allowSpecialRequestsCount := allowCount - tasksRead
+    }
+
+    when(allowSpecialRequestsCount > 0.U){
+      io.connNetwork.ctrl.stealReq.valid := true.B
+      when(io.connNetwork.ctrl.stealReq.ready){
+        allowSpecialRequestsCount := allowSpecialRequestsCount - 1.U
+      }
+    }
   } 
 
-  val tasksRead = RegInit(0.U(32.W))
+
+ 
   when(startTokenReceived && tasksRead < allowCount){
     io.connNetwork.data.availableTask.ready := io.m_axis_task.ready
     io.m_axis_task.valid := io.connNetwork.data.availableTask.valid
@@ -57,6 +76,16 @@ class ReadTaskFromNetwork(
 
     when(io.connNetwork.data.availableTask.fire){
       tasksRead := tasksRead + 1.U
+    }
+
+    // SeenNoRequestOrTask is used to detect if the requests were killed in the network
+    val networkDataValid = io.connNetwork.data.availableTask.fire
+    val networkRequestValid = io.connNetwork.ctrl.stealReq.valid
+    
+    when(!networkDataValid && !networkRequestValid){
+      SeenNoRequestOrTask := SeenNoRequestOrTask + 1.U
+    }.otherwise{
+      SeenNoRequestOrTask := 0.U
     }
   }
 

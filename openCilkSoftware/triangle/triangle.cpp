@@ -147,6 +147,9 @@ int countIntersection(Graph &g, int vertexA, int vertexB)
     return intersection.size();
 }
 
+
+
+
 void vertexMap(Graph &g, std::vector<int> &traingle_count_arr, int vertex)
 {
     int count = 0;
@@ -170,8 +173,8 @@ int main()
 {
     // Graph g("/home/shahawy/graphs/single_triangle.txt", false);
     //Graph g("/home/shahawy/email-EuAll.txt", false);
-    Graph g("/home/shahawy/graphs/soc-LiveJournal1.txt", false);
-    //Graph g("/home/shahawy/graphs/congress_r.txt", false);
+    //Graph g("/home/shahawy/graphs/soc-LiveJournal1.txt", false);
+    Graph g("/home/shahawy/graphs/congress_r.txt", false);
     //Graph g("/home/shahawy/graphs/com-orkut.ungraph.txt", false);
     //Graph g("/home/shahawy/congress_network/congress.edgelist", false);
     //Graph g("/home/shahawy/congress_network/congress_reduced.txt", false);

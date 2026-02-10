@@ -19,6 +19,7 @@ class SpawnerServerIO(taskWidth: Int, regBlock: RegisterBlock, axiCfg : axi4.Con
   val connNetwork_slave = Flipped(new SchedulerNetworkClientIO(taskWidth)) // Connection to the stealing Network
   val connNetwork_master = Flipped(new SchedulerNetworkClientIO(taskWidth)) // Connection to the stealing Network
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
+  val serveRemote = Output(Bool())         // A signal from the VSS to the RemoteTaskServer
 }
 
 class CircularQueueRegisterInc(width:Int) extends Module{
@@ -138,6 +139,11 @@ class SpawnerServer(
   regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
   regBlock.reg(currLen, read = true, write = true, desc = "A register that holds the current length of the FIFO")
 
+  when(currLen > 32.U){
+    io.serveRemote := true.B
+  }.otherwise{
+    io.serveRemote := false.B
+  }
   
   val writeAddressDone = RegInit(false.B)
   val writeDataDone = RegInit(false.B)

@@ -5,32 +5,27 @@
           "name": "pageRankReduce",
           "peHDLPath": "/home/shahawy/vitis_testing/pageRank/pageRankReduce/pageRankReduce/hls/syn/verilog",
           "isRoot": true,
-          "isCont": true,
+          "isCont": false,
           "dynamicMemAlloc": false,
-
           "numProcessingElements": 1,
           "widthTask": 512,
           "widthMalloc": 0,
+          "variableSpawn": false,
+          "spawnServersCount": 1, 
+          "hasAXI": false,
           "sidesConfigs": [
               {
                   "sideType": "scheduler",
                   "numVirtualServers": 1,
-                  "capacityVirtualQueue": 128,
-                  "capacityPhysicalQueue": 64,
+                  "capacityVirtualQueue": 32,
+                  "capacityPhysicalQueue": 32,
                   "portWidth": 512
-              },
-              {
-                  "sideType": "allocator",
-                  "numVirtualServers": 1,  
-                  "capacityVirtualQueue": 128,
-                  "capacityPhysicalQueue": 16,
-                  "portWidth": 64
               },
               {
                   "sideType": "argumentNotifier",
                   "numVirtualServers": 1,  
                   "capacityVirtualQueue": 128,
-                  "capacityPhysicalQueue": 32,
+                  "capacityPhysicalQueue": 8,
                   "portWidth": 64
               }
           ]
@@ -41,37 +36,37 @@
           "isRoot": false,
           "isCont": false,
           "dynamicMemAlloc": false,
-
-          "numProcessingElements": 32,
+          "numProcessingElements": 24,
           "widthTask": 512,
-          "widthMalloc": 0,
-
+          "widthMalloc": 0,   
+          "variableSpawn": false,
+          "spawnServersCount": 2,
           "sidesConfigs": [
               {
                   "sideType": "scheduler",
                   "numVirtualServers": 1,   
                   "capacityVirtualQueue": 128,
-                  "capacityPhysicalQueue": 64,
+                  "capacityPhysicalQueue": 32,
                   "portWidth": 512
               }
           ]
       }
   ],
   "spawnList": {
-      "pageRankReduce": ["vertex_map"]
-  },
-  "spawnNextList": {
-      "pageRankReduce": ["pageRankReduce"]
-  },
-  "sendArgumentList": {
-      "pageRankReduce": ["pageRankReduce"],
+      "pageRankReduce": ["vertex_map"],
       "vertex_map": ["pageRankReduce"]
   },
+  "spawnNextList": {
+  },
+  "sendArgumentList": {
+      "pageRankReduce": ["pageRankReduce"]
+  },
   "mallocList": {
+  
   },
   "widthAddress":64,
   "widthContCounter":32,
   "memorySizeSim": 16,
-  "targetFrequency": 250,
+  "targetFrequency": 300,
   "fpgaModel": "ALVEO_U55C"
 }

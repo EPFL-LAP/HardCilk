@@ -10,38 +10,42 @@
           "numProcessingElements": 1,
           "widthTask": 256,
           "widthMalloc": 0,
+          "variableSpawn": false,
+          "spawnServersCount": 0, 
           "sidesConfigs": [
               {
                   "sideType": "scheduler",
                   "numVirtualServers": 1,
                   "capacityVirtualQueue": 32,
-                  "capacityPhysicalQueue": 64,
+                  "capacityPhysicalQueue": 8,
                   "portWidth": 256
               },
               {
                   "sideType": "argumentNotifier",
                   "numVirtualServers": 1,  
                   "capacityVirtualQueue": 128,
-                  "capacityPhysicalQueue": 32,
+                  "capacityPhysicalQueue": 8,
                   "portWidth": 64
               }
           ]
       },
       {
           "name": "vertex_map",
-          "peHDLPath": "/home/shahawy/vitis_testing/triangle/vertex_map/vertex_map/hls/syn/verilog",
+          "peHDLPath": "/home/shahawy/Desktop/HardCilk/hls-processing-elements/triangleCount/verilog-chext/",
           "isRoot": false,
           "isCont": false,
           "dynamicMemAlloc": false,
-          "numProcessingElements": 32,
+          "numProcessingElements": 24,
           "widthTask": 256,
           "widthMalloc": 0,   
+          "variableSpawn": false,
+          "spawnServersCount": 2,
           "sidesConfigs": [
               {
                   "sideType": "scheduler",
                   "numVirtualServers": 1,   
                   "capacityVirtualQueue": 128,
-                  "capacityPhysicalQueue": 64,
+                  "capacityPhysicalQueue": 32,
                   "portWidth": 256
               }
           ]

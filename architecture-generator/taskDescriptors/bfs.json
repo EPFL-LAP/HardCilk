@@ -2,15 +2,16 @@
   "name": "bfs",
   "taskDescriptors": [
       {
-          "name": "edgeMap",
-          "peHDLPath": "/home/shahawy/vitis_ws/edgeMap/edgeMap/hls/syn/verilog",
+          "name": "bfsGather",
+          "peHDLPath": "/home/shahawy/vitis_testing/bfs/bfsGather/bfsGather/hls/syn/verilog",
           "isRoot": true,
           "isCont": true,
           "dynamicMemAlloc": true,
 
           "numProcessingElements": 1,
           "widthTask": 512,
-          "widthMalloc": 4096,
+          "widthMalloc": 1000000,
+          "variableSpawn": true,
           "sidesConfigs": [
               {
                   "sideType": "scheduler",
@@ -28,7 +29,7 @@
               },
               {
                   "sideType": "argumentNotifier",
-                  "numVirtualServers": 16,  
+                  "numVirtualServers": 1,  
                   "capacityVirtualQueue": 128,
                   "capacityPhysicalQueue": 32,
                   "portWidth": 64
@@ -51,10 +52,10 @@
           "isCont": false,
           "dynamicMemAlloc": false,
 
-          "numProcessingElements": 4,
+          "numProcessingElements": 8,
           "widthTask": 512,
           "widthMalloc": 0,
-
+          "variableSpawn": false,
           "sidesConfigs": [
               {
                   "sideType": "scheduler",
@@ -67,17 +68,17 @@
       }
   ],
   "spawnList": {
-      "edgeMap": ["edgeMapParallel"]
+      "bfsGather": ["edgeMapParallel"]
   },
   "spawnNextList": {
-      "edgeMap": ["edgeMap"]
+      "bfsGather": ["bfsGather"]
   },
   "sendArgumentList": {
-      "edgeMap": ["edgeMap"],
-      "edgeMapParallel": ["edgeMap"]
+      "bfsGather": ["bfsGather"],
+      "edgeMapParallel": ["bfsGather"]
   },
   "mallocList": {
-    "edgeMap": ["edgeMap"]
+    "bfsGather": ["bfsGather"]
   },
   "widthAddress":64,
   "widthContCounter":32,
