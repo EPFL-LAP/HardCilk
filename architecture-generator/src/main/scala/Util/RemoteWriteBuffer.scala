@@ -82,8 +82,8 @@ class RemoteWriteBuffer(
   // Implementation
   private val m_axi_ = axi4.full.MasterBuffer(m_axi.asFull, axi4.BufferConfig(b = 8))
   private val s_pkg_ = elastic.SourceBuffer(s_pkg.asLite, 4)
-  private val s_allows_ = s_allows.map(p => elastic.SourceBuffer(p.asLite, 8))
-  private val m_allows_ = m_allows.map(p => elastic.SinkBuffer(p.asLite, 8))
+  private val s_allows_ = s_allows.map(p => elastic.SourceBuffer(p.asLite, 16))
+  private val m_allows_ = m_allows.map(p => elastic.SinkBuffer(p.asLite, 16))
 
   m_axi_.ar.noenq()
   m_axi_.r.nodeq()
@@ -119,7 +119,7 @@ class RemoteWriteBuffer(
     protected def onFork: Unit = {
       val requests_responses_demux = elastic.Demux(
         source = fork(in),
-        sinks =  Seq(s_pkg_to_remote, s_pkg_to_local),
+        sinks =  Seq(elastic.SinkBuffer(s_pkg_to_remote, 128), s_pkg_to_local),
         // select based on the isRequest bit in TDATA
         select = fork(in.asTypeOf(wb_t).addr(64- 5, 56) === fpgaId)
       )
@@ -141,8 +141,23 @@ class RemoteWriteBuffer(
     }
   }
 
+  val memResponseFromRemoteQueueBuffer = Module(new Queue(new WriteResp(), 256))
+
+
+  //val sent_package_counter = RegInit(8.U(4.W))
+  val s_pkg_to_remote_throttled = Wire(chiselTypeOf(s_pkg_to_remote))
+  
+  //s_pkg_to_remote <> s_pkg_to_remote_throttled
+  
+  s_pkg_to_remote_throttled.bits := s_pkg_to_remote.bits
+
+  s_pkg_to_remote_throttled.valid := s_pkg_to_remote.valid && (memResponseFromRemoteQueueBuffer.io.count < 256.U)
+  s_pkg_to_remote.ready := s_pkg_to_remote_throttled.ready && (memResponseFromRemoteQueueBuffer.io.count < 256.U)
+
+
+
   // Create the remote memory request through the memReqToRemote port
-  new elastic.Transform(s_pkg_to_remote, memReqToRemote) {
+  new elastic.Transform(s_pkg_to_remote_throttled, elastic.SinkBuffer(memReqToRemote, 64)) {
     protected def onTransform: Unit = {
       out.address := in.asTypeOf(wb_t).addr
       out.data := in.asTypeOf(wb_t).data
@@ -207,10 +222,13 @@ class RemoteWriteBuffer(
     }
   }
 
+
+  memResponseFromRemoteQueueBuffer.io.enq <> memRespFromRemote
+
   // Mux between local memory replies and remote memory replies
   private val selectedReplicationToken = Wire(DecoupledIO(new WriteResp()))
   val duplication_mux = elastic.Mux(
-    Seq(memRespFromRemote, local_replicate_token),
+    Seq(memResponseFromRemoteQueueBuffer.io.deq, local_replicate_token),
     selectedReplicationToken,
     select_queue.io.deq
     // Last is always true

@@ -75,10 +75,8 @@ object HardCilkEmitter extends App {
           })
 
         // Rename `outputDirPathSC/projects/project_template` to `outputDirPathSC/projects/${jsonName}`
-        val projectTemplate =
-          new java.io.File(s"$outputDirPathSC/projects/project_template")
-        val projectDestination =
-          new java.io.File(s"$outputDirPathSC/projects/${jsonName}")
+        val projectTemplate = new java.io.File(s"$outputDirPathSC/projects/project_template")
+        val projectDestination =  new java.io.File(s"$outputDirPathSC/projects/${jsonName}")
         projectTemplate.renameTo(projectDestination)
 
         // Generate the HDL in the `outputDirPathSC/projects/${jsonName}/hdl`
@@ -116,7 +114,13 @@ object HardCilkEmitter extends App {
         writeFile(cmakeListsPath, newCmakeListsContent)
 
         // Also copy `../software/${jsonName}` to `outputDirPathSC/projects/${jsonName}`
-        val sourceProject = new java.io.File(s"../software/${jsonName}")
+        var source_project_path = s"../software/${jsonName}"
+        if(systemDescriptor.mFPGASimulation || systemDescriptor.mFPGASynth){ 
+          source_project_path = s"../software/mfpga/${jsonName}"
+        } 
+
+        val sourceProject = new java.io.File(source_project_path)
+
         java.nio.file.Files
           .walk(sourceProject.toPath)
           .forEach(sourcePath => {

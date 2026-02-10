@@ -6,155 +6,16 @@
 #include <sstream>
 #include <mutex>
 #include <chrono>
-
-class Set
-{
-private:
-    const int capacity = 10000000;
-    uint32_t *array;
-    uint32_t size;
-
-public:
-    Set() : array(new uint32_t[10000000]), size(0)
-    {
-    }
-
-    ~Set()
-    {
-        delete[] array;
-    }
-
-    Set(const Set &) = delete;
-    Set &operator=(const Set &) = delete;
-
-    Set(Set &&other) noexcept : array(other.array), size(other.size)
-    {
-        other.array = nullptr;
-        other.size = 0;
-    }
-
-    Set &operator=(Set &&other) noexcept
-    {
-        if (this != &other)
-        {
-            delete[] array;
-            array = other.array;
-            size = other.size;
-            other.array = nullptr;
-            other.size = 0;
-        }
-        return *this;
-    }
-
-    void insert(int element)
-    {
-        for (int i = 0; i < size; i++)
-        {
-            if (array[i] == element)
-                return;
-        }
-
-        if (size == capacity)
-        {
-            std::cerr << "Set is full" << std::endl;
-            return;
-        }
-        array[size] = element;
-        size++;
-    }
-
-    void unpromising_insert(int element)
-    {
-        array[size] = element;
-        size++;
-    }
-
-    int getSize() const
-    {
-        return size;
-    }
-
-    int operator[](int index) const
-    {
-        if (index >= 0 && index < size)
-        {
-            return array[index];
-        }
-        throw std::out_of_range("Index out of range");
-    }
-
-    bool empty()
-    {
-        return size == 0;
-    }
-
-    void clear()
-    {
-        size = 0;
-    }
-
-    std::vector<uint32_t> asVector() const {
-        std::vector<uint32_t> dat;
-        dat.push_back(size);
-        for(int i = 0; i < size; i++) {
-            dat.push_back(array[i]);
-        }
-        return dat;
-    }
-};
-
-class Array
-{
-private:
-    int32_t *array;
-    uint32_t size;
-
-public:
-    Array(uint32_t size) : array(new int32_t[size]), size(size)
-    {
-    }
-
-    Array(uint32_t size, int32_t value) : array(new int32_t[size]), size(size)
-    {
-        for (uint32_t i = 0; i < size; i++)
-            array[i] = value;
-    }
-
-    Array(const Array &) = delete;
-    Array &operator=(const Array &) = delete;
-
-    int32_t &operator[](uint32_t index)
-    {
-        if (index >= 0 && index < size)
-        {
-            return array[index];
-        }
-        throw std::out_of_range("Index out of range");
-    }
-
-    uint32_t getSize()
-    {
-        return size;
-    }
-
-    ~Array()
-    {
-        delete[] array;
-    }
-};
-
-
-struct Pair32 {
-  uint32_t first;
-  uint32_t second;
-};
+#include <algorithm>
+#include <queue>
+#include <unordered_map>
 
 class Graph
 {
 public:
     Graph() = default;
 
-    Graph(const std::string &filename)
+    Graph(const std::string &filename, bool directed = true)
     {
         std::ifstream file(filename);
         if (!file.is_open())
@@ -174,28 +35,45 @@ public:
                 continue;
             }
             addEdge(u, v);
+            if (!directed)
+            {
+                addEdge(v, u);
+            }
         }
 
         // get the max vertex number from the vertices set and add the vertices from 0 to max
+        int max_vertex = *vertices.rbegin();
+        set_vertex_count_as_max_vertex();
+
+        file.close();
+
+        // create adjacency list
+        create_adjacency_list(max_vertex);
+    }
+
+    void set_vertex_count_as_max_vertex()
+    {
         int max_vertex = *vertices.rbegin();
         for (int i = 0; i <= max_vertex; i++)
         {
             vertices.insert(i);
         }
+    }
 
-        file.close();
+    void create_adjacency_list(int max_vertex_index)
+    {
+        // resize the adjacency list to the max vertex index
+        adjacency_list.resize(max_vertex_index + 1);
 
-        adj_list.resize(vertices.size());
-        for (const auto &edge : edges)
+        for (uint32_t i = 0; i < edges.size(); i++)
         {
-            adj_list[edge.first].unpromising_insert(edge.second);
-            //adj_list[edge.second].unpromising_insert(edge.first);
+            adjacency_list[edges[i].first].insert(edges[i].second);
         }
     }
 
     void addEdge(int u, int v)
     {
-        edges.push_back({(uint32_t)u, (uint32_t)v});
+        edges.push_back({u, v});
         vertices.insert(u);
         vertices.insert(v);
     }
@@ -213,36 +91,21 @@ public:
         return vertices.size();
     }
 
-    const Set& getNeighbors(int u) const
+    int getDegree(int u) const
     {
-        return adj_list[u];
+        // Check if the vertex has an entry in the adjacency list
+        return adjacency_list[u].size();
     }
 
-    const std::vector<Pair32>& getEdges() {
-        return edges;
-    }
-
-    const std::vector<Set>& getAdjList() const {
-        return adj_list;
+    const std::set<int> &getNeighbors(int u) const
+    {
+        // Check if the vertex has an entry in the adjacency list
+        return adjacency_list[u];
     }
 
 private:
-    std::vector<Pair32> edges;
+    std::vector<std::pair<int, int>> edges;
+    std::vector<std::set<int>> adjacency_list;
     std::set<int> vertices;
-    std::vector<Set> adj_list;
-
-    friend void edgeMapParallel(const Graph &g, int vertex, Array &flag_visited, int round, Array &d, Set *set);
-};
-
-class Timer {
-public:
-    Timer() : start_time(std::chrono::high_resolution_clock::now()) {}
-    ~Timer() {
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> elapsed = end_time - start_time;
-        std::cout << "Elapsed time: " << elapsed.count() << " seconds" << std::endl;
-    }
-
-private:
-    std::chrono::time_point<std::chrono::high_resolution_clock> start_time;
+    std::set<int> empty_set;
 };

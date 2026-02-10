@@ -6,14 +6,14 @@ ThisBuild / organization := "epfl-lap"
 
 val chiselVersion = "6.0.0"
 val chiseltestVersion = "6.0.0"
-val circeVersion = "0.14.1"
+val circeVersion = "0.14.2"
 
 lazy val root = (project in file("."))
   .settings(
     name := "hardcilk",
     libraryDependencies ++= Seq(
       "org.chipsalliance" %% "chisel" % chiselVersion,
-      "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
+    //  "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
       "com.typesafe.play" %% "play-json" % "2.9.2",
       "hdlstuff" %% "chext" % "0.1.1",
       "hdlstuff" %% "hdlinfo" % "0.1.0",
@@ -23,7 +23,7 @@ lazy val root = (project in file("."))
       "io.circe" %% "circe-core",
       "io.circe" %% "circe-generic",
       "io.circe" %% "circe-parser",
-      "io.circe" %% "circe-generic-extras" // <-- add this
+      "io.circe" %% "circe-generic-extras" 
     ).map(_ % circeVersion),
     scalacOptions ++= Seq(
       "-language:reflectiveCalls",
@@ -37,6 +37,9 @@ lazy val root = (project in file("."))
     addCompilerPlugin(
       "org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full
     ),
+    dependencyOverrides +=
+  "edu.berkeley.cs" %% "chiseltest" % "6.0.0",
+  
     resolvers ++= Resolver.sonatypeOssRepos("snapshots"),
     resolvers ++= Resolver.sonatypeOssRepos("releases")
   )

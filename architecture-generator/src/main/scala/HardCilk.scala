@@ -7,6 +7,7 @@ import Allocator._
 import ArgumentNotifier._
 import HLSHelpers._
 import Util.HardCilkUtil._
+import Util.RemoteStreamToMem
 
 import chext.amba.axi4
 import axi4.Ops._
@@ -17,6 +18,7 @@ import io.circe.generic.auto._
 import scala.collection.mutable.ArrayBuffer
 import chext.elastic.ConnectOp._
 import chext.amba.axi4.lite.components.{Upscale, UpscaleConfig}
+
 
 
 import HardCilkBuilder.PortToExport
@@ -92,7 +94,7 @@ class HardCilk(
 
 
   val demux = instantiateManagementDemux()
-  connectManagement(demux, schedulerMap, allocatorMap, memAllocatorMap)
+  connectManagement(demux, schedulerMap, allocatorMap, memAllocatorMap, notifierMap, remoteStreamToMemMap)
   connectPEs(peMap)
 
   val portsToExport = builder.connectSubsystems(
@@ -196,7 +198,7 @@ class HardCilk(
       val s_axil_mgmt_upscale = Module(
         new Upscale(new UpscaleConfig(axiCfgCtrl.copy(wData = 32), 64))
       )
-      s_axil_mgmt :=> s_axil_mgmt_upscale.s_axi
+      axi4.lite.SlaveBuffer(s_axil_mgmt.asLite, axi4.BufferConfig.all(8)) :=> s_axil_mgmt_upscale.s_axi
 
       val offset = 0x10
       new chext.elastic.Transform(s_axil_mgmt_upscale.m_axi.ar, demux.s_axil.ar) {
@@ -235,7 +237,9 @@ class HardCilk(
       demux: axi4.lite.components.Demux,
       schedulerMap: Map[String, Scheduler],
       closureAllocatorMap: Map[String, Allocator],
-      memoryAllocatorMap: Map[String, Allocator]
+      memoryAllocatorMap: Map[String, Allocator],
+      argumentNotifierMap: Map[String, ArgumentNotifier],
+      remoteStreamToMemMap: Map[String, RemoteStreamToMem]
   ): Unit = {
     var j = 0 // Management port index
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
@@ -270,6 +274,33 @@ class HardCilk(
           demux.m_axil(i) :=> taskMemAlloc.io_internal.axi_mgmt_vcas(i - j)
         }
         j += task.getNumServers("memoryAllocator")
+      }
+    }
+
+    // if mfpga support connect the info ports
+    if(fullSysGenDescriptor.mFPGASynth || fullSysGenDescriptor.mFPGASimulation){
+      // each scheduler has an extra port
+      fullSysGenDescriptor.taskDescriptors.foreach { task =>
+        val taskSched = schedulerMap(task.name)
+        demux.m_axil(j) :=> taskSched.s_axi_remote_task_server.get
+        j += 1
+      }
+      // each remote stream has a port
+      fullSysGenDescriptor.taskDescriptors.foreach { task =>
+        if(remoteStreamToMemMap.contains(task.name)){
+          demux.m_axil(j) :=> remoteStreamToMemMap(task.name).io.axi_mgmt
+          j += 1
+        }
+      }
+      // each argument notifier has a sequence of extra ports
+      fullSysGenDescriptor.taskDescriptors.foreach { task =>
+        if(notifierMap.contains(task.name)){
+          val s_axi_seq = notifierMap(task.name).s_axis_mfgpa_argument_notifier.get
+          for(i <- 0 until task.getNumServers("argumentNotifier")){
+            demux.m_axil(j) :=> s_axi_seq(i)
+            j += 1
+          }
+        }
       }
     }
   }

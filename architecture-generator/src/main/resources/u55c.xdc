@@ -1421,3 +1421,305 @@ set_property PACKAGE_PIN AL10 [get_ports PEX_TX0_N]
 
 
 #set_property DIFF_TERM_ADV TERM_NONE [get_ports {SYSCLK2_clk_p[0]}]
+
+set_false_path -to [get_pins -hier *sync_reg[0]/D]
+
+#---------------------- Adding waiver for exdes level constraints --------------------------------#
+
+create_waiver -type DRC -id {REQP-1839} -tags "1166691" -scope -internal -user "xdma" -desc "DRC expects synchronous pins to be provided to BRAM inputs. Since synchronization is present one stage before, it is safe to ignore" -objects [list [get_cells -hierarchical -filter {NAME =~ {*/blk_mem_xdma_inst/U0/inst_blk_mem_gen/*.ram}}] [get_cells -hierarchical -filter {NAME =~ {*/AXI_BRAM_CTL/U0/gint_inst*.mem_reg*} && PRIMITIVE_TYPE =~ {*BRAM*}}] [get_cells -hierarchical -filter {NAME =~ {*xdma_inst/U0/gint_inst*.mem_reg*} && PRIMITIVE_TYPE =~ {*BRAM*}}] [get_cells -hierarchical -filter {NAME =~ {*axi_bram_gen_bypass_inst/U0/gint_inst*.mem_reg*} && PRIMITIVE_TYPE =~ {*BRAM*}}] [get_cells -hierarchical -filter {NAME =~ {*/blk_mem_axiLM_inst/U0/inst_blk_mem_gen/*.ram}}] [get_cells -hierarchical -filter {NAME =~ {*/blk_mem_gen_bypass_inst/U0/inst_blk_mem_gen/*.ram}}]]
+
+create_waiver -type CDC -id {CDC-1} -tags "1165825" -scope -internal -user "xdma" -desc "PCIe reset path -Safe to waive" -from [get_ports sys_rst_n] -to [get_pins -hier -filter {NAME =~ {*/user_clk_heartbeat_reg[*]/R}}]
+
+
+#set PCIE_CLOCK_ROOT [get_clock_regions -of [get_cells -hierarchical -filter { PRIMITIVE_TYPE == ADVANCED.PCIE.PCIE40E4 } ]]
+#set CORECLK [get_nets -of [get_pins -filter {REF_PIN_NAME==O} -of [get_nets -segments -of [get_pins -filter {REF_PIN_NAME==CORECLK} -of [get_cells -hierarchical -filter { PRIMITIVE_TYPE == ADVANCED.PCIE.PCIE40E4 } ]]]]]
+#set PIPECLK [get_nets -of [get_pins -filter {REF_PIN_NAME==O} -of [get_nets -segments -of [get_pins -filter {REF_PIN_NAME==PIPECLK} -of [get_cells -hierarchical -filter { PRIMITIVE_TYPE == ADVANCED.PCIE.PCIE40E4 } ]]]]]
+#set_property USER_CLOCK_ROOT $PCIE_CLOCK_ROOT $CORECLK
+#set_property USER_CLOCK_ROOT $PCIE_CLOCK_ROOT $PIPECLK
+#set_property CLOCK_DELAY_GROUP CORECLK_PIPECLK_GRP $CORECLK
+#set_property CLOCK_DELAY_GROUP CORECLK_PIPECLK_GRP $PIPECLK
+
+
+
+# Combinatorial Loop Alert for peArray_0_1
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_0_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_1
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_10
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_10/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_11
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_11/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_12
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_12/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_13
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_13/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_14
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_14/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_15
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_15/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_16
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_16/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_17
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_17/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_18
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_18/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_19
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_19/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_2
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_2/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_20
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_20/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_21
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_21/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_22
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_22/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_23
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_23/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_24
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_24/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_25
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_25/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_26
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_26/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_27
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_27/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_28
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_28/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_29
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_29/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_3
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_3/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_30
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_30/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_31
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_31/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_32
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_32/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_33
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_33/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_34
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_34/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_35
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_35/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_36
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_36/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_37
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_37/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_38
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_38/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_39
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_39/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_4
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_4/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_40
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_40/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_41
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_41/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_42
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_42/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_43
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_43/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_44
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_44/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_45
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_45/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_46
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_46/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_47
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_47/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_48
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_48/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_49
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_49/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_5
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_5/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_50
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_50/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_51
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_51/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_52
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_52/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_53
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_53/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_54
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_54/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_55
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_55/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_56
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_56/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_57
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_57/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_58
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_58/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_59
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_59/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_6
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_6/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_60
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_60/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_61
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_61/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_62
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_62/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_63
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_63/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_7
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_7/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_8
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_8/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+# Combinatorial Loop Alert for peArray_9
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_9/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/req_ready_reg[0][0]]
+
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_0_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_10/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_11/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_12/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_13/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_14/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_15/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_16/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_17/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_18/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_19/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_2/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_20/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_21/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_22/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_23/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_24/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_25/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_26/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_27/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_28/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_29/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_3/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_30/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_31/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0] ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_4/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0]  ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_5/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0]  ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_6/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0]  ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_7/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0]  ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_8/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0]  ]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/triangleCount_0/inst/peArray_9/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/U_fifo_srl/req[0]  ]
+
+
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_0_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_0_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_1/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_2/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_2/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_3/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_3/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_4/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_4/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_5/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_5/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_6/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_6/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_7/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_7/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+
+
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_10/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_10/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_11/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_11/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_12/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_12/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_13/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_13/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_14/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_14/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_15/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_15/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_16/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_16/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_17/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_17/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_18/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_18/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_19/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_19/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_20/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_20/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_21/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_21/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_22/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_22/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_23/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_23/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_8/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_8/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_9/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[0]]
+set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets design_1_i/pageRank_0/inst/peArray_9/pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer/could_multi_bursts.rem_req_valid_reg_0[1]]
+
+set_false_path -from [get_clocks *APB_0_PCLK] -to [get_clocks *APB_1_PCLK]
+set_false_path -from [get_clocks *APB_1_PCLK] -to [get_clocks *APB_0_PCLK] 
+
+set_property C_USER_SCAN_CHAIN 1 [get_debug_cores dbg_hub]
+connect_debug_port dbg_hub/clk [get_nets "design_1_i/util_ds_buf_1/U0/IBUF_OUT[0]"]

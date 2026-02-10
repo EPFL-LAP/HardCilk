@@ -158,7 +158,7 @@ case class TaskDescriptor(
       s"Task '$name': dynamicMemAlloc requires widthMalloc > 0")
 
     if (isCont) {
-      require(getNumServers("allocator") > 0, s"Task '$name' (Cont): must have > 0 allocator servers")
+      //require(getNumServers("allocator") > 0, s"Task '$name' (Cont): must have > 0 allocator servers")
       require(getNumServers("argumentNotifier") > 0, s"Task '$name' (Cont): must have > 0 argumentNotifier servers")
     }
     
@@ -396,6 +396,26 @@ case class FullSysGenDescriptor(
       } +
       {
         if(mFPGASynth || mFPGASimulation) 1 else 0
+      } +
+      {
+        var count_info_ports = 0
+        if(mFPGASynth || mFPGASimulation){
+          // Add an extra one for each task type
+          count_info_ports += taskDescriptors.length
+
+          // Add an extra one for each task with task.generateArgOutWriteBuffer set
+          taskDescriptors.foreach(task => {
+            if(task.generateArgOutWriteBuffer) {
+              count_info_ports += 1
+            }
+          })
+
+          // Add an extra one for all the arg notifiers existing in each task
+          taskDescriptors.foreach(task => {
+            count_info_ports += task.getNumServers("argumentNotifier")
+          })
+        }
+        count_info_ports
       }
   }
 

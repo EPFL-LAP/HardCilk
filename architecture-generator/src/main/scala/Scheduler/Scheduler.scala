@@ -65,7 +65,7 @@ class Scheduler(
     pePortWidth: Int,
     peType: String,
     debug: Boolean,
-    spawnerServerNumber: Int = 1,
+    override val spawnerServerNumber: Int = 1,
     argRouteServersCreateTasks: Boolean =false,
     override val mfpgaSupport: Boolean = false,
     maxNumnberToStealOrServe: Int = 256,
@@ -325,7 +325,7 @@ class Scheduler(
   }
   // DEBUG
 
-  if (argRouteServersNumber > 0){ //&& argRouteServersCreateTasks) { // 
+  if (argRouteServersNumber > 0 && outsideSpawn){ //&& argRouteServersCreateTasks) { // 
     for (i <- 0 until argRouteServersNumber) {
       getOutsideSpawnNetwork.get.io.connSS(outTaskSpawnIndicies(i)) <> connArgumentNotifier(i)
     } 

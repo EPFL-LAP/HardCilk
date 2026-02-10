@@ -9,6 +9,10 @@ import chext.amba.axi4s
 import chext.elastic
 import chext.util.BitOps._
 import axi4s.Casts._
+import scala.collection.immutable.SeqMap
+import chext.amba.axi4
+import chext.amba.axi4.lite.components.RegisterBlock
+import axi4.Ops._
 
 
 /** RemoteTaskServer What does this moudle shall do? (No operations can be reverted, it shall continue to the end to stop
@@ -23,8 +27,8 @@ import axi4s.Casts._
   *      shall then send the tasks to the network
   */
 
-class RemoteTaskServerIO(taskWidth: Int, axisCfgTaskAndReq : axi4s.Config) extends Bundle {
-  assert((taskWidth + 14) < 512, "Task width is too large for the streaming interface in the RemoteTaskServer")
+class RemoteTaskServerIO(taskWidth: Int, axisCfgTaskAndReq : axi4s.Config, regBlock: RegisterBlock) extends Bundle {
+  //assert((taskWidth + 14) < 512, "Task width is too large for the streaming interface in the RemoteTaskServer")
   val s_axis_taskAndReq = axi4s.Slave(axisCfgTaskAndReq)
   val m_axis_taskAndReq = axi4s.Master(axisCfgTaskAndReq)
   val connNetwork_0 = Flipped(new SchedulerNetworkClientIO(taskWidth)) // Connection to the stealing Network
@@ -35,20 +39,47 @@ class RemoteTaskServerIO(taskWidth: Int, axisCfgTaskAndReq : axi4s.Config) exten
   val fpgaIndexInputReg = Input(UInt(8.W))
   val fpgaCountInputReg = Input(UInt(8.W))
   val numTasksToStealOrServe = Input(UInt(32.W))
+  val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
 }
 
 import HardCilk.globalFunctionIds
+
+
+// class taskRequestReplyType(taskWidth: Int) extends Bundle {
+//   val fpgaId = UInt(4.W)
+//   val taskId = UInt(4.W)
+//   val globalFunctionId = globalFunctionIds()
+//   val taskData = UInt(taskWidth.W)
+//   val isRequest = Bool()
+//   var paddingWidth = (512 - fpgaId.getWidth - taskId.getWidth - globalFunctionId.getWidth - taskData.getWidth - isRequest.getWidth)
+//   val padding_0 = UInt(paddingWidth.W) 
+//   assert(this.getWidth % 8 == 0, "taskRequestReplyType width must be multiple of 8 bits") 
+// }
+
+
 
 
 class taskRequestReplyType(taskWidth: Int) extends Bundle {
   val fpgaId = UInt(4.W)
   val taskId = UInt(4.W)
   val globalFunctionId = globalFunctionIds()
-  val taskData = UInt(taskWidth.W)
   val isRequest = Bool()
-  val padding = UInt((512 - fpgaId.getWidth - taskId.getWidth - globalFunctionId.getWidth - taskData.getWidth - isRequest.getWidth).W)  
-  assert(this.getWidth == 512, "taskRequestReplyType width must be 512 bits")
+  val taskData_lower = UInt((taskWidth / 2).W)
+  
+  val widths = fpgaId.getWidth + taskId.getWidth + globalFunctionId.getWidth + isRequest.getWidth + taskData_lower.getWidth
+
+  val padding_0 = UInt((512 - widths).W)
+
+  val fpgaId_ = UInt(4.W)
+  val taskId_ = UInt(4.W)
+  val globalFunctionId_ = globalFunctionIds()
+
+  val taskData_upper = UInt((taskWidth / 2).W)
+  val padding_1 = UInt((512-widths+1).W)
+
+  assert(this.getWidth == 1024, "taskRequestReplyType width must be multiple of 8 bits") 
 }
+
 
 // Problem Request forwarding is not working correctly.
 // Probable solution is to directly go from the demux to the arbiter if not serving remote
@@ -62,18 +93,51 @@ class RemoteTaskServer(
     maxNumnberToStealOrServe: Int = 256    
 ) extends Module {
 
-  val io = IO(new RemoteTaskServerIO(taskWidth, axisCfgTaskAndReq))
+  val regBlock = new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
+
+  val tasks_sent = RegInit(0.U(64.W))
+  val tasks_recevied = RegInit(0.U(64.W))
+  val requests_sent = RegInit(0.U(64.W))
+  val requests_accepted = RegInit(0.U(64.W))
+  val requests_forwarded = RegInit(0.U(64.W))
+  val self_requests_squished = RegInit(0.U(64.W))
+  val self_requests_reforwarded = RegInit(0.U(64.W))
+
+  regBlock.base(0x00)
+  regBlock.reg(tasks_sent, read = true, write = true, desc = "Number of tasks sent");
+  regBlock.reg(tasks_recevied, read = true, write = true, desc = "Number of tasks received");
+  regBlock.reg(requests_sent, read = true, write = true, desc = "Number of requests sent");
+  regBlock.reg(requests_accepted, read = true, write = true, desc = "Number of requests accepted");
+  regBlock.reg(requests_forwarded, read = true, write = true, desc = "Number of requests forwarded");
+  regBlock.reg(self_requests_squished, read = true, write = true, desc = "Number of self requests squished");
+  regBlock.reg(self_requests_reforwarded, read = true, write = true, desc = "Number of self requests reforwarded")
+
+  when(regBlock.rdReq) {
+    regBlock.rdOk()
+  }
+
+  when(regBlock.wrReq) {
+    regBlock.wrOk()
+  }
+
+
+  val io = IO(new RemoteTaskServerIO(taskWidth, axisCfgTaskAndReq, regBlock))
+
+  io.axi_mgmt.suggestName("S_AXI_MGMT")
+  io.axi_mgmt :=> regBlock.s_axil
 
 
   val servingRemote = RegInit(false.B)
 
 
+  val shiftedFpgaIndexInputReg = RegNext(io.fpgaIndexInputReg)
+
   // Instantiate a network reader and writer
   val readTaskFromNetwork = Module(new ReadTaskFromNetwork(taskWidth)).io
   val writeTaskToNetwork = Module(new WriteTaskToNetwork(taskWidth)).io
   writeTaskToNetwork.numTasksToStealOrServe := io.numTasksToStealOrServe
-  readTaskFromNetwork.fpgaId := io.fpgaIndexInputReg
-  writeTaskToNetwork.fpgaId := io.fpgaIndexInputReg
+  readTaskFromNetwork.fpgaId := shiftedFpgaIndexInputReg
+  writeTaskToNetwork.fpgaId := shiftedFpgaIndexInputReg
   readTaskFromNetwork.connNetwork <> io.connNetwork_0
   writeTaskToNetwork.connNetwork <> io.connNetwork_1
 
@@ -95,19 +159,24 @@ class RemoteTaskServer(
   val taskRequestingMaster = Wire(axi4s.Master(axisCfgTaskAndReq))
   val taskWaitingSlave = Wire(axi4s.Slave(axisCfgTaskAndReq))
   val flaggedByServingRemote = RegInit(false.B)
-  taskRequestingMaster.TDATA := 0.asUInt(512.W)
+  taskRequestingMaster.TDATA := 0.asUInt(axisCfgTaskAndReq.wData.W)
   taskRequestingMaster.TSTRB.get := 0.U
   taskRequestingMaster.TKEEP.get := 0.U
   taskRequestingMaster.TLAST.get := false.B
   taskRequestingMaster.asFull.valid := false.B
-  taskRequestingMaster.TDEST.get := ((io.fpgaIndexInputReg + 1.U) % io.fpgaCountInputReg) // Task request is always sent to the next FPGA
+  taskRequestingMaster.TDEST.get := ((shiftedFpgaIndexInputReg + 1.U) % io.fpgaCountInputReg) // Task request is always sent to the next FPGA
   taskWaitingSlave.asFull.ready := false.B
 
   // A queue to hold the tasks that are received from the remote FPGAs
   val queueForReceivingTasks = Module(new Queue(UInt(taskWidth.W), maxNumnberToStealOrServe))
   // Connect the queue slave to the taskWaitingSlave from the demux
   queueForReceivingTasks.io.enq.valid := taskWaitingSlave.TVALID
-  queueForReceivingTasks.io.enq.bits := taskWaitingSlave.TDATA.asTypeOf(new taskRequestReplyType(taskWidth)).taskData
+  
+  queueForReceivingTasks.io.enq.bits := Cat(taskWaitingSlave.TDATA.asTypeOf(new taskRequestReplyType(taskWidth)).taskData_upper,
+                                           taskWaitingSlave.TDATA.asTypeOf(new taskRequestReplyType(taskWidth)).taskData_lower) 
+  
+  //queueForReceivingTasks.io.enq.bits := taskWaitingSlave.TDATA.asTypeOf(new taskRequestReplyType(taskWidth)).taskData
+  
   taskWaitingSlave.TREADY := queueForReceivingTasks.io.enq.ready
 
   // Connect the queue master to the writeTaskToNetwork so that it reaches the local network
@@ -138,15 +207,30 @@ class RemoteTaskServer(
     
     // Create a request packet using the new taskRequestReplyType bundle
     val taskRequestPacket = Wire(new taskRequestReplyType(taskWidth))
-    taskRequestPacket.fpgaId := io.fpgaIndexInputReg(3,0)
+    
+    taskRequestPacket.fpgaId := shiftedFpgaIndexInputReg(3,0)
     taskRequestPacket.taskId := taskIndex.U(4.W)
     taskRequestPacket.globalFunctionId := globalFunctionIds.scheduler
-    taskRequestPacket.taskData := 0.U(taskWidth.W)
     taskRequestPacket.isRequest := true.B
-    taskRequestPacket.padding := 0.U
+    taskRequestPacket.padding_0 := 0.U
+
+
+    //taskRequestPacket.taskData := 0.U(taskWidth.W)
+
+    taskRequestPacket.fpgaId_ := shiftedFpgaIndexInputReg(3,0)
+    taskRequestPacket.taskId_ := taskIndex.U(4.W)
+    taskRequestPacket.globalFunctionId_ := globalFunctionIds.scheduler
+    taskRequestPacket.taskData_lower := 0.U(taskWidth.W)
+    taskRequestPacket.taskData_upper := 0.U(taskWidth.W)
+    taskRequestPacket.padding_1 := 0.U
+    
     taskRequestingMaster.TDATA := taskRequestPacket.asUInt
+    taskRequestingMaster.TLAST.get := true.B
+    taskRequestingMaster.TSTRB.get := "hFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".U
+    taskRequestingMaster.TKEEP.get := "hFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".U
+
    
-    taskRequestingMaster.TDEST.get := ((io.fpgaIndexInputReg + 1.U) % io.fpgaCountInputReg) // Task request is always sent to the next FPGA
+    //taskRequestingMaster.TDEST.get := ((shiftedFpgaIndexInputReg + 1.U) % io.fpgaCountInputReg) // Task request is always sent to the next FPGA
     when(taskRequestingMaster.TREADY) {
       requestSent := true.B
     }
@@ -183,7 +267,7 @@ class RemoteTaskServer(
   val fetchLocalNetwork = RegInit(false.B)
   val servingCount = RegInit(0.U(32.W))
   val taskServingMaster = Wire(axi4s.Master(axisCfgTaskAndReq))
-  taskServingMaster.TDATA := 0.asUInt(512.W)
+  taskServingMaster.TDATA := 0.asUInt(axisCfgTaskAndReq.wData)
   taskServingMaster.TSTRB.get := 0.U
   taskServingMaster.TKEEP.get := 0.U
   taskServingMaster.TLAST.get := false.B
@@ -193,7 +277,7 @@ class RemoteTaskServer(
 
   val fpgaToServe = RegInit(0.U(8.W))
 
-  val queueForSendingTasks = Module(new Queue(UInt(512.W), maxNumnberToStealOrServe))
+  val queueForSendingTasks = Module(new Queue(UInt(taskWidth.W), maxNumnberToStealOrServe))
   // Connect the enq of the queue to readTaskFromNetwork
   queueForSendingTasks.io.enq.valid := readTaskFromNetwork.m_axis_task.valid
   queueForSendingTasks.io.enq.bits := readTaskFromNetwork.m_axis_task.bits
@@ -205,16 +289,27 @@ class RemoteTaskServer(
 
   // pack the tak reply using the new taskRequestReplyType bundle
   val taskReplyPacket = Wire(new taskRequestReplyType(taskWidth))
-  taskReplyPacket.fpgaId := io.fpgaIndexInputReg(3,0)
+  taskReplyPacket.fpgaId := shiftedFpgaIndexInputReg(3,0)
   taskReplyPacket.taskId := taskIndex.U(4.W)
   taskReplyPacket.globalFunctionId := globalFunctionIds.scheduler
-  taskReplyPacket.taskData := queueForSendingTasks.io.deq.bits
   taskReplyPacket.isRequest := false.B
-  taskReplyPacket.padding := 0.U
+  taskReplyPacket.padding_0 := 0.U
+
+  //taskReplyPacket.taskData := queueForSendingTasks.io.deq.bits
+
+  taskReplyPacket.fpgaId_ := shiftedFpgaIndexInputReg(3,0)
+  taskReplyPacket.taskId_ := taskIndex.U(4.W)
+  taskReplyPacket.globalFunctionId_ := globalFunctionIds.scheduler
+  taskReplyPacket.taskData_lower := queueForSendingTasks.io.deq.bits(taskWidth/2 - 1, 0)
+  taskReplyPacket.taskData_upper := queueForSendingTasks.io.deq.bits(taskWidth - 1, taskWidth/2) 
+  taskReplyPacket.padding_1 := 0.U
 
   // Now the data should be comproised of taskIndex, taskData, and the fact that this is a valid data
   taskServingMaster.TDATA := taskReplyPacket.asUInt
   taskServingMaster.TDEST.get := fpgaToServe
+  taskServingMaster.TLAST.get := true.B
+  taskServingMaster.TSTRB.get := "hFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".U
+  taskServingMaster.TKEEP.get := "hFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".U
 
 
   // Count the fires of the taskServeingMaster
@@ -234,8 +329,8 @@ class RemoteTaskServer(
   cycles_counter := cycles_counter + 1.U
   when(cycles_counter === 1000000.U) {
     printf("_______\n")
-    printf("FPGA ID %d, taskID %d: Tasks recieved from remote: %d\n", io.fpgaIndexInputReg, taskIndex.U, fires_counter_listener)
-    printf("FPGA ID %d, taskID %d: Tasks sent to remote: %d\n", io.fpgaIndexInputReg, taskIndex.U, fires_counter)
+    printf("FPGA ID %d, taskID %d: Tasks recieved from remote: %d\n", shiftedFpgaIndexInputReg, taskIndex.U, fires_counter_listener)
+    printf("FPGA ID %d, taskID %d: Tasks sent to remote: %d\n", shiftedFpgaIndexInputReg, taskIndex.U, fires_counter)
     printf("_______\n")
     cycles_counter := 0.U
   }
@@ -250,11 +345,12 @@ class RemoteTaskServer(
   // Listen to see if there is a request
   when(servingRemote && !activelyServing) {
     taskRequestListener.asFull.ready := true.B
+
+    // #TODO fix here somehow!
     when(taskRequestListener.asFull.valid) {
       // TDATA from 512 - 4 till 512-12 is the fpga index
-      fpgaToServe := taskRequestListener.asTypeOf(new taskRequestReplyType(taskWidth)).fpgaId
+      fpgaToServe := taskRequestListener.TDATA.asTypeOf(new taskRequestReplyType(taskWidth)).fpgaId
       activelyServing := true.B
-
     }.elsewhen(!io.serveRemote) {
       servingRemote := false.B // fall back if there was no request and the serveRemote is low
     }
@@ -292,7 +388,7 @@ class RemoteTaskServer(
 
   //val s_axis_taskAndReqMarked = Wire(Irrevocable(new chext.amba.axi4s.FullChannel(io.s_axis_taskAndReq.cfg)))
 
-  val s_axis_taskAndReqMarked = Wire(Irrevocable(new chext.amba.axi4s.FullChannel(io.s_axis_taskAndReq.cfg.copy(wData = 520))))
+  val s_axis_taskAndReqMarked = Wire(Irrevocable(new chext.amba.axi4s.FullChannel(io.s_axis_taskAndReq.cfg.copy(wData = 8 + new taskRequestReplyType(taskWidth).getWidth))))
 
   new elastic.Arrival(io.s_axis_taskAndReq.asFull, s_axis_taskAndReqMarked) {
     protected def onArrival: Unit = {
@@ -307,10 +403,10 @@ class RemoteTaskServer(
     override def onFork(): Unit = {
       // Create a wire to hold the parsed packet
       val taskRequest = Wire(new taskRequestReplyType(taskWidth))
-      taskRequest := in.data(511, 0).asTypeOf(new taskRequestReplyType(taskWidth))
+      taskRequest := in.data(new taskRequestReplyType(taskWidth).getWidth - 1, 0).asTypeOf(new taskRequestReplyType(taskWidth))
 
       val isRequest = taskRequest.isRequest 
-      val isSelfRequest = (taskRequest.fpgaId === io.fpgaIndexInputReg) && isRequest
+      val isSelfRequest = (taskRequest.fpgaId === shiftedFpgaIndexInputReg) && isRequest
 
       val isServingRemote = in.data.dropMsbN(7).msbN(1).asBool
       val isActivelyServing = in.data.dropMsbN(6).msbN(1).asBool
@@ -345,20 +441,51 @@ class RemoteTaskServer(
     protected def onTransform: Unit = {
       out.data := in.data
       out.dest.get := (in.dest.get + 1.U) % io.fpgaCountInputReg
-      out.keep := in.keep
-      out.last := in.last
-      out.strobe := in.strobe
+      out.keep := Fill(out.keep.getWidth, 1.U(1.W))
+      out.strobe := Fill(out.strobe.getWidth, 1.U(1.W))
+      out.last := true.B
     }
   }
 
+  when(taskServingMaster.asFull.fire){
+    tasks_sent := tasks_sent + 1.U
+  }
+
+  when(taskWaitingSlave.asFull.fire){
+    tasks_recevied := tasks_recevied + 1.U
+  }
+
+  when(taskRequestingMaster.asFull.fire){
+    requests_sent := requests_sent + 1.U
+  }
+
+  when(taskRequestListener.asFull.fire){
+    requests_accepted := requests_accepted + 1.U
+  }
+
+  when(requestForwardSlave.asFull.fire){
+    requests_forwarded := requests_forwarded + 1.U
+  }
+
+  when(requestForwardSlaveSupressSelfRequest.asFull.fire){
+    self_requests_squished := self_requests_squished + 1.U
+  }
+
+  when(requestForwardSlave.asFull.fire && requestForwardSlave.TDATA.asTypeOf(new taskRequestReplyType(taskWidth)).fpgaId === shiftedFpgaIndexInputReg){
+    self_requests_reforwarded := self_requests_reforwarded + 1.U
+  }
 
   // Log request generation and request subression
   when(taskRequestingMaster.asFull.valid) {
-    printf("TIME %d, FPGA ID %d, packet FPGAID %d: Request generated\n", cycles_counter, io.fpgaIndexInputReg, taskRequestingMaster.TDATA(511 - 4, 511 - 11))
+    printf("TIME %d, FPGA ID %d, packet FPGAID %d: Request generated\n", cycles_counter, shiftedFpgaIndexInputReg, taskRequestingMaster.TDATA(new taskRequestReplyType(taskWidth).getWidth - 1 - 4, new taskRequestReplyType(taskWidth).getWidth - 1 - 11))
   }
 
   when(requestForwardSlaveSupressSelfRequest.asFull.valid) {
-    printf("TIME %d, FPGA ID %d, packet FPGAID %d: Request subpressed\n", cycles_counter, io.fpgaIndexInputReg, requestForwardSlaveSupressSelfRequest.TDATA(511 - 4, 511 - 11))
+    printf("TIME %d, FPGA ID %d, packet FPGAID %d: Request subpressed\n", cycles_counter, shiftedFpgaIndexInputReg, requestForwardSlaveSupressSelfRequest.TDATA(new taskRequestReplyType(taskWidth).getWidth - 1 - 4, new taskRequestReplyType(taskWidth).getWidth - 1 - 11))
   }
+
+  io.m_axis_taskAndReq.asFull.bits.last := true.B
+  io.m_axis_taskAndReq.asFull.bits.keep := Fill(io.m_axis_taskAndReq.asFull.bits.keep.getWidth, 1.U(1.W))
+  io.m_axis_taskAndReq.asFull.bits.strobe := Fill(io.m_axis_taskAndReq.asFull.bits.strobe.getWidth, 1.U(1.W))
 
 }
