@@ -350,27 +350,32 @@ class HardCilk(
 
   private def exportPEControl(peMap: Map[String, Seq[VitisWriteBufferModule]]): Unit = {
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
-      if (task.hasAXI && peMap.contains(task.name)) {
-        val peArray = peMap(task.name)
-        for (i <- 0 until task.numProcessingElements) {
-          val pe = peArray(i)
-          val peName = f"${task.name}_${i}"
-          val pes_axi_control = IO(
-            chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface])
-          ).suggestName(f"${peName}_s_axi_control")
+      try {
+        if (task.hasAXI && peMap.contains(task.name)) {
+          val peArray = peMap(task.name)
+          for (i <- 0 until task.numProcessingElements) {
+            val pe = peArray(i)
+            val peName = f"${task.name}_${i}"
+            val pes_axi_control = IO(
+              chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface])
+            ).suggestName(f"${peName}_s_axi_control")
 
-          interfaceBuffer.addOne(
-            hdlinfo.Interface(
-              f"${peName}_s_axi_control",
-              hdlinfo.InterfaceRole.slave,
-              hdlinfo.InterfaceKind("axi4"),
-              "clock", "reset",
-              Map("config" -> hdlinfo.TypedObject(pes_axi_control.cfg))
+            interfaceBuffer.addOne(
+              hdlinfo.Interface(
+                f"${peName}_s_axi_control",
+                hdlinfo.InterfaceRole.slave,
+                hdlinfo.InterfaceKind("axi4"),
+                "clock", "reset",
+                Map("config" -> hdlinfo.TypedObject(pes_axi_control.cfg))
+              )
             )
-          )
-          pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
-          interfacesAxiControl.addOne(pes_axi_control)
+            pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+            interfacesAxiControl.addOne(pes_axi_control)
+          }
         }
+      }
+      catch {
+        case _: Exception => print(s"Module has no s_axi_control port, skip") // Module has no s_axi_control port, skip
       }
     }
   }
