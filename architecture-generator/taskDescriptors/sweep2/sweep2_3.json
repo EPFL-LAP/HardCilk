@@ -3,7 +3,7 @@
     "taskDescriptors": [
         {
             "name": "paper_exp2_task0",
-            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp2",
+            "peHDLPath": "../simulation-models/paper_exp2",
             "isRoot": true,            
             "isCont": false,
             "dynamicMemAlloc": false,
@@ -26,7 +26,7 @@
         },
         {
             "name": "paper_exp2_task1",
-            "peHDLPath": "/home/shahawy/repos/EPFL-LAP/HardCilk/simulation-models/paper_exp2",
+            "peHDLPath": "../simulation-models/paper_exp2",
             "isRoot": false,            
             "isCont": false,
             "dynamicMemAlloc": false,

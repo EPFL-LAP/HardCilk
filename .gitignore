@@ -128,3 +128,4 @@
 hw_handoff
 ipshared
 **/hdl/*
+scripts/results/*
