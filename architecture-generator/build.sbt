@@ -5,22 +5,20 @@ ThisBuild / version := "0.1.0"
 ThisBuild / organization := "epfl-lap"
 
 val chiselVersion = "6.0.0"
-val chiseltestVersion = "6.0-SNAPSHOT"
+val chiseltestVersion = "6.0.0"
 val circeVersion = "0.14.1"
 
-val firrtlVersion = "6.0-SNAPSHOT"
+//val firrtlVersion = "6.0-SNAPSHOT"
 
 lazy val root = (project in file("."))
   .settings(
     name := "hardcilk",
     libraryDependencies ++= Seq(
       "org.chipsalliance" %% "chisel" % chiselVersion,
-      "edu.berkeley.cs" %% "firrtl2" % firrtlVersion,
       "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
       "com.typesafe.play" %% "play-json" % "2.9.2",
       "hdlstuff" %% "chext" % "0.1.1",
       "hdlstuff" %% "hdlinfo" % "0.1.0",
-      "hdlstuff" %% "chict" % "0.1.0",
       "com.github.scopt" %% "scopt" % "4.1.0"
     ) ++ Seq(
       "io.circe" %% "circe-core",

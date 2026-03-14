@@ -15,7 +15,6 @@ import SoftwareUtil._
 import chext.amba.axi4
 import axi4.Ops._
 import axi4.lite.components._
-import chict.ict_segm._
 
 import io.circe.syntax._
 import io.circe.generic.auto._
@@ -467,8 +466,8 @@ object MfpgaHardCilkEmitter extends App {
         }
 
         // softlink "ln -s repos/jnbrq/sysc-switch/include/sysc_netw/" to "outputDirPathSC/projects/${jsonName}/include/sysc_netw"
-        val syscSwitchPath =
-          "/home/shahawy/repos/jnbrq/sysc-switch/include/sysc_netw/"
+        val home = sys.env("HOME")
+        val syscSwitchPath = s"$home/HardCilk/simulation-models/sysc-switch-main/include/sysc_netw/"
         // "/repos/jnbrq/sysc-switch/include/sysc_netw"
         val syscSwitchDestination =
           s"$outputDirPathSC/projects/${internalName}/include/sysc_netw"
@@ -546,10 +545,12 @@ object mFPGAEntry extends App {
     Array[String](
       "taskDescriptors/paper_exp1.json",
       "-o",
-      "output",
+      "output/",
       "-r",
       "32",
-      "-a"
+      "-a",
+      "-q", // // original project
+      "paper_exp1" // original project
     )
   )
 }

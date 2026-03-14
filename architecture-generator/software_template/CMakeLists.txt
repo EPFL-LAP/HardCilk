@@ -20,13 +20,6 @@ endif()
 
 set(HC_ENABLE_PCIE_TARGETS OFF)
 
-if(NOT DEFINED HC_ENABLE_PCIE_TARGETS)
-    set(
-        HC_ENABLE_PCIE_TARGETS ON
-        CACHE BOOL
-        "Enables SystemC targets, requires sctlm, verilator, and SystemC."
-    )
-endif()
 
 if (NOT DEFINED HC_NO_FMT)
     set(
@@ -48,5 +41,4 @@ if (NOT HC_NO_FMT)
 endif()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/driver)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/svm/software)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/projects)

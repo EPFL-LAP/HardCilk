@@ -13,7 +13,6 @@ import SoftwareUtil._
 import chext.amba.axi4
 import axi4.Ops._
 import axi4.lite.components._
-import chict.ict_segm._
 
 import io.circe.syntax._
 import io.circe.generic.auto._

@@ -8,7 +8,23 @@ import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
 import matplotlib.cm as cm
 
-directory = "results/sweep1/"
+import sys
+import os
+
+if len(sys.argv) < 2:
+    print("Usage: python script.py <parent_directory>")
+    sys.exit(1)
+
+parent_dir = sys.argv[1]
+
+# Expand ~ and environment variables just in case
+parent_dir = os.path.expandvars(os.path.expanduser(parent_dir))
+
+print(f"Parent directory of simulation results: {parent_dir}")
+
+
+
+directory = parent_dir + "/sweep1/"
 
 # Read the files in the directory
 files = os.listdir(directory)
@@ -97,7 +113,7 @@ sweep_1_4_64 = sweep_map[(4,64)]
 sweep_1_4_128 = sweep_map[(4,128)]
 
 
-directory = "results/sweep2/"
+directory = parent_dir + "/sweep2/"
 
 # Read the files in the directory
 files = os.listdir(directory)
@@ -191,7 +207,7 @@ sweep_2_4_64 = np.array(single_pe) / 128 / np.array(sweep_map[(4,64)]) * 100
 sweep_2_4_128 = np.array(single_pe) / 128 / np.array(sweep_map[(4,128)]) * 100
 
 
-directory = "results/sweep3/"
+directory = parent_dir + "/sweep3/"
 
 # Read the files in the directory
 files = os.listdir(directory)
