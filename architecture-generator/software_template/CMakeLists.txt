@@ -3,31 +3,9 @@ set(CMAKE_CXX_STANDARD 20)
 
 project(hardcilk)
 
-set(HC_VERILATOR_ARGS --no-timing --timescale 1ns/1ps -Wno-WIDTHEXPAND -Wno-STMTDLY -Wno-WIDTHTRUNC -Wno-WIDTHXZEXPAND -Wno-ASCRANGE -Wno-CASEINCOMPLETE -Wno-COMBDLY -Wno-PINMISSING --trace)
-set(HC_SYSTEMC_COMPILE_DEFINITIONS VERILATED_TRACE_ENABLED)
-
-# add more variables
-# maybe make these variables overridable
-
 
 set(HC_ENABLE_SYSTEMC_TARGETS OFF)
 set(HC_ENABLE_PCIE_TARGETS OFF)
-
-if(NOT DEFINED HC_ENABLE_SYSTEMC_TARGETS)
-    set(
-        HC_ENABLE_SYSTEMC_TARGETS ON
-        CACHE BOOL
-        "Enables SystemC targets, requires sctlm, verilator, and SystemC."
-    )
-endif()
-
-if(NOT DEFINED HC_ENABLE_PCIE_TARGETS)
-    set(
-        HC_ENABLE_PCIE_TARGETS ON
-        CACHE BOOL
-        "Enables SystemC targets, requires sctlm, verilator, and SystemC."
-    )
-endif()
 
 if(NOT DEFINED HC_ENABLE_XRT_TARGETS)
     set(
@@ -57,5 +35,4 @@ if (NOT HC_NO_FMT)
 endif()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/driver)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/svm/software)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/projects)
