@@ -1,6 +1,6 @@
 #pragma once
 
-#include <hardCilkDriver.h>
+#include <mFpgaHardCilkDriver.h>
 #include <stdio.h>
 #include <graph.h>
 #include <chrono>
@@ -33,6 +33,7 @@ struct vertex_map_args {
   uint32_t __padding;
 };
 
+
 bool condition(int32_t val)
 {
     return val == 1;
@@ -42,26 +43,28 @@ bool condition(int32_t val)
 class triangleCountDriver : public mFpgaHardCilkDriver
 {
 public:
-    triangleCountDriver(std::vector<Memory *> memories, const std::string &graph_file) : mFpgaHardCilkDriver(memories) {}
+    std::string graph_file_;
+    triangleCountDriver(std::vector<Memory *> memories, const std::string &graph_file) : mFpgaHardCilkDriver(memories), graph_file_(graph_file) {}
 
     int run_test_bench_mFpga() override
     {
+
+        memories_[0]->allocateMemFPGA(4096, 512);
+        memories_[1]->allocateMemFPGA(4096, 512);
+
         triangle_args triangle_args_0 = {0, 0, 0, 0, 0};
         uint64_t addr = memories_[0]->allocateMemFPGA(sizeof(triangle_args_0), 512);
 
+        // Dummy allocation to align
+        memories_[1]->allocateMemFPGA(sizeof(triangle_args_0), 512);
 
-        //Graph g("/home/shahawy/graphs/single_triangle.txt", false);
-        //Graph g("/home/shahawy/graphs/two_triangles.txt", false);
-        //Graph g("/home/shahawy/opencilk_ws/benchmarks/triangle/example_graph.txt", false);
-        //Graph g("/home/shahawy/congress_network/congress.edgelist", false);
-        Graph g("/home/shahawy/graphs/congress_r.txt", false);
-        //Graph g("/home/shahawy/graphs/testingChisel.txt", false);
-        //Graph g("/home/shahawy/graphs/email-EuAll.txt", false);
-        //Graph g("/home/shahawy/graphs/soc-LiveJournal1.txt", false);
-        
+
+        Graph g(graph_file_, false);
+
         Graph directed;
 
         filterGraph(g, directed, filterEdge);
+        //directed.printGraph();
 
 
 
@@ -80,6 +83,10 @@ public:
 
             uint64_t lists_base_addr = memories_[0]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
             memories_[0]->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+            
+            // Copy data to both fpgas
+            memories_[1]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
+            memories_[1]->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
 
             // log lists_base_addr and totalSize and end address of the lists
             printf("lists_base_addr: %lx, totalSize: %d, end address of the lists: %lx\n", lists_base_addr, totalSize, lists_base_addr + totalSize * sizeof(uint32_t));
@@ -94,6 +101,9 @@ public:
             }
             auto list_addr = memories_[0]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
             memories_[0]->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
+
+            memories_[1]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
+            memories_[1]->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
         // End of copying the graph data to the FPGA
 
 

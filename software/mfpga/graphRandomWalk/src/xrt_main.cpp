@@ -4,18 +4,29 @@
 #include <experimental/xrt_ip.h>
 #include <string>
 
-#include <netLayer.hpp>
+
+#include <vnx/cmac.hpp>
+#include <vnx/networklayer.hpp>
+#include <xrt/xrt_device.h>
+#include <json/json.h>
 
 
-static AlveoLink::common::FPGA fpga_card; // single FPGA
-static AlveoLink::network_roce_v2::NetLayer<2> l_netLayer; // network layer for 2 ports
+#define FPGA_COUNT 2
 
 
+ 
 // main parses args
 int main(int argc, char* argv[])
 {
 
-     assert(argc == 4);
+    xrt::device fpga_card[FPGA_COUNT]; 
+    xrt::uuid  uuids[FPGA_COUNT];
+    //vnx::Networklayer networkLayers[FPGA_COUNT];
+    //std::vector<vnx::Networklayer> networkLayers;
+    std::vector<vnx::CMAC> cmacs;
+    // vnx::CMAC cmacs[FPGA_COUNT];
+
+    assert(argc == 4);
      
     // The first argument is the pass to the xclbin
     std::string xclbin_path = argv[1];
@@ -24,64 +35,102 @@ int main(int argc, char* argv[])
 
     std::string graph_file = argv[2];
 
-    int enable_alveo_link = atoi(argv[3]);
+    int enable_VNx = atoi(argv[3]);
 
-    fpga_card.setId(0);
-    fpga_card.load_xclbin(xclbin_path);
-
-
-
-    // load the xclbin to the fpga
-    auto device = fpga_card.getDevice();
-    auto uuid = fpga_card.getUUID();
-
-    auto pr0_name = "pageRank:{pageRank_0}";
-    auto pr1_name = "pageRank:{pageRank_1}";
-
-    if(enable_alveo_link){
-        l_netLayer.init(&fpga_card);
-        for (auto j = 0u; j < 2u; ++j) {
-            l_netLayer.setIPSubnet(j, 0x0000a8c0);      // setting the IP subnet for HiveNet
-            l_netLayer.setMACSubnet(j, 0x347844332211); // setting the MAC subnet for HiveNet
-            l_netLayer.setID(j, j);                 // set HiveNet ID for each port (1 and 2)
-            l_netLayer.setVlanPFC(j, false);            // VLAN off by default
-        }
-        //// // Enable RS-FEC and flow control per port
-        for (auto j = 0u; j < 2u; ++j) {
-            std::cout << "INFO: turn on RS_FEC and configuring flow control for port " << j << std::endl;
-            l_netLayer.turnOn_RS_FEC(j, true);
-            l_netLayer.turnOn_flow_control(j, true);
-        }
-        // // Wait for both links to come up
-        unsigned int linksUpCount = 0;
-        while (linksUpCount < 1) {
-            std::cout << "INFO: Waiting for links up (" << linksUpCount << " of 1)\n";
-            if (l_netLayer.linksUp()) {
-                linksUpCount +=1;
-            } else {
-                sleep(1);
-            }
-        }
-        pr0_name = "pageRank_0:{pageRank_0}";
-        pr1_name = "pageRank_1:{pageRank_1}";
+    for (int i = 0; i < FPGA_COUNT; i++) {
+        fpga_card[i] = xrt::device(i); 
+        uuids[i] = fpga_card[i].load_xclbin(xclbin_path);
+        //networkLayers.push_back(vnx::Networklayer(xrt::ip(fpga_card[i], uuids[i], "networklayer:{networklayer_0}")));
+        cmacs.push_back(vnx::CMAC(xrt::ip(fpga_card[i], uuids[i], "cmac_0")));
     }
 
+	sleep(1);
+
+    auto pr0_name = "graphRandomWalk_0:{graphRandomWalk_0}";
 
 
-    auto pageRank_0 = xrt::ip(device, uuid, pr0_name);
-    auto pageRank_1 = xrt::ip(device, uuid, pr1_name);
 
+    if(enable_VNx){
+
+        for (auto i=0; i<FPGA_COUNT; ++i) {
+            // Enable rsfec if necessary
+            cmacs[i].set_rs_fec(true);
+            cmacs[i].send_init_packets();
+
+        }
+
+        for (auto i=0; i<FPGA_COUNT; ++i) {
+            bool link_status;
+            // Can take a few tries before link is ready.
+            for (std::size_t j = 0; j < 5; ++j) {
+                auto status = cmacs[i].link_status();
+                link_status = status["rx_status"];
+                if (link_status) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            std::cout << "Link interface " << i << ": "
+                    << (link_status ? "true" : "false") << std::endl;
+            std::cout << "RS-FEC enabled: " << (cmacs[i].get_rs_fec() ? "true" : "false")
+                    << std::endl;
+        }
+
+        sleep(10);
+        for (auto i=0; i<FPGA_COUNT; ++i) {
+            cmacs[i].stop_init_packets();
+            cmacs[i].set_flow_control();
+        }
+        sleep(10);
+        
+     
+
+        for (auto i=0; i<FPGA_COUNT; ++i) {
+            std::map<std::string, bool> status = cmacs[i].link_status();
+            for (auto entry : status) {
+                std::cout << "Entry: " << entry.first << " Value: " << entry.second << std::endl;
+            }
+        }
+
+
+    }
+    sleep(1);
+
+
+
+    auto graphRandomWalk_0= xrt::ip(fpga_card[0], uuids[0], pr0_name);
+
+
+
+    auto graphRandomWalk_1 = xrt::ip(fpga_card[1], uuids[1], pr0_name);
+
+  
 
     std::vector<Memory *> memories_;
 
-    auto memory_0 = XRTMemory(device, pageRank_0);
-    auto memory_1 = XRTMemory(device, pageRank_1);
+    auto memory_0 = XRTMemory(fpga_card[0], graphRandomWalk_0);
+    auto memory_1 = XRTMemory(fpga_card[1], graphRandomWalk_1);
 
     memories_.push_back(&memory_0);
     memories_.push_back(&memory_1);
     
 
-    pageRankDriver driver(memories_, graph_file);
+
+    graphRandomWalkDriver driver(memories_, graph_file);
     driver.run_test_bench_mFpga();
+
+    for(int i = 0; i < FPGA_COUNT; i++){
+        auto stats = cmacs[i].statistics(true);
+        std::cout << "Stat TX CMAC:" << i << std::endl;
+        for (auto entry : stats.tx) {
+            std::cout << entry.first << ": " << entry.second << std::endl;
+        }
+        std::cout << "Stat RX CMAC:" << i << std::endl;
+        for (auto entry : stats.rx) {
+            std::cout << entry.first << ": " << entry.second << std::endl;
+        }
+        std::cout << "Cycle Count: " << stats.cycle_count << std::endl;
+    }
+
     return 0;
 }
