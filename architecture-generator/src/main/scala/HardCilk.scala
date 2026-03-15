@@ -112,12 +112,14 @@ class HardCilk(
   // This call now invokes the method from the HasHBMInterconnect trait
   buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, spawnNextWBMap, sendArgumentWBMap, remoteStreamToMemMap)
 
-  exportPEControl(peMap)
-  generateHdlInfo()
-
   if(fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth){
     buildMfpgaConnections()
   }
+
+  exportPEControl(peMap)
+  generateHdlInfo()
+
+
 
 
   // --- Private Helper Methods for Initialization ---
