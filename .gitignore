@@ -132,3 +132,12 @@ ipshared
 
 hls-kernel-output
 hls_projects
+xup_vitis_network_example
+xrt-projects/*/*packaged_*
+xrt-projects/*/*reports*
+xrt-projects/*/*tmp*
+xrt-projects/*/*xo*
+xrt-projects/*/*build*
+
+xrt-projects/*/*_x_temp.*
+
