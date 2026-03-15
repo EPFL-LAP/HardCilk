@@ -4,6 +4,83 @@ import _root_.circt.stage.ChiselStage
 import Descriptors._
 import HardCilk.HardCilk
 
+import java.nio.file.{Files, Paths}
+import scala.util.matching.Regex
+
+object VerilogResetConverter {
+
+  /** Converts active-high `reset` to active-low `reset_n` in the top-level
+    * module declaration of a generated Verilog file.
+    *
+    * Specifically, for the named module it:
+    *   1. Replaces `input reset;` → `input reset_n;\n\twire reset = ~reset_n;`
+    *   2. Replaces `input reset,` → `input reset_n,` in the port list header
+    *
+    * All internal uses of `reset` are left untouched — the `wire reset = ~reset_n`
+    * handles them transparently.
+    *
+    * @param verilogPath  Path to the .sv / .v file to modify in-place
+    * @param moduleName   Name of the top-level module to patch (others untouched)
+    */
+  def convertToActivelow(verilogPath: String, moduleName: String): Unit = {
+    val path    = Paths.get(verilogPath)
+    val content = new String(Files.readAllBytes(path))
+
+    val patched = patchModule(content, moduleName)
+
+    if (patched != content) {
+      Files.write(path, patched.getBytes)
+      println(s"[VerilogResetConverter] Patched active-low reset in: $verilogPath")
+    } else {
+      println(s"[VerilogResetConverter] WARNING: No reset port found in module '$moduleName' in $verilogPath")
+    }
+  }
+
+  /** Core transformation — operates on the string, returns patched string. */
+  private def patchModule(content: String, moduleName: String): String = {
+
+    // ── Locate the target module's body ──────────────────────────────────────
+    // We find `module <name> (` and then scan forward to `endmodule`,
+    // only patching within that span so submodules are untouched.
+    val moduleStart = findModuleStart(content, moduleName)
+    if (moduleStart < 0) return content
+
+    val moduleEnd = content.indexOf("endmodule", moduleStart)
+    if (moduleEnd < 0) return content
+
+    val before = content.substring(0, moduleStart)
+    val body   = content.substring(moduleStart, moduleEnd)
+    val after  = content.substring(moduleEnd)
+
+    // ── Two patterns to handle both port-list and declaration forms ───────────
+
+    // Pattern 1: standalone declaration  →  `\tinput reset;\n`
+    // Replace with declaration + wire alias on the next line
+    val declPattern: Regex = """(\tinput reset;)""".r
+    val bodyAfterDecl = declPattern.replaceFirstIn(
+      body,
+      "\tinput reset_n;\n\twire reset = ~reset_n;"
+    )
+
+    // Pattern 2: port list entry  →  `\treset,\n`  (the bare name in the header)
+    // Chisel emits the port *name* in the port list at the top, then declares
+    // it below. The port-list line looks like just `\treset,`
+    val portListPattern: Regex = """(\treset,\n)""".r
+    val bodyPatched = portListPattern.replaceFirstIn(
+      bodyAfterDecl,
+      "\treset_n,\n"
+    )
+
+    before + bodyPatched + after
+  }
+
+  /** Returns the character index of `module <name>` in content, or -1. */
+  private def findModuleStart(content: String, moduleName: String): Int = {
+    val needle = s"module $moduleName ("
+    val idx    = content.indexOf(needle)
+    idx
+  }
+}
 
 object HardCilkEmitterUtil {
 
@@ -115,6 +192,8 @@ object HardCilkEmitterUtil {
     } else {
       println(s"Error: File $svFilePath does not exist.")
     }
+
+    VerilogResetConverter.convertToActivelow(vFilePath, systemDescriptor.name)
 
     numHbmPortExports
   }
