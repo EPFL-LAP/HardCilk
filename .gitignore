@@ -129,3 +129,6 @@
 hw_handoff
 ipshared
 **/hdl/*
+
+hls-kernel-output
+hls_projects
