@@ -141,3 +141,4 @@ xrt-projects/*/*build*
 
 xrt-projects/*/*_x_temp.*
 HardCilk-output
+xclbin-workspace
