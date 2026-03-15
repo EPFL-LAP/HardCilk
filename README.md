@@ -1,13 +1,35 @@
-# This branch includes the development of the open source code corresponding to the FCCM'24 paper "HardCilk: Cilk-like Task Parallelism for FPGAs" 
+# FCCM'26 (NetCilk) — Hardware Artifact
 
-You can find the paper [here](https://www.epfl.ch/labs/lap/wp-content/uploads/2024/05/ShahawyMay24-HardCilk-Cilk-like-Task-Parallelism-for-FPGAs-FCCM.pdf).
-You can find the conference presentation video [here](https://youtu.be/1EjEUD5sPpg).
+## Platform Support
 
+Ubuntu 24.04 (x86_64)
 
-# You need to install using cmake, python, and sbt the following libraries for development
+---
 
-> https://github.com/hdlstuff/hdlinfo
-> https://github.com/hdlstuff/chext
-> https://github.com/hdlstuff/sctlm
-> https://github.com/hdlstuff/hdlscw
+## Getting Started
 
+### Prerequisites
+
+- Python 3.13
+
+### Install Dependencies
+
+Clone the repository and run the installer — it will set up all required tools and libraries into a self-contained environment:
+
+```bash
+git clone --recursive https://github.com/Mahfouz-z/hdlstuff.git
+cd hdlstuff
+python3 ubuntu-24.04-x86_64.py
+```
+
+Once installed, activate the environment before proceeding with any of the steps below:
+
+```bash
+source ~/.local/opt/hdlstuff/bin/activate-hdlstuff.sh
+```
+
+---
+
+## Reproducing the Paper Results
+
+### 1. Circuit Generation

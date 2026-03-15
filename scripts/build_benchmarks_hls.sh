@@ -50,7 +50,7 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die()     { error "$*"; exit 1; }
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-WORKSPACE="/home/shahawy/mfpga_ws/HardCilk"
+WORKSPACE="../"
 DEFAULT_PE_ROOT="${WORKSPACE}/hls-processing-elements"
 DEFAULT_OUT_ROOT="${WORKSPACE}/hls-kernel-output"
 DEFAULT_FREQ=250

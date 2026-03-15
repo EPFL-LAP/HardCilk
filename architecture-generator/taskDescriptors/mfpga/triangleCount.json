@@ -25,7 +25,7 @@
       "isRoot": true,
       "name": "triangle",
       "numProcessingElements": 1,
-      "peHDLPath": "/beta/shahawy/mfpga_ws/benchmarks/triangleCount/HLS/triangle/triangle/hls/syn/verilog",
+      "peHDLPath": "../hls-kernel-output/triangleCount/triangle",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -56,7 +56,7 @@
       "isRoot": false,
       "name": "vertex_map",
       "numProcessingElements": 8,
-      "peHDLPath": "/beta/shahawy/mfpga_ws/benchmarks/triangleCount/HLS/vertex_map/vertex_map/hls/syn/verilog",
+      "peHDLPath": "../hls-kernel-output/triangleCount/vertex_map",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
