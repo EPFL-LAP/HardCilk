@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root versionMajor="1" versionMinor="9">
+  <kernel name="pageRank_0" language="ip" type="user_managed" vlnv="epfl.ch:hardcilk:pageRank:1.0" attributes="" preferredWorkGroupSizeMultiple="0" workGroupSize="1" hwControlProtocol="user_managed">
+    <ports>
+      <port name="m_axi_00" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
+      <port name="m_axi_01" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
+      <port name="m_axi_02" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
+      <port name="m_axi_03" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
+
+      <port name="s_axil_mgmt_hardcilk" mode="slave" range="0x1000" dataWidth="32" portType="addressable" base="0x0"/>
+      <port name="m_axis_mFPGA" mode="write_only" dataWidth="512" portType="stream"/>
+      <port name="s_axis_mFPGA" mode="read_only" dataWidth="512" portType="stream"/>
+    </ports>
+    <args>
+      <arg name="pr_scheduler_0_rPause" addressQualifier="0" id="0" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x10" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_0_rAddr" addressQualifier="0" id="1" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x18" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_0_maxLen" addressQualifier="0" id="2" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x20" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_0_fifoTailReg" addressQualifier="0" id="3" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x28" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_0_fifoHeadReg" addressQualifier="0" id="4" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x30" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_0_procInterrupt" addressQualifier="0" id="5" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x38" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_0_currLen" addressQualifier="0" id="6" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x40" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_1_rPause" addressQualifier="0" id="7" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x48" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_1_rAddr" addressQualifier="0" id="8" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x50" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_1_maxLen" addressQualifier="0" id="9" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x58" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_1_fifoTailReg" addressQualifier="0" id="10" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x60" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_1_fifoHeadReg" addressQualifier="0" id="11" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x68" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_1_procInterrupt" addressQualifier="0" id="12" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x70" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_scheduler_1_currLen" addressQualifier="0" id="13" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x78" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_allocator_0_rPause" addressQualifier="0" id="14" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x80" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_allocator_0_rAddr" addressQualifier="0" id="15" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x88" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="pr_allocator_availableSize" addressQualifier="0" id="16" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x90" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="vm_scheduler_0_rPause" addressQualifier="0" id="17" port="s_axil_mgmt_hardcilk" size="0x8" offset="0xd0" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="vm_scheduler_0_rAddr" addressQualifier="0" id="18" port="s_axil_mgmt_hardcilk" size="0x8" offset="0xd8" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="vm_scheduler_0_maxLen" addressQualifier="0" id="19" port="s_axil_mgmt_hardcilk" size="0x8" offset="0xe0" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="vm_scheduler_0_fifoTailReg" addressQualifier="0" id="20" port="s_axil_mgmt_hardcilk" size="0x8" offset="0xe8" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="vm_scheduler_0_fifoHeadReg" addressQualifier="0" id="21" port="s_axil_mgmt_hardcilk" size="0x8" offset="0xf0" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="vm_scheduler_0_procInterrupt" addressQualifier="0" id="22" port="s_axil_mgmt_hardcilk" size="0x8" offset="0xf8" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="vm_scheduler_0_currLen" addressQualifier="0" id="23" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x100" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="fpgaIndex" addressQualifier="0" id="24" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x110" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="fpgaCount" addressQualifier="0" id="25" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x118" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="tasksToMove" addressQualifier="0" id="26" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x120" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy0" addressQualifier="0" id="27" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x128" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy1" addressQualifier="0" id="28" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x138" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy2" addressQualifier="0" id="29" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x140" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy3" addressQualifier="0" id="30" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x148" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy4" addressQualifier="0" id="31" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x150" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy5" addressQualifier="0" id="32" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x158" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy6" addressQualifier="0" id="33" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x160" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy7" addressQualifier="0" id="34" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x168" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy8" addressQualifier="0" id="35" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x170" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy9" addressQualifier="0" id="36" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x178" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy10" addressQualifier="0" id="37" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x180" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy11" addressQualifier="0" id="38" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x188" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy12" addressQualifier="0" id="39" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x190" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      <arg name="dummy13" addressQualifier="0" id="40" port="s_axil_mgmt_hardcilk" size="0x8" offset="0x198" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>
+      
+
+
+
+      <arg name="mem_0" addressQualifier="1" id="41" port="m_axi_00" size="0x8" offset="0x200" hostOffset="0x0" hostSize="0x8" type="void*"/>
+      <arg name="mem_1" addressQualifier="1" id="42" port="m_axi_01" size="0x8" offset="0x208" hostOffset="0x0" hostSize="0x8" type="void*"/>
+      <arg name="mem_2" addressQualifier="1" id="43" port="m_axi_02" size="0x8" offset="0x210" hostOffset="0x0" hostSize="0x8" type="void*"/>
+      <arg name="mem_3" addressQualifier="1" id="44" port="m_axi_03" size="0x8" offset="0x218" hostOffset="0x0" hostSize="0x8" type="void*"/>
+
+      <arg name="m_axis_mFPGA" addressQualifier="4" id="45" port="m_axis_mFPGA" size="0x0" offset="0x0" hostOffset="0x0" hostSize="0x0" memSize="0" type="stream&lt;ap_axiu&lt;512,0,0,4>>&amp;"/>
+      <arg name="s_axis_mFPGA" addressQualifier="4" id="46" port="s_axis_mFPGA" size="0x0" offset="0x0" hostOffset="0x0" hostSize="0x0" memSize="0" type="stream&lt;ap_axiu&lt;512,0,0,4>>&amp;"/>
+    </args>
+  </kernel>
+</root>

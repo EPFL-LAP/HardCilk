@@ -1,0 +1,791 @@
+{
+  "name" : "pageRank",
+  "ports" : [
+    {
+      "name" : "clock",
+      "direction" : "input",
+      "kind" : "clock",
+      "sensitivity" : "none",
+      "isBus" : false,
+      "busRange" : [
+        0,
+        0
+      ],
+      "frequencyMHz" : 100.0,
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        
+      }
+    },
+    {
+      "name" : "reset",
+      "direction" : "input",
+      "kind" : "reset",
+      "sensitivity" : "resetActiveHigh",
+      "isBus" : false,
+      "busRange" : [
+        0,
+        0
+      ],
+      "frequencyMHz" : 100.0,
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        
+      }
+    },
+    {
+      "name" : "paused",
+      "direction" : "output",
+      "kind" : "data",
+      "sensitivity" : "none",
+      "isBus" : false,
+      "busRange" : [
+        0,
+        0
+      ],
+      "frequencyMHz" : 100.0,
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        
+      }
+    },
+    {
+      "name" : "done",
+      "direction" : "output",
+      "kind" : "data",
+      "sensitivity" : "none",
+      "isBus" : false,
+      "busRange" : [
+        0,
+        0
+      ],
+      "frequencyMHz" : 100.0,
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        
+      }
+    }
+  ],
+  "interfaces" : [
+    {
+      "name" : "s_axil_mgmt_hardcilk",
+      "role" : "slave",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 0,
+            "wAddr" : 14,
+            "wData" : 64,
+            "read" : true,
+            "write" : true,
+            "lite" : true,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_00",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_01",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_02",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_03",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_04",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_05",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_06",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_07",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_08",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_09",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_10",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_11",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_12",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_13",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_14",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_15",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_16",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_17",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_18",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_19",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_20",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    },
+    {
+      "name" : "m_axi_21",
+      "role" : "master",
+      "kind" : "axi4",
+      "associatedClock" : "clock",
+      "associatedReset" : "reset",
+      "args" : {
+        "config" : {
+          "typeName" : "chext.amba.axi4.Config",
+          "obj" : {
+            "wId" : 2,
+            "wAddr" : 34,
+            "wData" : 256,
+            "read" : true,
+            "write" : true,
+            "lite" : false,
+            "hasLock" : true,
+            "hasCache" : true,
+            "hasProt" : true,
+            "hasQos" : true,
+            "hasRegion" : true,
+            "axi3Compat" : false,
+            "wUserAR" : 0,
+            "wUserR" : 0,
+            "wUserAW" : 0,
+            "wUserW" : 0,
+            "wUserB" : 0
+          }
+        }
+      }
+    }
+  ],
+  "args" : {
+    
+  }
+}
