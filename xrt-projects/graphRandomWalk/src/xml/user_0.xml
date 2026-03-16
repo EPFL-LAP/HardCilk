@@ -24,10 +24,6 @@
       <port name="m_axi_19" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
       <port name="m_axi_20" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
       <port name="m_axi_21" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
-      <port name="m_axi_22" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
-      <port name="m_axi_23" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
-      <port name="m_axi_24" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
-      <port name="m_axi_25" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>
 
       <port name="s_axil_mgmt_hardcilk" mode="slave" range="0x1000" dataWidth="32" portType="addressable" base="0x0"/>
       <port name="m_axis_mFPGA" mode="write_only" dataWidth="512" portType="stream"/>
@@ -101,14 +97,10 @@
       <arg name="mem_19" addressQualifier="1" id="60" port="m_axi_19" size="0x8" offset="0x298" hostOffset="0x0" hostSize="0x8" type="void*"/>
       <arg name="mem_20" addressQualifier="1" id="61" port="m_axi_20" size="0x8" offset="0x2A0" hostOffset="0x0" hostSize="0x8" type="void*"/>
       <arg name="mem_21" addressQualifier="1" id="62" port="m_axi_21" size="0x8" offset="0x2A8" hostOffset="0x0" hostSize="0x8" type="void*"/>
-      <arg name="mem_22" addressQualifier="1" id="63" port="m_axi_22" size="0x8" offset="0x2B0" hostOffset="0x0" hostSize="0x8" type="void*"/>
-      <arg name="mem_23" addressQualifier="1" id="64" port="m_axi_23" size="0x8" offset="0x2B8" hostOffset="0x0" hostSize="0x8" type="void*"/>
-      <arg name="mem_24" addressQualifier="1" id="65" port="m_axi_24" size="0x8" offset="0x2C0" hostOffset="0x0" hostSize="0x8" type="void*"/>
-      <arg name="mem_25" addressQualifier="1" id="66" port="m_axi_25" size="0x8" offset="0x2C8" hostOffset="0x0" hostSize="0x8" type="void*"/>
-
+ 
       <!-- Stream args -->
-      <arg name="m_axis_mFPGA" addressQualifier="4" id="67" port="m_axis_mFPGA" size="0x0" offset="0x0" hostOffset="0x0" hostSize="0x0" memSize="0" type="stream&lt;ap_axiu&lt;512,0,0,4>>&amp;"/>
-      <arg name="s_axis_mFPGA" addressQualifier="4" id="68" port="s_axis_mFPGA" size="0x0" offset="0x0" hostOffset="0x0" hostSize="0x0" memSize="0" type="stream&lt;ap_axiu&lt;512,0,0,4>>&amp;"/>
+      <arg name="m_axis_mFPGA" addressQualifier="4" id="63" port="m_axis_mFPGA" size="0x0" offset="0x0" hostOffset="0x0" hostSize="0x0" memSize="0" type="stream&lt;ap_axiu&lt;512,0,0,4>>&amp;"/>
+      <arg name="s_axis_mFPGA" addressQualifier="4" id="64" port="s_axis_mFPGA" size="0x0" offset="0x0" hostOffset="0x0" hostSize="0x0" memSize="0" type="stream&lt;ap_axiu&lt;512,0,0,4>>&amp;"/>
     </args>
   </kernel>
 </root>
