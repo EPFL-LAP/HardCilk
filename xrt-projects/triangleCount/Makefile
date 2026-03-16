@@ -25,7 +25,7 @@ VPP    := v++
 VIVADO := $(XILINX_VIVADO)/bin/vivado
 
 #--- External repo for CMAC ---
-VNX_REPO_URL    := https://github.com/Xilinx/xup_vitis_network_example.git
+VNX_REPO_URL    := https://github.com/Mahfouz-z/xup_vitis_network_example.git
 VNX_REPO_DIR    := $(CUR_DIR)/../../xup_vitis_network_example
 VNX_CLONE_STAMP := $(VNX_REPO_DIR)/.cloned
 CMAC_DIR        := $(VNX_REPO_DIR)/Ethernet
