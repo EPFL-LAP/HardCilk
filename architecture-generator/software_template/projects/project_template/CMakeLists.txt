@@ -17,7 +17,7 @@ if(HC_ENABLE_XRT_TARGETS)
         message(FATAL_ERROR
             "xup_vitis_network_example not found under the HardCilk repository root (${HARDCILK_ROOT}).\n"
             "Please clone it by running:\n"
-            "  git clone https://github.com/Xilinx/xup_vitis_network_example.git ${HARDCILK_ROOT}/xup_vitis_network_example"
+            "  git clone https://github.com/Mahfouz-z/xup_vitis_network_example.git ${HARDCILK_ROOT}/xup_vitis_network_example"
         )
     endif()
 
