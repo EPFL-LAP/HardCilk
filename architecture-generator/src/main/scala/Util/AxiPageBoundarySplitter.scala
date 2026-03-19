@@ -33,7 +33,7 @@ case class AxiPageBoundarySplitter_Config(
 class AW_Bool_Len(awType: axi4.full.AddressChannel) extends Bundle {
   val aw = awType.cloneType
   val drop_ack = Bool()
-  val len = UInt(8.W)
+  val len = UInt(9.W)
 }
 
 class B_bool(bType: axi4.full.WriteResponseChannel) extends Bundle {
@@ -52,14 +52,14 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
   val m_axi = IO(axi4.Master(axiCfg))
 
   val size_queue_ar = new e.Queue(
-    UInt(8.W),
+    UInt(9.W),
     count = numberOfOutstanding + 1,
     pipe = false,
     flow = false
   )
 
   val size_queue_aw = new e.Queue(
-    UInt(8.W),
+    UInt(9.W),
     count = 2 * numberOfOutstanding + 1,
     pipe = false,
     flow = false
@@ -77,12 +77,12 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
       val mask = ~((1.U(addressWidth.W) << in.size) - 1.U)
       val addr_low_bits = in.addr(alignmentBits - 1, 0) & mask
       val addr_end_low_bits =
-        (addr_low_bits + ((in.len + 1.U) << in.size) - 1.U) & ((1.U(
+        (addr_low_bits + ((in.len + 1.U(9.W)) << in.size) - 1.U) & ((1.U(
           addressWidth.W
         ) << alignmentBits) - 1.U)
       val crossing = addr_end_low_bits < addr_low_bits
 
-      val sent_len = RegInit(0.U(8.W))
+      val sent_len = RegInit(0.U(9.W))
 
       out := in
       packet {
@@ -106,7 +106,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
       }
     }
     val size_enqueue = new e.Transform(fork(), size_queue_ar.source) {
-      out := in.len + 1.U
+      out := in.len + 1.U(9.W)
     }
   }
 
@@ -123,7 +123,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
       ) << alignmentBits) - 1.U)
     val crossing = addr_end_low_bits < addr_low_bits
 
-    val sent_len = RegInit(0.U(8.W))
+    val sent_len = RegInit(0.U(9.W))
 
     out.aw := in
     packet {
@@ -142,12 +142,12 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
           ) << in.size)) & mask
           out.aw.len := rem_len
           out.drop_ack := false.B
-          out.len := rem_len + 1.U
+          out.len := rem_len + 1.U(9.W)
           accept { sent_len := 0.U }
         }
       }.otherwise {
         out.drop_ack := false.B
-        out.len := in.len + 1.U
+        out.len := in.len + 1.U(9.W)
         accept { sent_len := 0.U }
       }
     }
@@ -165,7 +165,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
     }
   }
   val repeat_r = e.EWire(Bool())
-  val repeater_r = new e.Repeat(size_queue_ar.sink, repeat_r, 8) {
+  val repeater_r = new e.Repeat(size_queue_ar.sink, repeat_r, 9) {
     len { (in) => in }
     out { (in, index, first, last) => last }
   }
@@ -180,7 +180,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
   }
 
   val repeat_w = e.EWire(Bool())
-  val repeater_w = new e.Repeat(size_queue_aw.sink, repeat_w, 8) {
+  val repeater_w = new e.Repeat(size_queue_aw.sink, repeat_w, 9) {
     len { (in) => in }
     out { (in, index, first, last) => last }
   }
@@ -203,6 +203,33 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
     out := in.b
     cond { in.drop_ack }
   }
+}
+
+class AxiPageBoundarySplitterTB(cfg: AxiPageBoundarySplitter_Config)
+    extends Module
+    with chext.TestBenchTop {
+  import cfg._
+
+  val dut = Module(new AxiPageBoundarySplitter_Basic(cfg))
+
+  val M_AXI = IO(axi4.Master(axiCfg))
+  dut.m_axi.asFull :=> M_AXI.asFull
+
+  val S_AXI = IO(axi4.Slave(axiCfg))
+  S_AXI.asFull :=> dut.s_axi.asFull
+
+  declareClock(clock)
+  declareReset(reset)
+  declareAxi4Interface(M_AXI)
+  declareAxi4Interface(S_AXI)
+}
+
+object AxiPageBoundarySplitter_Tb extends chext.TestBench {
+  emit(
+    new AxiPageBoundarySplitterTB(
+      AxiPageBoundarySplitter_Config(dataWidth = 256)
+    )
+  )
 }
 
 object AxiPageBoundarySplitter_Emit extends App {
