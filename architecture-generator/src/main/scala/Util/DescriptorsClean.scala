@@ -82,6 +82,40 @@ case class MemStats(
     interconnectDescriptors: List[InterconnectDescriptor]
 )
 
+case class RWRequestDescriptor(
+    `type`: String,
+    mode: String,
+    portWidth: Int,
+    nextsubPE: Option[String] = None
+) {
+  def validate(subPEName: String): Unit = {
+    require(Set("read", "write").contains(`type`),
+      s"subPE '$subPEName': rwRequest.type must be one of read|write")
+    require(Set("single", "stream").contains(mode),
+      s"subPE '$subPEName': rwRequest.mode must be one of single|stream")
+    require(portWidth > 0,
+      s"subPE '$subPEName': rwRequest.portWidth must be > 0")
+
+    if (`type` == "read") {
+      require(nextsubPE.nonEmpty,
+        s"subPE '$subPEName': rwRequest.nextsubPE must exist when type is read")
+    } else {
+      require(nextsubPE.isEmpty,
+        s"subPE '$subPEName': rwRequest.nextsubPE must not exist when type is write")
+    }
+  }
+}
+
+case class SubPEDescriptor(
+    peName: String,
+    rwRequest: RWRequestDescriptor
+) {
+  def validate(subPEName: String): Unit = {
+    require(peName.nonEmpty, s"subPE '$subPEName': peName must not be empty")
+    rwRequest.validate(subPEName)
+  }
+}
+
 // --- SideConfig with default handling ---
 case class SideConfig(
     sideType: String,
@@ -138,13 +172,13 @@ case class TaskDescriptor(
     sidesConfigs.find(_.sideType == sideType).map(_.capacityPhysicalQueue).getOrElse(0)
   }
   // ... (other get... methods) ...
-  
+
   def validate(): Unit = {
     sidesConfigs.foreach(_.validate())
-    
+
     require(numProcessingElements > 0, s"Task '$name': numProcessingElements must be > 0")
     require(isPow2(widthTask) && widthTask <= 1024, s"Task '$name': widthTask must be power of 2 and <= 1024")
-    
+
     if (peHDLPath.nonEmpty) {
       require(new java.io.File(peHDLPath).exists, s"Task '$name': peHDLPath not found at '$peHDLPath'")
     } else {
@@ -153,7 +187,7 @@ case class TaskDescriptor(
 
     require(getNumServers("scheduler") > 0, s"Task '$name': must have > 0 scheduler servers")
     // ... (all other 'asserts' converted to 'require') ...
-    
+
     require(dynamicMemAlloc && widthMalloc > 0 || !dynamicMemAlloc && widthMalloc == 0,
       s"Task '$name': dynamicMemAlloc requires widthMalloc > 0")
 
@@ -161,16 +195,16 @@ case class TaskDescriptor(
       //require(getNumServers("allocator") > 0, s"Task '$name' (Cont): must have > 0 allocator servers")
       require(getNumServers("argumentNotifier") > 0, s"Task '$name' (Cont): must have > 0 argumentNotifier servers")
     }
-    
+
     if (dynamicMemAlloc) {
        require(getNumServers("memoryAllocator") > 0, s"Task '$name' (DynMem): must have > 0 memoryAllocator servers")
     }
-    
+
     if(generateArgOutWriteBuffer) {
       require(!argumentSizeList.isEmpty, s"Task '$name': argumentSizeList must not be empty!")
       require(argumentSizeList.head > 0, s"Task '$name': argumentWidth must be > 0 to has a write buffer!")
     }
-    
+
 
   }
 }
@@ -185,6 +219,7 @@ case class FullSysGenDescriptor(
     spawnNextList: Map[String, List[String]],
     sendArgumentList: Map[String, List[String]],
     mallocList: Map[String, List[String]] = Map.empty,
+    subPEList: Map[String, SubPEDescriptor] = Map.empty,
     // cfgAxiHardCilk: chext.amba.axi4.Config = chext.amba.axi4.Config(), // This class is not defined, commenting out
     targetFrequency: Int = 250,
     memorySizeSim: Int = 1,
@@ -204,10 +239,10 @@ case class FullSysGenDescriptor(
   // Assign base addresses
   var j = 0
   val base = if (isVitisProject) 0x10 else 0x0
-  
 
-  taskDescriptors.foreach(task => {    
-    task.mgmtBaseAddresses = MemSystemDescriptor() 
+
+  taskDescriptors.foreach(task => {
+    task.mgmtBaseAddresses = MemSystemDescriptor()
     val numSchedulerServers = task.getNumServers("scheduler")
     for (i <- j until j + numSchedulerServers) {
       task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
@@ -219,7 +254,7 @@ case class FullSysGenDescriptor(
       for (i <- j until j + task.spawnServersCount ) {
         task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
       }
-      j += task.spawnServersCount 
+      j += task.spawnServersCount
     }
     println("J value after spawner servers: " + j)
 
@@ -248,7 +283,7 @@ case class FullSysGenDescriptor(
 
   // For each task log base addresses
   taskDescriptors.foreach(
-    task => 
+    task =>
       println(f"Task: ${task.name}:  task.mgmtBaseAddresses: ${task.mgmtBaseAddresses}")
     )
 
@@ -384,7 +419,7 @@ case class FullSysGenDescriptor(
   def getNumConfigPorts(): Int = {
     taskDescriptors.map(_.getNumServers("scheduler")).sum + taskDescriptors
       .map(_.getNumServers("memoryAllocator"))
-      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +  
+      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +
       {
         var spawner_count = 0
         taskDescriptors.foreach(task => {
@@ -451,21 +486,32 @@ case class FullSysGenDescriptor(
 
     MemStats(totalAXIPorts, interconnectDescriptorsAggregated)
   }
-  
+
   def validate(): Unit = {
     taskDescriptors.foreach(_.validate()) // Validate all sub-tasks
-    
+
     require(isPow2(widthAddress) && widthAddress <= 64, "widthAddress must be power of 2 and <= 64")
     require(isPow2(widthContCounter) && widthContCounter <= 64, "widthContCounter must be power of 2 and <= 64")
     require(taskDescriptors.nonEmpty, "must have at least one taskDescriptor")
-    
+
     val taskNames = taskDescriptors.map(_.name).toSet
     require(spawnList.keys.forall(taskNames.contains), s"spawnList contains unknown task names: ${spawnList.keys.filterNot(taskNames.contains)}")
     // ... (rest of list checks) ...
     require(spawnNextList.keys.forall(taskNames.contains), "spawnNextList contains unknown task names")
     require(sendArgumentList.keys.forall(taskNames.contains), "sendArgumentList contains unknown task names")
     require(mallocList.keys.forall(taskNames.contains), "mallocList contains unknown task names")
-    
+
+    subPEList.foreach { case (subPEName, subPEDescriptor) =>
+      require(subPEName.nonEmpty, "subPEList contains an empty subPE name")
+      subPEDescriptor.validate(subPEName)
+      require(taskNames.contains(subPEDescriptor.peName),
+        s"subPE '$subPEName': unknown peName '${subPEDescriptor.peName}'")
+      subPEDescriptor.rwRequest.nextsubPE.foreach { nextSubPE =>
+        require(subPEList.contains(nextSubPE),
+          s"subPE '$subPEName': nextsubPE '$nextSubPE' is not defined in subPEList")
+      }
+    }
+
     require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
 
     // Check if the system is supposed to support MFPGA, and has argument notification is that

@@ -9,6 +9,7 @@ import Descriptors._
 import Descriptors.DescriptorJSON._
 import Util.HardCilkEmitterUtil._
 import SoftwareUtil._
+import SoftwareUtil.aie._
 
 object HardCilkEmitter extends App {
   ArgParser.parseArgs(args) match {
@@ -23,7 +24,7 @@ object HardCilkEmitter extends App {
             s"${jsonName}_${LocalDate.now.format(dateFmt)}_${LocalTime.now.format(timeFmt)}"
           else
             s"${jsonName}_hardcilk_output"
-   
+
       val systemDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
 
 
@@ -115,9 +116,9 @@ object HardCilkEmitter extends App {
 
         // Also copy `../software/${jsonName}` to `outputDirPathSC/projects/${jsonName}`
         var source_project_path = s"../software/${jsonName}"
-        if(systemDescriptor.mFPGASimulation || systemDescriptor.mFPGASynth){ 
+        if(systemDescriptor.mFPGASimulation || systemDescriptor.mFPGASynth){
           source_project_path = s"../software/mfpga/${jsonName}"
-        } 
+        }
 
         val sourceProject = new java.io.File(source_project_path)
 
@@ -132,8 +133,25 @@ object HardCilkEmitter extends App {
               java.nio.file.Files.copy(sourcePath, destinationPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
             }
           })
-      }
 
+      }
+      if (cfg.project_aie_generation) {
+        val outputDirPathAIE = s"${cfg.output_dir}/$outputDirName/software"
+        println(s"Generating AIE project in: $outputDirPathAIE")
+        // AIE relevant templates
+        new java.io.File(s"$outputDirPathAIE/aie_${jsonName}/").mkdirs()
+        ConnectivityTemplate.generateConnectivityCfg(
+          systemDescriptor,
+          s"$outputDirPathAIE/aie_${jsonName}"
+        )
+        new java.io.File(s"$outputDirPathAIE/aie_${jsonName}/src/aie").mkdirs()
+        ProjectHeaderTemplate.generateProjectHeader(
+          systemDescriptor,
+          s"$outputDirPathAIE/aie_${jsonName}/src/aie"
+        )
+      } else {
+        println("AIE project generation not requested.")
+      }
 
   }
 }

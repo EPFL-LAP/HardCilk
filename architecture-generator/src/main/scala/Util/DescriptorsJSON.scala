@@ -4,7 +4,7 @@ import io.circe._
 import io.circe.parser._
 import io.circe.syntax._
 // Import 'extras' for default value support
-import io.circe.generic.extras.semiauto._ 
+import io.circe.generic.extras.semiauto._
 import io.circe.generic.extras.Configuration
 import java.io.PrintWriter
 
@@ -31,13 +31,19 @@ object DescriptorJSON {
 
   implicit val interconnectDescriptorDecoder: Decoder[InterconnectDescriptor] = deriveConfiguredDecoder[InterconnectDescriptor]
   implicit val interconnectDescriptorEncoder: Encoder[InterconnectDescriptor] = deriveConfiguredEncoder[InterconnectDescriptor]
-  
+
   implicit val memStatsDecoder: Decoder[MemStats] = deriveConfiguredDecoder[MemStats]
   implicit val memStatsEncoder: Encoder[MemStats] = deriveConfiguredEncoder[MemStats]
-  
+
+  implicit val rwRequestDescriptorDecoder: Decoder[RWRequestDescriptor] = deriveConfiguredDecoder[RWRequestDescriptor]
+  implicit val rwRequestDescriptorEncoder: Encoder[RWRequestDescriptor] = deriveConfiguredEncoder[RWRequestDescriptor]
+
+  implicit val subPEDescriptorDecoder: Decoder[SubPEDescriptor] = deriveConfiguredDecoder[SubPEDescriptor]
+  implicit val subPEDescriptorEncoder: Encoder[SubPEDescriptor] = deriveConfiguredEncoder[SubPEDescriptor]
+
   implicit val sideConfigDecoder: Decoder[SideConfig] = deriveConfiguredDecoder[SideConfig]
   implicit val sideConfigEncoder: Encoder[SideConfig] = deriveConfiguredEncoder[SideConfig]
-  
+
   implicit val taskDescriptorDecoder: Decoder[TaskDescriptor] = deriveConfiguredDecoder[TaskDescriptor]
   implicit val taskDescriptorEncoder: Encoder[TaskDescriptor] = deriveConfiguredEncoder[TaskDescriptor]
 
@@ -57,10 +63,10 @@ object DescriptorJSON {
    */
   def parseJsonFile[T](fpath: String)(implicit decoder: Decoder[T]): T = {
     val rawStringJson = scala.io.Source.fromFile(fpath).mkString
-    
+
     decode[T](rawStringJson) match {
       case Right(data) => data
-      case Left(error) => 
+      case Left(error) =>
         throw new Exception(s"Error parsing JSON file '$fpath': $error")
     }
   }

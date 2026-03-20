@@ -12,6 +12,7 @@ case class BuilderConfig(
   rtl_generation: Boolean = false,
   sc_header_generation: Boolean = false,
   project_sc_generation: Boolean = false,
+  project_aie_generation: Boolean = false,
   output_dir: String = ".",
   json_path: String = "",
   // additional small flags that the HardCilk constructor sometimes uses
@@ -57,6 +58,9 @@ object ArgParser {
       opt[Unit]('p', "project-sc")
         .action((_, c) => c.copy(project_sc_generation = true))
         .text("Generates the C++ project for SystemC simulation"),
+      opt[Unit]('k', "aie-project")
+        .action((_, c) => c.copy(project_aie_generation = true))
+        .text("Generates the AIE project for SystemC simulation"),
       opt[Unit]('a', "all")
         .action((_, c) =>
           c.copy(
@@ -64,7 +68,8 @@ object ArgParser {
             rtl_generation = true,
             tcl_generation = true,
             sc_header_generation = true,
-            project_sc_generation = true
+            project_sc_generation = true,
+            project_aie_generation = true
           )
         )
         .text("Generates all outputs (equivalent to `-g -c -b -s`)"),
