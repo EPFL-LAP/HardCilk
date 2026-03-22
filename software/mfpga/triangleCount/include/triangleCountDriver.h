@@ -50,13 +50,15 @@ public:
     {
 
         memories_[0]->allocateMemFPGA(4096, 512);
-        memories_[1]->allocateMemFPGA(4096, 512);
+        if (memories_.size() > 1)
+            memories_[1]->allocateMemFPGA(4096, 512);
 
         triangle_args triangle_args_0 = {0, 0, 0, 0, 0};
         uint64_t addr = memories_[0]->allocateMemFPGA(sizeof(triangle_args_0), 512);
 
         // Dummy allocation to align
-        memories_[1]->allocateMemFPGA(sizeof(triangle_args_0), 512);
+        if (memories_.size() > 1)
+            memories_[1]->allocateMemFPGA(sizeof(triangle_args_0), 512);
 
 
         Graph g(graph_file_, false);
@@ -84,9 +86,12 @@ public:
             uint64_t lists_base_addr = memories_[0]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
             memories_[0]->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
             
-            // Copy data to both fpgas
-            memories_[1]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
-            memories_[1]->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+            // Copy data to second FPGA only if available
+            if (memories_.size() > 1)
+            {
+                memories_[1]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
+                memories_[1]->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+            }
 
             // log lists_base_addr and totalSize and end address of the lists
             printf("lists_base_addr: %lx, totalSize: %d, end address of the lists: %lx\n", lists_base_addr, totalSize, lists_base_addr + totalSize * sizeof(uint32_t));
@@ -102,8 +107,11 @@ public:
             auto list_addr = memories_[0]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
             memories_[0]->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
 
-            memories_[1]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
-            memories_[1]->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
+            if (memories_.size() > 1)
+            {
+                memories_[1]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
+                memories_[1]->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
+            }
         // End of copying the graph data to the FPGA
 
 

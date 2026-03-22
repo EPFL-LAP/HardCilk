@@ -73,12 +73,14 @@ public:
         printf("Join counter value: %d\n", counter);
 
         memories_[0]->allocateMemFPGA(4096, 512);
-        memories_[1]->allocateMemFPGA(4096, 512);
+        if (memories_.size() > 1)
+            memories_[1]->allocateMemFPGA(4096, 512);
 
 
 
         uint64_t cont_addr = memories_[0]->allocateMemFPGA(sizeof(page_rank_map_args_0), 512);
-        memories_[1]->allocateMemFPGA(sizeof(page_rank_map_args_0), 512);
+        if (memories_.size() > 1)
+            memories_[1]->allocateMemFPGA(sizeof(page_rank_map_args_0), 512);
         
         memories_[0]->copyToDevice(cont_addr, reinterpret_cast<const uint8_t *>(&page_rank_map_args_0), sizeof(page_rank_map_args_0));
         memories_[0]->copyToDevice(cont_addr, reinterpret_cast<const uint8_t *>(&counter), sizeof(counter));
@@ -110,9 +112,11 @@ public:
         }
 
         uint64_t lists_base_addr = memories_[0]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
-        uint64_t fpga_other_lists_base_addr = memories_[1]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
         memories_[0]->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
-        memories_[1]->copyToDevice(fpga_other_lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+        if (memories_.size() > 1) {
+            uint64_t fpga_other_lists_base_addr = memories_[1]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
+            memories_[1]->copyToDevice(fpga_other_lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+        }
 
         // log lists_base_addr and totalSize and end address of the lists
         printf("lists_base_addr: %lx, totalSize: %d, end address of the lists: %lx\n", lists_base_addr, totalSize, lists_base_addr + totalSize * sizeof(uint32_t));
@@ -126,18 +130,18 @@ public:
             lists_base_addr += size * sizeof(uint32_t);
         }
         auto list_addr = memories_[0]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
-        auto fpga_other_list_addr = memories_[1]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
         memories_[0]->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
-        memories_[1]->copyToDevice(fpga_other_list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
+        if (memories_.size() > 1) {
+            auto fpga_other_list_addr = memories_[1]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
+            memories_[1]->copyToDevice(fpga_other_list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
+        }
 
 
 
         // Create the base task 
         page_rank_map_args_0.cont = cont_addr;
         page_rank_map_args_0.pPrCurr = memories_[0]->allocateMemFPGA(sizeof(_Float32) * g.getNumVertices(), 512);
-        auto fpga_other_pPrCurr = memories_[1]->allocateMemFPGA(sizeof(_Float32) * g.getNumVertices(), 512);
         page_rank_map_args_0.pPrNext = memories_[0]->allocateMemFPGA(sizeof(_Float32) * g.getNumVertices(), 512);
-        auto fpga_other_pPrNext = memories_[1]->allocateMemFPGA(sizeof(_Float32) * g.getNumVertices(), 512);
         page_rank_map_args_0.pGraph = list_addr;
         page_rank_map_args_0.vertex_count = g.getNumVertices();
         page_rank_map_args_0.epsilon = eps;
@@ -145,8 +149,13 @@ public:
         page_rank_map_args_0.inv_vertex_count = 1.0f / g.getNumVertices();
         page_rank_map_args_0.value = 0.0f;
         page_rank_map_args_0.inv_deg = memories_[0]->allocateMemFPGA(sizeof(_Float32) * inv_degree.size(), 512);
-        auto fpga_other_inv_deg = memories_[1]->allocateMemFPGA(sizeof(_Float32) * inv_degree.size(), 512);
-        
+
+        uint64_t fpga_other_pPrCurr = 0, fpga_other_pPrNext = 0, fpga_other_inv_deg = 0;
+        if (memories_.size() > 1) {
+            fpga_other_pPrCurr = memories_[1]->allocateMemFPGA(sizeof(_Float32) * g.getNumVertices(), 512);
+            fpga_other_pPrNext = memories_[1]->allocateMemFPGA(sizeof(_Float32) * g.getNumVertices(), 512);
+            fpga_other_inv_deg = memories_[1]->allocateMemFPGA(sizeof(_Float32) * inv_degree.size(), 512);
+        }
 
         // Write the inverted degree vector to the FPGA
         //memory_->copyToDevice(page_rank_map_args_0.pInvDegree, reinterpret_cast<const uint8_t *>(inv_degree.data()), inv_degree.size() * sizeof(_Float32));
@@ -155,16 +164,19 @@ public:
         // Write 1.0  / g.getNumVertices() to elements of Pnext // not in MFPGA (switched in first iteration on FPGA code)
         std::vector<_Float32> Pnext(g.getNumVertices(), (float)0);
         memories_[0]->copyToDevice(page_rank_map_args_0.pPrNext, reinterpret_cast<const uint8_t *>(Pnext.data()), Pnext.size() * sizeof(_Float32));
-        memories_[1]->copyToDevice(fpga_other_pPrNext, reinterpret_cast<const uint8_t *>(Pnext.data()), Pnext.size() * sizeof(_Float32));
-    
+        if (memories_.size() > 1)
+            memories_[1]->copyToDevice(fpga_other_pPrNext, reinterpret_cast<const uint8_t *>(Pnext.data()), Pnext.size() * sizeof(_Float32));
+
         // Write zeros to elements of Pcurr
         std::vector<_Float32> Pcurr(g.getNumVertices(), (float)1.0 / g.getNumVertices());
         memories_[0]->copyToDevice(page_rank_map_args_0.pPrCurr, reinterpret_cast<const uint8_t *>(Pcurr.data()), Pcurr.size() * sizeof(_Float32));
-        memories_[1]->copyToDevice(fpga_other_pPrCurr, reinterpret_cast<const uint8_t *>(Pcurr.data()), Pcurr.size() * sizeof(_Float32));
+        if (memories_.size() > 1)
+            memories_[1]->copyToDevice(fpga_other_pPrCurr, reinterpret_cast<const uint8_t *>(Pcurr.data()), Pcurr.size() * sizeof(_Float32));
 
         // Write the inverted degree vector to the FPGA
         memories_[0]->copyToDevice(page_rank_map_args_0.inv_deg, reinterpret_cast<const uint8_t *>(inv_degree.data()), inv_degree.size() * sizeof(_Float32));
-        memories_[1]->copyToDevice(fpga_other_inv_deg, reinterpret_cast<const uint8_t *>(inv_degree.data()), inv_degree.size() * sizeof(_Float32));
+        if (memories_.size() > 1)
+            memories_[1]->copyToDevice(fpga_other_inv_deg, reinterpret_cast<const uint8_t *>(inv_degree.data()), inv_degree.size() * sizeof(_Float32));
 
         std::vector<page_rank_map_args> base_task_data = {page_rank_map_args_0};
 

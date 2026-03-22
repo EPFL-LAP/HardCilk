@@ -61,7 +61,8 @@ public:
         int counter = g.getNumVertices()  + 1;
 
         uint64_t addr = memories_[0]->allocateMemFPGA(sizeof(walk_gen_args_0), 512);
-        memories_[1]->allocateMemFPGA(sizeof(walk_gen_args_0), 512); // Have the same shift in FPGA 1 memory allocator
+        if (memories_.size() > 1)
+            memories_[1]->allocateMemFPGA(sizeof(walk_gen_args_0), 512); // Have the same shift in FPGA 1 memory allocator
         memories_[0]->copyToDevice(addr, reinterpret_cast<const uint8_t *>(&walk_gen_args_0), sizeof(walk_gen_args_0));
         memories_[0]->copyToDevice(addr, reinterpret_cast<const uint8_t *>(&counter), sizeof(counter));
 
@@ -82,8 +83,10 @@ public:
         memories_[0]->copyToDevice(lists_base_addr, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
 
         // Copy to FPGA 1 as well
-        uint64_t lists_base_addr_1 = memories_[1]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
-        memories_[1]->copyToDevice(lists_base_addr_1, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+        if (memories_.size() > 1) {
+            uint64_t lists_base_addr_1 = memories_[1]->allocateMemFPGA(totalSize * sizeof(uint32_t), 512);
+            memories_[1]->copyToDevice(lists_base_addr_1, reinterpret_cast<const uint8_t *>(allLists.data()), totalSize * sizeof(uint32_t));
+        }
 
 
         // log lists_base_addr and totalSize and end address of the lists
@@ -101,8 +104,10 @@ public:
         memories_[0]->copyToDevice(list_addr, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
 
         // Copy to FPGA 1 as well
-        auto list_addr_1 = memories_[1]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
-        memories_[1]->copyToDevice(list_addr_1, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
+        if (memories_.size() > 1) {
+            auto list_addr_1 = memories_[1]->allocateMemFPGA(sizeof(uint64_t) * adj_list_addresses.size(), 512);
+            memories_[1]->copyToDevice(list_addr_1, reinterpret_cast<const uint8_t *>(adj_list_addresses.data()), adj_list_addresses.size() * sizeof(uint64_t));
+        }
 
 
 
