@@ -205,33 +205,6 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
   }
 }
 
-class AxiPageBoundarySplitterTB(cfg: AxiPageBoundarySplitter_Config)
-    extends Module
-    with chext.TestBenchTop {
-  import cfg._
-
-  val dut = Module(new AxiPageBoundarySplitter_Basic(cfg))
-
-  val M_AXI = IO(axi4.Master(axiCfg))
-  dut.m_axi.asFull :=> M_AXI.asFull
-
-  val S_AXI = IO(axi4.Slave(axiCfg))
-  S_AXI.asFull :=> dut.s_axi.asFull
-
-  declareClock(clock)
-  declareReset(reset)
-  declareAxi4Interface(M_AXI)
-  declareAxi4Interface(S_AXI)
-}
-
-object AxiPageBoundarySplitter_Tb extends chext.TestBench {
-  emit(
-    new AxiPageBoundarySplitterTB(
-      AxiPageBoundarySplitter_Config(dataWidth = 256)
-    )
-  )
-}
-
 object AxiPageBoundarySplitter_Emit extends App {
   emitVerilog(
     new AxiPageBoundarySplitter_Basic(
