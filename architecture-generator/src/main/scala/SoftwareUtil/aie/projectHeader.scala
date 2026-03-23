@@ -16,7 +16,9 @@ object ProjectHeaderTemplate {
       taskInputPorts: Seq[String],
       taskOutputPorts: Seq[String],
       rwInputPorts: Seq[String],
-      rwOutputPorts: Seq[String]
+      rwOutputPorts: Seq[String],
+      prevChainUnitName: Option[String],
+      nextChainUnitName: Option[String]
   )
 
   private case class PortDef(
@@ -82,6 +84,16 @@ object ProjectHeaderTemplate {
 
         if (orderedSubPEs.nonEmpty) {
           val incomingReadPortsBySubPE = buildIncomingReadPorts(orderedSubPEs)
+          val byName = orderedSubPEs.map(s => s.name -> s).toMap
+          val prevByName = mutable.Map[String, String]()
+
+          orderedSubPEs.foreach { subPE =>
+            subPE.req.nextsubPE.foreach { nextSubPE =>
+              if (byName.contains(nextSubPE)) {
+                prevByName(nextSubPE) = subPE.name
+              }
+            }
+          }
 
           orderedSubPEs.zipWithIndex.foreach { case (subPE, chainIndex) =>
             val isFirst = chainIndex == 0
@@ -104,6 +116,8 @@ object ProjectHeaderTemplate {
 
             val rwIn = incomingReadPortsBySubPE.getOrElse(subPE.name, Seq.empty)
             val rwOut = rwOutputPorts(subPE.req)
+            val prevUnitName = prevByName.get(subPE.name).flatMap(byName.get).map(s => s"${s.normalizedName}$peSuffix")
+            val nextUnitName = subPE.req.nextsubPE.flatMap(byName.get).map(s => s"${s.normalizedName}$peSuffix")
 
             units += UnitDef(
               unitName = s"${subPE.normalizedName}$peSuffix",
@@ -114,7 +128,9 @@ object ProjectHeaderTemplate {
               taskInputPorts = taskInputs,
               taskOutputPorts = taskOutputs,
               rwInputPorts = rwIn,
-              rwOutputPorts = rwOut
+              rwOutputPorts = rwOut,
+              prevChainUnitName = prevUnitName,
+              nextChainUnitName = nextUnitName
             )
           }
         } else {
@@ -130,7 +146,9 @@ object ProjectHeaderTemplate {
             taskInputPorts = taskInputs,
             taskOutputPorts = taskOutputs,
             rwInputPorts = Seq.empty,
-            rwOutputPorts = Seq.empty
+            rwOutputPorts = Seq.empty,
+            prevChainUnitName = None,
+            nextChainUnitName = None
           )
         }
       }
@@ -274,35 +292,41 @@ object ProjectHeaderTemplate {
       val outputPorts = orderTaskOutputPorts(unit.taskOutputPorts) ++ unit.rwOutputPorts.sorted
 
       inputPorts.foreach { p =>
-        val varName = s"${unit.unitName}_$p"
-        allPorts += PortDef(
-          varName = varName,
-          plioName = s"PLIO_$varName",
-          direction = "input",
-          bits = resolvePortWidthBits(
-            task = task,
-            peIndex = unit.peIndex,
-            portName = p,
-            isInput = true,
-            portBitWidthsByTaskPePort = portBitWidthsByTaskPePort
+        val isInternalChainInput = p == "taskIn" && unit.prevChainUnitName.nonEmpty
+        if (!isInternalChainInput) {
+          val varName = s"${unit.unitName}_$p"
+          allPorts += PortDef(
+            varName = varName,
+            plioName = s"PLIO_$varName",
+            direction = "input",
+            bits = resolvePortWidthBits(
+              task = task,
+              peIndex = unit.peIndex,
+              portName = p,
+              isInput = true,
+              portBitWidthsByTaskPePort = portBitWidthsByTaskPePort
+            )
           )
-        )
+        }
       }
 
       outputPorts.foreach { p =>
-        val varName = s"${unit.unitName}_$p"
-        allPorts += PortDef(
-          varName = varName,
-          plioName = s"PLIO_$varName",
-          direction = "output",
-          bits = resolvePortWidthBits(
-            task = task,
-            peIndex = unit.peIndex,
-            portName = p,
-            isInput = false,
-            portBitWidthsByTaskPePort = portBitWidthsByTaskPePort
+        val isInternalChainOutput = p == "taskOut" && unit.nextChainUnitName.nonEmpty
+        if (!isInternalChainOutput) {
+          val varName = s"${unit.unitName}_$p"
+          allPorts += PortDef(
+            varName = varName,
+            plioName = s"PLIO_$varName",
+            direction = "output",
+            bits = resolvePortWidthBits(
+              task = task,
+              peIndex = unit.peIndex,
+              portName = p,
+              isInput = false,
+              portBitWidthsByTaskPePort = portBitWidthsByTaskPePort
+            )
           )
-        )
+        }
       }
     }
 
@@ -347,21 +371,35 @@ object ProjectHeaderTemplate {
   private def buildConnections(units: Seq[UnitDef]): Seq[String] = {
     val lines = mutable.ArrayBuffer[String]()
     var net = 0
+    val unitsByName = units.map(u => u.unitName -> u).toMap
 
     units.foreach { u =>
       val inputPorts = orderTaskInputPorts(u.taskInputPorts) ++ u.rwInputPorts.sorted
       val outputPorts = orderTaskOutputPorts(u.taskOutputPorts) ++ u.rwOutputPorts.sorted
 
       inputPorts.zipWithIndex.foreach { case (port, inIdx) =>
-        val plioVar = s"${u.unitName}_$port"
-        lines += s"    connect< stream > net$net (${plioVar}.out[0], ${u.unitName}_kernel.in[$inIdx]);"
-        net += 1
+        if (port == "taskIn" && u.prevChainUnitName.nonEmpty) {
+          val prevUnit = unitsByName(u.prevChainUnitName.get)
+          val prevOutputPorts = orderTaskOutputPorts(prevUnit.taskOutputPorts) ++ prevUnit.rwOutputPorts.sorted
+          val prevTaskOutIdx = prevOutputPorts.indexOf("taskOut")
+          if (prevTaskOutIdx >= 0) {
+            lines += s"    connect< stream > net$net (${prevUnit.unitName}_kernel.out[$prevTaskOutIdx], ${u.unitName}_kernel.in[$inIdx]);"
+            net += 1
+          }
+        } else {
+          val plioVar = s"${u.unitName}_$port"
+          lines += s"    connect< stream > net$net (${plioVar}.out[0], ${u.unitName}_kernel.in[$inIdx]);"
+          net += 1
+        }
       }
 
       outputPorts.zipWithIndex.foreach { case (port, outIdx) =>
-        val plioVar = s"${u.unitName}_$port"
-        lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${plioVar}.in[0]);"
-        net += 1
+        val isInternalChainOutput = port == "taskOut" && u.nextChainUnitName.nonEmpty
+        if (!isInternalChainOutput) {
+          val plioVar = s"${u.unitName}_$port"
+          lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${plioVar}.in[0]);"
+          net += 1
+        }
       }
     }
 

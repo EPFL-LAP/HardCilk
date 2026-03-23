@@ -25,7 +25,7 @@
             "isCont": false,
             "isRoot": false,
             "name": "vertex_map",
-            "numProcessingElements": 24,
+            "numProcessingElements": 4,
             "peHDLPath": "",
             "sidesConfigs": [
                 {

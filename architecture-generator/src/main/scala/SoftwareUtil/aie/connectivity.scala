@@ -1,6 +1,7 @@
 package SoftwareUtil.aie
 import Descriptors._
 import java.io.PrintWriter
+import scala.collection.mutable
 
 object ConnectivityTemplate {
 	private case class HelperKernelDef(
@@ -207,6 +208,7 @@ object ConnectivityTemplate {
 
 	private def buildTaskConnections(descriptor: FullSysGenDescriptor, hardCilkInstance: String): Seq[String] = {
 		val peCountsByTask = descriptor.taskDescriptors.map(t => t.name -> t.numProcessingElements).toMap
+		val aieEndpointByTask = buildAieEndpointByTask(descriptor)
 		val hcPeConnections = descriptor.getSystemConnectionsDescriptor().connections.flatMap { connection =>
 			val src = connection.srcPort
 			val dst = connection.dstPort
@@ -223,7 +225,8 @@ object ConnectivityTemplate {
 		val deducedConnections = hcPeConnections
 			.distinct
 			.map { case (taskName, peIndex, pePortType, fromPeToHardCilk) =>
-				val aieTaskName = taskName
+				val taskEndpoints = aieEndpointByTask.getOrElse(taskName, (taskName, taskName))
+				val aieTaskName = if (fromPeToHardCilk) taskEndpoints._2 else taskEndpoints._1
 				val peCount = peCountsByTask.getOrElse(taskName, 1)
 				val peSuffix = suffixForPe(peIndex, peCount)
 				val bindPort = s"$hardCilkInstance.BindTo_PE_${taskName}_${peIndex}_${pePortType}"
@@ -236,7 +239,7 @@ object ConnectivityTemplate {
 				}
 			}
 
-		val extraWriteBufferConnections = buildWriteBufferExportConnections(descriptor, hardCilkInstance)
+		val extraWriteBufferConnections = buildWriteBufferExportConnections(descriptor, hardCilkInstance, aieEndpointByTask)
 
 		(deducedConnections ++ extraWriteBufferConnections)
 			.distinct
@@ -245,10 +248,11 @@ object ConnectivityTemplate {
 
 	private def buildWriteBufferExportConnections(
 			descriptor: FullSysGenDescriptor,
-			hardCilkInstance: String
+			hardCilkInstance: String,
+			aieEndpointByTask: Map[String, (String, String)]
 	): Seq[String] = {
 		descriptor.taskDescriptors.flatMap { task =>
-			val aieTaskName = task.name
+			val aieTaskName = aieEndpointByTask.getOrElse(task.name, (task.name, task.name))._2
 			(0 until task.numProcessingElements).flatMap { peIndex =>
 				val peSuffix = suffixForPe(peIndex, task.numProcessingElements)
 
@@ -304,6 +308,51 @@ object ConnectivityTemplate {
 					else s"writeSingle${k.portWidth}Out"
 				Seq(s"sc=ai_engine_0.PLIO_${thisSubPE}${peSuffix}_$outPort:${k.instanceName}.sourceTask")
 			}
+		}
+	}
+
+	private def buildAieEndpointByTask(descriptor: FullSysGenDescriptor): Map[String, (String, String)] = {
+		descriptor.taskDescriptors.map { task =>
+			val orderedSubPEs = getOrderedSubPENamesForTask(descriptor, task.name)
+			if (orderedSubPEs.nonEmpty) {
+				task.name -> (orderedSubPEs.head, orderedSubPEs.last)
+			} else {
+				task.name -> (task.name, task.name)
+			}
+		}.toMap
+	}
+
+	private def getOrderedSubPENamesForTask(descriptor: FullSysGenDescriptor, taskName: String): Seq[String] = {
+		val subpes = descriptor.subPEList
+			.toSeq
+			.filter { case (_, sub) => sub.peName == taskName }
+			.map { case (name, sub) =>
+				(name, normalizeName(name), sub.rwRequest.nextsubPE)
+			}
+
+		if (subpes.isEmpty) {
+			Seq.empty
+		} else {
+			val byName = subpes.map(s => s._1 -> s).toMap
+			val incomingTargets = subpes.flatMap(_._3).toSet
+			val heads = subpes.filterNot(s => incomingTargets.contains(s._1)).sortBy(_._1)
+
+			val ordered = mutable.ArrayBuffer[String]()
+			val visited = mutable.Set[String]()
+
+			def walk(start: (String, String, Option[String])): Unit = {
+				var current = Option(start)
+				while (current.nonEmpty && !visited.contains(current.get._1)) {
+					val value = current.get
+					ordered += value._2
+					visited += value._1
+					current = value._3.flatMap(byName.get)
+				}
+			}
+
+			heads.foreach(walk)
+			subpes.sortBy(_._1).filterNot(s => visited.contains(s._1)).foreach(walk)
+			ordered.toSeq
 		}
 	}
 
