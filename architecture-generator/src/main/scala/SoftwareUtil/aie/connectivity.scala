@@ -9,7 +9,6 @@ object ConnectivityTemplate {
 			instanceName: String,
 			subPEName: String,
 			taskName: String,
-			peIndex: Int,
 			taskPeCount: Int,
 			requestType: String,
 			mode: String,
@@ -45,53 +44,42 @@ object ConnectivityTemplate {
 		val instanceCounterByBase = scala.collection.mutable.Map[String, Int]().withDefaultValue(0)
 
 		// Sort by key for stable output.
-		descriptor.subPEList.toList.sortBy(_._1).flatMap { case (subPEName, subPE) =>
+		descriptor.subPEList.toList.sortBy(_._1).map { case (subPEName, subPE) =>
 			val req = subPE.rwRequest
-			val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth)
 			val task = taskMap(subPE.peName)
+			val replicationCount = task.numProcessingElements
+			val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth, replicationCount)
+			val instanceBase = helperInstanceBase(req.`type`, req.mode, req.portWidth, replicationCount)
+			instanceCounterByBase(instanceBase) += 1
+			val instanceName = s"${instanceBase}_${instanceCounterByBase(instanceBase)}"
 
-			(0 until task.numProcessingElements).map { peIndex =>
-				val instanceBase = helperInstanceBase(req.`type`, req.mode, req.portWidth)
-				instanceCounterByBase(instanceBase) += 1
-				val instanceName = s"${instanceBase}_${instanceCounterByBase(instanceBase)}"
-
-				HelperKernelDef(
-					kernelName = kernelName,
-					instanceName = instanceName,
-					subPEName = subPEName,
-					taskName = subPE.peName,
-					peIndex = peIndex,
-					taskPeCount = task.numProcessingElements,
-					requestType = req.`type`,
-					mode = req.mode,
-					portWidth = req.portWidth,
-					nextSubPE = req.nextsubPE
-				)
-			}
+			HelperKernelDef(
+				kernelName = kernelName,
+				instanceName = instanceName,
+				subPEName = subPEName,
+				taskName = subPE.peName,
+				taskPeCount = task.numProcessingElements,
+				requestType = req.`type`,
+				mode = req.mode,
+				portWidth = req.portWidth,
+				nextSubPE = req.nextsubPE
+			)
 		}
 	}
 
-	private def helperInstanceBase(requestType: String, mode: String, portWidth: Int): String = {
+	private def helperInstanceBase(requestType: String, mode: String, portWidth: Int, replicationCount: Int): String = {
 		(requestType, mode) match {
-			case ("read", "single")  => s"ReadSingle_Basic_64_$portWidth"
-			case ("read", "stream")  => s"ReadStream_64_$portWidth"
-			case ("write", "single") => s"WriteSingle_Basic_64_$portWidth"
-			case ("write", "stream") => s"WriteStream_Basic_64_$portWidth"
+			case ("read", "single")  => s"ReadSingle_${portWidth}_${replicationCount}"
+			case ("read", "stream")  => s"ReadStream_${portWidth}_${replicationCount}"
+			case ("write", "single") => s"WriteSingle_${portWidth}_${replicationCount}"
+			case ("write", "stream") => s"WriteStream_${portWidth}_${replicationCount}"
 			case _ =>
 				throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=$requestType mode=$mode")
 		}
 	}
 
-	private def helperKernelName(requestType: String, mode: String, portWidth: Int): String = {
-		(requestType, mode) match {
-			case ("read", "single")  => s"ReadSingle_Basic_64_$portWidth"
-			case ("read", "stream")  => s"ReadStreamWSplitter_Basic_64_$portWidth"
-			case ("write", "single") => s"WriteSingle_Basic_64_$portWidth"
-			case ("write", "stream") => s"WriteStream_Basic_64_$portWidth"
-			case _ =>
-				throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=$requestType mode=$mode")
-		}
-	}
+	private def helperKernelName(requestType: String, mode: String, portWidth: Int, replicationCount: Int): String =
+		helperInstanceBase(requestType, mode, portWidth, replicationCount)
 
 	private def buildNkLines(
 			hardCilkKernelName: String,
@@ -280,33 +268,36 @@ object ConnectivityTemplate {
 	}
 
 	private def buildSubPEConnections(helperKernels: List[HelperKernelDef]): Seq[String] = {
-		val helperBySubPEAndPe = helperKernels.map(k => (k.subPEName, k.peIndex) -> k).toMap
+		val helperBySubPE = helperKernels.map(k => k.subPEName -> k).toMap
 
 		helperKernels.flatMap { k =>
 			val thisSubPE = normalizeName(k.subPEName)
-			val peSuffix = suffixForPe(k.peIndex, k.taskPeCount)
-			if (k.requestType == "read") {
-				val outPort =
-					if (k.mode == "stream") s"readStream${k.portWidth}Out"
-					else s"readSingle${k.portWidth}Out"
+			(0 until k.taskPeCount).flatMap { peIndex =>
+				val peSuffix = suffixForPe(peIndex, k.taskPeCount)
 
-				val start = s"sc=ai_engine_0.PLIO_${thisSubPE}${peSuffix}_$outPort:${k.instanceName}.sourceTask"
+				if (k.requestType == "read") {
+					val outPort =
+						if (k.mode == "stream") s"readStream${k.portWidth}Out"
+						else s"readSingle${k.portWidth}Out"
 
-				val chain = k.nextSubPE.flatMap(nextName => helperBySubPEAndPe.get((nextName, k.peIndex))).map { nextKernel =>
-					val nextSubPE = normalizeName(nextKernel.subPEName)
-					val inPort =
-						if (k.mode == "stream") s"readStream${k.portWidth}In"
-						else s"readSingle${k.portWidth}In"
+					val start = s"sc=ai_engine_0.PLIO_${thisSubPE}${peSuffix}_$outPort:${k.instanceName}.sourceTasks_${peIndex}"
 
-					s"sc=${k.instanceName}.sinkResult:ai_engine_0.PLIO_${nextSubPE}${peSuffix}_$inPort"
+					val chain = k.nextSubPE.flatMap(nextName => helperBySubPE.get(nextName)).map { nextKernel =>
+						val nextSubPE = normalizeName(nextKernel.subPEName)
+						val inPort =
+							if (k.mode == "stream") s"readStream${k.portWidth}In"
+							else s"readSingle${k.portWidth}In"
+
+						s"sc=${k.instanceName}.sinkResults_${peIndex}:ai_engine_0.PLIO_${nextSubPE}${peSuffix}_$inPort"
+					}
+
+					Seq(start) ++ chain.toSeq
+				} else {
+					val outPort =
+						if (k.mode == "stream") s"writeStream${k.portWidth}Out"
+						else s"writeSingle${k.portWidth}Out"
+					Seq(s"sc=ai_engine_0.PLIO_${thisSubPE}${peSuffix}_$outPort:${k.instanceName}.sourceTasks_${peIndex}")
 				}
-
-				Seq(start) ++ chain.toSeq
-			} else {
-				val outPort =
-					if (k.mode == "stream") s"writeStream${k.portWidth}Out"
-					else s"writeSingle${k.portWidth}Out"
-				Seq(s"sc=ai_engine_0.PLIO_${thisSubPE}${peSuffix}_$outPort:${k.instanceName}.sourceTask")
 			}
 		}
 	}

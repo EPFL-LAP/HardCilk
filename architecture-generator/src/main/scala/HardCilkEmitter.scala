@@ -140,6 +140,10 @@ object HardCilkEmitter extends App {
         println(s"Generating AIE project in: $outputDirPathAIE")
         // AIE relevant templates
         new java.io.File(s"$outputDirPathAIE/aie_${jsonName}/").mkdirs()
+        KernelXmlTemplate.generateHelperKernelXmls(
+          systemDescriptor,
+          s"$outputDirPathAIE/aie_${jsonName}"
+        )
         ConnectivityTemplate.generateConnectivityCfg(
           systemDescriptor,
           s"$outputDirPathAIE/aie_${jsonName}"
