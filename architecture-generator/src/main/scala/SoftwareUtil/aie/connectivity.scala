@@ -124,7 +124,7 @@ object ConnectivityTemplate {
 			.sum
 		val interfacesArgumentNotifier = descriptor.taskDescriptors
 			.filter(task => descriptor.getPortCount("sendArgument", task.name) > 0)
-			.map(_.getNumServers("argumentNotifier"))
+			.map(_.getNumServers("argumentNotifier") * 2)
 			.sum
 		val interfacesMemoryAllocator = descriptor.taskDescriptors
 			.filter(task => descriptor.getPortCount("mallocIn", task.name) > 0)
