@@ -437,6 +437,33 @@ object ProjectHeaderTemplate {
     units.foreach { u =>
       val inputPorts = orderTaskInputPorts(u.taskInputPorts) ++ u.rwInputPorts.sorted
       val outputPorts = orderTaskOutputPorts(u.taskOutputPorts) ++ u.rwOutputPorts.sorted
+      val groupsForUnit = splitterGroups.filter(g => g.taskName == u.taskName && g.peIndex == u.peIndex)
+
+      // Build consolidated output list treating groups as single entries
+      val consolidatedOutputs = mutable.ArrayBuffer[String]()
+      val portToConsolidatedIndex = mutable.Map[String, Int]()
+      var consolidatedIdx = 0
+
+      outputPorts.foreach { port =>
+        val groupContainingPort = groupsForUnit.find(_.outputPortTypes.contains(port))
+        if (groupContainingPort.isEmpty) {
+          // Not in a group, add directly
+          consolidatedOutputs += port
+          portToConsolidatedIndex(port) = consolidatedIdx
+          consolidatedIdx += 1
+        } else {
+          // In a group, only map the first port of the group
+          val groupRepr = groupContainingPort.get.outputPortTypes.head
+          if (!portToConsolidatedIndex.contains(groupRepr)) {
+            consolidatedOutputs += groupRepr
+            portToConsolidatedIndex(groupRepr) = consolidatedIdx
+            groupContainingPort.get.outputPortTypes.foreach { p =>
+              portToConsolidatedIndex(p) = consolidatedIdx
+            }
+            consolidatedIdx += 1
+          }
+        }
+      }
 
       inputPorts.zipWithIndex.foreach { case (port, inIdx) =>
         if (port == "taskIn" && u.prevChainUnitName.nonEmpty) {
@@ -456,28 +483,23 @@ object ProjectHeaderTemplate {
 
       outputPorts.zipWithIndex.foreach { case (port, outIdx) =>
         val isInternalChainOutput = port == "taskOut" && u.nextChainUnitName.nonEmpty
-        val groupForPort = splitterGroups.find(g => g.taskName == u.taskName && g.peIndex == u.peIndex && g.outputPortTypes.contains(port))
+        val groupForPort = groupsForUnit.find(g => g.outputPortTypes.contains(port))
         if (!isInternalChainOutput && groupForPort.isEmpty) {
           val plioVar = s"${u.unitName}_$port"
-          lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${plioVar}.in[0]);"
+          val consolidatedIdx = portToConsolidatedIndex(port)
+          lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$consolidatedIdx], ${plioVar}.in[0]);"
           net += 1
         }
       }
 
       // Handle grouped outputs (splitter groups)
-      val groupsForUnit = splitterGroups.filter(g => g.taskName == u.taskName && g.peIndex == u.peIndex)
       groupsForUnit.foreach { group =>
-        val groupedPorts = group.outputPortTypes
-        val groupedIndices = groupedPorts.map { port =>
-          outputPorts.indexOf(port)
-        }
         val packedVarName = s"${u.taskName}${if (u.peCount > 1) s"_${u.peIndex}" else ""}${if (group.outputPortTypes.nonEmpty) s"_${group.outputPortTypes.mkString("_")}" else ""}"
         // Only connect the first grouped output; packed PLIO has single input port
-        if (groupedIndices.nonEmpty && groupedIndices(0) >= 0) {
-          val outIdx = groupedIndices(0)
-          lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${packedVarName}.in[0]);"
-          net += 1
-        }
+        val groupRepr = group.outputPortTypes.head
+        val consolidatedIdx = portToConsolidatedIndex(groupRepr)
+        lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$consolidatedIdx], ${packedVarName}.in[0]);"
+        net += 1
       }
     }
 
