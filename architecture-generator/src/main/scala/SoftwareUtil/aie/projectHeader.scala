@@ -178,6 +178,21 @@ object ProjectHeaderTemplate {
       }
     }
 
+    // Write-buffer exports are not always present in the static PE<->HardCilk connection list.
+    // Add them explicitly so project PLIOs include argDataOut/spawnNext when generated.
+    descriptor.taskDescriptors.foreach { task =>
+      (0 until task.numProcessingElements).foreach { peIndex =>
+        val key = (task.name, peIndex)
+        val buf = outPorts.getOrElseUpdate(key, mutable.ArrayBuffer[String]())
+        if (task.generateArgOutWriteBuffer) {
+          buf += "argDataOut"
+        }
+        if (task.generateSpawnNextWriteBuffer) {
+          buf += "spawnNext"
+        }
+      }
+    }
+
     (inPorts.keySet ++ outPorts.keySet).map { key =>
       val in = uniquePreserveOrder(inPorts.getOrElse(key, mutable.ArrayBuffer.empty[String]).toSeq)
       val out = uniquePreserveOrder(outPorts.getOrElse(key, mutable.ArrayBuffer.empty[String]).toSeq)
@@ -198,6 +213,17 @@ object ProjectHeaderTemplate {
         widths((dst.parentName, dst.parentIndex, dst.portType)) = connection.bitWidth
       } else if (src.parentType == "PE" && dst.parentType == "HardCilk") {
         widths((src.parentName, src.parentIndex, src.portType)) = connection.bitWidth
+      }
+    }
+
+    descriptor.taskDescriptors.foreach { task =>
+      (0 until task.numProcessingElements).foreach { peIndex =>
+        if (task.generateArgOutWriteBuffer) {
+          widths((task.name, peIndex, "argDataOut")) = task.widthTask
+        }
+        if (task.generateSpawnNextWriteBuffer) {
+          widths((task.name, peIndex, "spawnNext")) = task.widthTask
+        }
       }
     }
 

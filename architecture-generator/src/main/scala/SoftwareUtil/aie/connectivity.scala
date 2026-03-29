@@ -16,19 +16,37 @@ object ConnectivityTemplate {
 			nextSubPE: Option[String]
 	)
 
+	private case class TaskOutputDef(
+			taskName: String,
+			peIndex: Int,
+			portType: String,
+			bitWidth: Int
+	)
+
+	private case class StreamSplitterDef(
+			kernelName: String,
+			instanceName: String,
+			taskName: String,
+			peIndex: Int,
+			aiePortType: String,
+			outputPortTypes: Seq[String],
+			outputWidths: Seq[Int]
+	)
+
 	def generateConnectivityCfg(descriptor: FullSysGenDescriptor, projectFolder: String): Unit = {
 		val hardCilkKernelName = s"${descriptor.name}"
 		val hardCilkInstance = s"${hardCilkKernelName}_1"
 		val helperKernels = buildHelperKernelDefs(descriptor)
+		val streamSplitters = buildStreamSplitterDefs(descriptor)
 		val hardCilkAxiPortCount = getHardCilkAxiPortCount(descriptor)
 
 		val sectionConnectivity =
 			Seq("[connectivity]") ++
-				buildNkLines(hardCilkKernelName, hardCilkInstance, helperKernels) ++
+				buildNkLines(hardCilkKernelName, hardCilkInstance, helperKernels, streamSplitters) ++
 				Seq("") ++
 				buildSpLines(hardCilkInstance, helperKernels, hardCilkAxiPortCount) ++
 				Seq("") ++
-				buildTaskConnections(descriptor, hardCilkInstance) ++
+				buildTaskConnections(descriptor, hardCilkInstance, streamSplitters) ++
 				(if (helperKernels.nonEmpty) Seq("") ++ buildSubPEConnections(helperKernels) else Seq.empty)
 
 		val writer = new PrintWriter(s"$projectFolder/connectivity.cfg")
@@ -84,7 +102,8 @@ object ConnectivityTemplate {
 	private def buildNkLines(
 			hardCilkKernelName: String,
 			hardCilkInstance: String,
-			helperKernels: List[HelperKernelDef]
+			helperKernels: List[HelperKernelDef],
+			streamSplitters: Seq[StreamSplitterDef]
 	): Seq[String] = {
 		val nkHardCilk = Seq(s"nk=$hardCilkKernelName:1:$hardCilkInstance")
 
@@ -99,7 +118,17 @@ object ConnectivityTemplate {
 			.toSeq
 			.sorted  // Sort for deterministic output
 
-		nkHardCilk ++ nkHelpers
+		val nkSplitters = streamSplitters
+			.groupBy(_.kernelName)
+			.map { case (kernelName, instances) =>
+				val count = instances.length
+				val instanceNames = instances.map(_.instanceName).mkString(",")
+				s"nk=$kernelName:$count:$instanceNames"
+			}
+			.toSeq
+			.sorted
+
+		nkHardCilk ++ nkHelpers ++ nkSplitters
 	}
 
 	private def buildSpLines(
@@ -194,7 +223,11 @@ object ConnectivityTemplate {
 		}.sum
 	}
 
-	private def buildTaskConnections(descriptor: FullSysGenDescriptor, hardCilkInstance: String): Seq[String] = {
+	private def buildTaskConnections(
+			descriptor: FullSysGenDescriptor,
+			hardCilkInstance: String,
+			streamSplitters: Seq[StreamSplitterDef]
+	): Seq[String] = {
 		val peCountsByTask = descriptor.taskDescriptors.map(t => t.name -> t.numProcessingElements).toMap
 		val aieEndpointByTask = buildAieEndpointByTask(descriptor)
 		val hcPeConnections = descriptor.getSystemConnectionsDescriptor().connections.flatMap { connection =>
@@ -210,7 +243,8 @@ object ConnectivityTemplate {
 			}
 		}
 
-		val deducedConnections = hcPeConnections
+		val directInputConnections = hcPeConnections
+			.filter(!_._4)
 			.distinct
 			.map { case (taskName, peIndex, pePortType, fromPeToHardCilk) =>
 				val taskEndpoints = aieEndpointByTask.getOrElse(taskName, (taskName, taskName))
@@ -227,43 +261,123 @@ object ConnectivityTemplate {
 				}
 			}
 
-		val extraWriteBufferConnections = buildWriteBufferExportConnections(descriptor, hardCilkInstance, aieEndpointByTask)
+		val outputConnections = buildTaskOutputConnections(descriptor, hardCilkInstance, aieEndpointByTask, streamSplitters)
 
-		(deducedConnections ++ extraWriteBufferConnections)
+		(directInputConnections ++ outputConnections)
 			.distinct
 			.sorted
 	}
 
-	private def buildWriteBufferExportConnections(
+	private def buildTaskOutputConnections(
 			descriptor: FullSysGenDescriptor,
 			hardCilkInstance: String,
-			aieEndpointByTask: Map[String, (String, String)]
+			aieEndpointByTask: Map[String, (String, String)],
+			streamSplitters: Seq[StreamSplitterDef]
 	): Seq[String] = {
-		descriptor.taskDescriptors.flatMap { task =>
-			val aieTaskName = aieEndpointByTask.getOrElse(task.name, (task.name, task.name))._2
-			(0 until task.numProcessingElements).flatMap { peIndex =>
-				val peSuffix = suffixForPe(peIndex, task.numProcessingElements)
+		val outputsByTaskPePort = collectTaskOutputs(descriptor)
+		val splitterByTaskPePort = streamSplitters.flatMap { s =>
+			s.outputPortTypes.map(port => (s.taskName, s.peIndex, port) -> s)
+		}.toMap
 
-				val argDataOutConnection =
-					if (task.generateArgOutWriteBuffer) {
-						val bindPort = s"$hardCilkInstance.BindTo_PE_${task.name}_${peIndex}_argDataOut"
-						val aiePort = s"ai_engine_0.PLIO_${aieTaskName}${peSuffix}_argDataOut"
-						Some(s"sc=$aiePort:$bindPort")
-					} else {
-						None
-					}
+		outputsByTaskPePort.map { out =>
+			val task = descriptor.taskDescriptors.find(_.name == out.taskName)
+			val peCount = task.map(_.numProcessingElements).getOrElse(1)
+			val peSuffix = suffixForPe(out.peIndex, peCount)
+			val aieTaskName = aieEndpointByTask.getOrElse(out.taskName, (out.taskName, out.taskName))._2
+			val bindPort = s"$hardCilkInstance.BindTo_PE_${out.taskName}_${out.peIndex}_${out.portType}"
 
-				val spawnNextConnection =
-					if (task.generateSpawnNextWriteBuffer) {
-						val bindPort = s"$hardCilkInstance.BindTo_PE_${task.name}_${peIndex}_spawnNext"
-						val aiePort = s"ai_engine_0.PLIO_${aieTaskName}${peSuffix}_spawnNext"
-						Some(s"sc=$aiePort:$bindPort")
-					} else {
-						None
-					}
-
-				Seq(argDataOutConnection, spawnNextConnection).flatten
+			splitterByTaskPePort.get((out.taskName, out.peIndex, out.portType)) match {
+				case Some(splitter) =>
+					val outputIdx = splitter.outputPortTypes.indexOf(out.portType)
+					s"sc=${splitter.instanceName}.outputs_$outputIdx:$bindPort"
+				case None =>
+					val aiePort = s"ai_engine_0.PLIO_${aieTaskName}${peSuffix}_${out.portType}"
+					s"sc=$aiePort:$bindPort"
 			}
+		} ++ streamSplitters.map { splitter =>
+			val task = descriptor.taskDescriptors.find(_.name == splitter.taskName)
+			val peCount = task.map(_.numProcessingElements).getOrElse(1)
+			val peSuffix = suffixForPe(splitter.peIndex, peCount)
+			val aieTaskName = aieEndpointByTask.getOrElse(splitter.taskName, (splitter.taskName, splitter.taskName))._2
+			val aiePort = s"ai_engine_0.PLIO_${aieTaskName}${peSuffix}_${splitter.aiePortType}"
+			s"sc=$aiePort:${splitter.instanceName}.input"
+		}
+	}
+
+	private def buildStreamSplitterDefs(descriptor: FullSysGenDescriptor): Seq[StreamSplitterDef] = {
+		val outputsByTaskPe = collectTaskOutputs(descriptor).groupBy(out => (out.taskName, out.peIndex))
+		val instanceCounterByKernel = mutable.Map[String, Int]().withDefaultValue(0)
+
+		outputsByTaskPe
+			.toSeq
+			.sortBy { case ((taskName, peIndex), _) => (taskName, peIndex) }
+			.flatMap { case ((taskName, peIndex), outputs) =>
+				val ordered = outputs
+					.groupBy(_.portType)
+					.map(_._2.head)
+					.toSeq
+					.sortBy(out => (outputPortPriority(out.portType), out.portType))
+
+				if (ordered.size <= 2) {
+					Seq.empty
+				} else {
+					ordered.grouped(2).collect { case group if group.size > 1 =>
+						val widths = group.map(_.bitWidth)
+						val kernelName = s"StreamSplitter_${widths.mkString("_")}"
+						instanceCounterByKernel(kernelName) += 1
+						val instanceName = s"${kernelName}_${instanceCounterByKernel(kernelName)}"
+
+						StreamSplitterDef(
+							kernelName = kernelName,
+							instanceName = instanceName,
+							taskName = taskName,
+							peIndex = peIndex,
+							aiePortType = group.map(_.portType).mkString("_"),
+							outputPortTypes = group.map(_.portType),
+							outputWidths = widths
+						)
+					}.toSeq
+				}
+			}
+	}
+
+	private def collectTaskOutputs(descriptor: FullSysGenDescriptor): Seq[TaskOutputDef] = {
+		val directOutputs = descriptor.getSystemConnectionsDescriptor().connections.flatMap { connection =>
+			val src = connection.srcPort
+			val dst = connection.dstPort
+			if (src.parentType == "PE" && dst.parentType == "HardCilk") {
+				Some(TaskOutputDef(src.parentName, src.parentIndex, src.portType, connection.bitWidth))
+			} else {
+				None
+			}
+		}
+
+		val writeBufferOutputs = descriptor.taskDescriptors.flatMap { task =>
+			(0 until task.numProcessingElements).flatMap { peIndex =>
+				val argDataOut =
+					if (task.generateArgOutWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "argDataOut", task.widthTask)) else None
+				val spawnNext =
+					if (task.generateSpawnNextWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "spawnNext", task.widthTask)) else None
+				Seq(argDataOut, spawnNext).flatten
+			}
+		}
+
+		(directOutputs ++ writeBufferOutputs)
+			.groupBy(out => (out.taskName, out.peIndex, out.portType))
+			.map(_._2.head)
+			.toSeq
+	}
+
+	private def outputPortPriority(portType: String): Int = {
+		portType match {
+			case "taskOut" => 0
+			case "taskOutGlobal" => 1
+			case "argOut" => 2
+			case "closureOut" => 3
+			case "mallocOut" => 4
+			case "argDataOut" => 5
+			case "spawnNext" => 6
+			case _ => 100
 		}
 	}
 

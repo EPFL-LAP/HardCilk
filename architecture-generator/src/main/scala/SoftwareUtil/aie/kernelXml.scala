@@ -25,6 +25,18 @@ object KernelXmlTemplate {
       offset: Int
     )
 
+      private case class TaskOutputDef(
+        taskName: String,
+        peIndex: Int,
+        portType: String,
+        bitWidth: Int
+      )
+
+      private case class StreamSplitterXmlDef(
+        kernelName: String,
+        outputWidths: Seq[Int]
+      )
+
   def generateHelperKernelXmls(descriptor: FullSysGenDescriptor, projectFolder: String): Unit = {
     val xmlFolder = new java.io.File(s"$projectFolder/scripts/xml")
     xmlFolder.mkdirs()
@@ -42,6 +54,16 @@ object KernelXmlTemplate {
       val writer = new PrintWriter(file)
       try {
         writer.write(renderKernelXml(helper) + "\n")
+      } finally {
+        writer.close()
+      }
+    }
+
+    buildStreamSplitterXmlDefs(descriptor).foreach { splitter =>
+      val file = new java.io.File(xmlFolder, s"${splitter.kernelName}.xml")
+      val writer = new PrintWriter(file)
+      try {
+        writer.write(renderStreamSplitterXml(splitter) + "\n")
       } finally {
         writer.close()
       }
@@ -134,6 +156,61 @@ object KernelXmlTemplate {
       }
     }
     lines.mkString("\n")
+  }
+
+  private def buildStreamSplitterXmlDefs(descriptor: FullSysGenDescriptor): Seq[StreamSplitterXmlDef] = {
+    val outputsByTaskPe = collectTaskOutputs(descriptor).groupBy(out => (out.taskName, out.peIndex))
+
+    outputsByTaskPe
+      .toSeq
+      .sortBy { case ((taskName, peIndex), _) => (taskName, peIndex) }
+      .flatMap { case (_, outputs) =>
+        val ordered = outputs
+          .groupBy(_.portType)
+          .map(_._2.head)
+          .toSeq
+          .sortBy(out => (outputPortPriority(out.portType), out.portType))
+
+        if (ordered.size <= 2) {
+          Seq.empty
+        } else {
+          ordered.grouped(2).collect { case group if group.size > 1 =>
+            val widths = group.map(_.bitWidth)
+            StreamSplitterXmlDef(
+              kernelName = s"StreamSplitter_${widths.mkString("_")}",
+              outputWidths = widths
+            )
+          }.toSeq
+        }
+      }
+      .distinctBy(_.kernelName)
+  }
+
+  private def renderStreamSplitterXml(splitter: StreamSplitterXmlDef): String = {
+    val inputWidth = splitter.outputWidths.sum
+    val outputPortLines = splitter.outputWidths.zipWithIndex.map { case (width, idx) =>
+      s"      <port name=\"outputs_$idx\" mode=\"read_only\" dataWidth=\"$width\" portType=\"stream\"/>"
+    }
+    val outputArgLines = splitter.outputWidths.zipWithIndex.map { case (_, idx) =>
+      val id = idx + 1
+      s"      <arg name=\"outputs_$idx\" addressQualifier=\"4\" id=\"$id\" port=\"outputs_$idx\" size=\"0x4\" offset=\"0x0\" hostOffset=\"0x0\" hostSize=\"0x4\" type=\"stream\"/>"
+    }
+
+    Seq(
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+      "<root versionMajor=\"1\" versionMinor=\"9\">",
+      s"  <kernel name=\"${splitter.kernelName}\" language=\"ip\" vlnv=\"epfl.ch:hardcilk:${splitter.kernelName}:1.0\" attributes=\"\" preferredWorkGroupSizeMultiple=\"0\" workGroupSize=\"1\" hwControlProtocol=\"user_managed\">",
+      "    <ports>",
+      s"      <port name=\"input\" mode=\"write_only\" dataWidth=\"$inputWidth\" portType=\"stream\"/>",
+      outputPortLines.mkString("\n"),
+      "    </ports>",
+      "    <args>",
+      "      <arg name=\"input\" addressQualifier=\"4\" id=\"0\" port=\"input\" size=\"0x4\" offset=\"0x0\" hostOffset=\"0x0\" hostSize=\"0x4\" type=\"stream\"/>",
+      outputArgLines.mkString("\n"),
+      "    </args>",
+      "  </kernel>",
+      "</root>"
+    ).mkString("\n")
   }
 
   private def renderTopKernelXml(descriptor: FullSysGenDescriptor): String = {
@@ -273,6 +350,46 @@ object KernelXmlTemplate {
       }
 
       schedulerArgs ++ allocatorArgs ++ memoryAllocatorArgs
+    }
+  }
+
+  private def collectTaskOutputs(descriptor: FullSysGenDescriptor): Seq[TaskOutputDef] = {
+    val directOutputs = descriptor.getSystemConnectionsDescriptor().connections.flatMap { connection =>
+      val src = connection.srcPort
+      val dst = connection.dstPort
+      if (src.parentType == "PE" && dst.parentType == "HardCilk") {
+        Some(TaskOutputDef(src.parentName, src.parentIndex, src.portType, connection.bitWidth))
+      } else {
+        None
+      }
+    }
+
+    val writeBufferOutputs = descriptor.taskDescriptors.flatMap { task =>
+      (0 until task.numProcessingElements).flatMap { peIndex =>
+        val argDataOut =
+          if (task.generateArgOutWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "argDataOut", task.widthTask)) else None
+        val spawnNext =
+          if (task.generateSpawnNextWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "spawnNext", task.widthTask)) else None
+        Seq(argDataOut, spawnNext).flatten
+      }
+    }
+
+    (directOutputs ++ writeBufferOutputs)
+      .groupBy(out => (out.taskName, out.peIndex, out.portType))
+      .map(_._2.head)
+      .toSeq
+  }
+
+  private def outputPortPriority(portType: String): Int = {
+    portType match {
+      case "taskOut" => 0
+      case "taskOutGlobal" => 1
+      case "argOut" => 2
+      case "closureOut" => 3
+      case "mallocOut" => 4
+      case "argDataOut" => 5
+      case "spawnNext" => 6
+      case _ => 100
     }
   }
 
