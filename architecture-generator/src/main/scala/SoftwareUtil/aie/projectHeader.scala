@@ -34,6 +34,21 @@ object ProjectHeaderTemplate {
       req: RWRequestDescriptor
   )
 
+  private case class TaskOutputDef(
+      taskName: String,
+      peIndex: Int,
+      portType: String,
+      bitWidth: Int
+  )
+
+  private case class StreamSplitterGroupDef(
+      groupName: String,
+      taskName: String,
+      peIndex: Int,
+      outputPortTypes: Seq[String],
+      outputWidths: Seq[Int]
+  )
+
   def generateProjectHeader(descriptor: FullSysGenDescriptor, projectFolder: String): Unit = {
     val units = buildUnits(descriptor)
     val portBitWidthsByTaskPePort = buildHardCilkPortBitWidthsByTaskPePort(descriptor)
@@ -58,7 +73,7 @@ object ProjectHeaderTemplate {
         Seq("", "    // Kernels") ++
         buildKernelCreates(units) ++
         Seq("", "    // Connections") ++
-        buildConnections(units) ++
+        buildConnections(units, descriptor) ++
         Seq("  }", "};")
 
     val writer = new PrintWriter(s"$projectFolder/project.h")
@@ -311,6 +326,10 @@ object ProjectHeaderTemplate {
   ): Seq[PortDef] = {
     val taskByName = descriptor.taskDescriptors.map(t => t.name -> t).toMap
     val allPorts = mutable.ArrayBuffer[PortDef]()
+    val splitterGroups = buildStreamSplitterGroups(descriptor)
+    val portsByGroup = splitterGroups.flatMap { group =>
+      group.outputPortTypes.map(port => (group.taskName, group.peIndex, port) -> group)
+    }.toMap
 
     units.foreach { unit =>
       val task = taskByName(unit.taskName)
@@ -338,7 +357,8 @@ object ProjectHeaderTemplate {
 
       outputPorts.foreach { p =>
         val isInternalChainOutput = p == "taskOut" && unit.nextChainUnitName.nonEmpty
-        if (!isInternalChainOutput) {
+        val isGroupedOutput = portsByGroup.contains((unit.taskName, unit.peIndex, p))
+        if (!isInternalChainOutput && !isGroupedOutput) {
           val varName = s"${unit.unitName}_$p"
           allPorts += PortDef(
             varName = varName,
@@ -354,6 +374,20 @@ object ProjectHeaderTemplate {
           )
         }
       }
+    }
+
+    // Add grouped outputs as packed PLIOs
+    splitterGroups.foreach { group =>
+      val task = taskByName.get(group.taskName)
+      val peCount = task.map(_.numProcessingElements).getOrElse(1)
+      val peSuffix = if (peCount > 1) s"_${group.peIndex}" else ""
+      val varName = s"${group.taskName}$peSuffix${if (group.outputPortTypes.nonEmpty) s"_${group.outputPortTypes.mkString("_")}" else ""}"
+      allPorts += PortDef(
+        varName = varName,
+        plioName = s"PLIO_$varName",
+        direction = "output",
+        bits = toSupportedPlioBits(group.outputWidths.sum)
+      )
     }
 
     uniquePortDefs(allPorts.toSeq).sortBy(_.varName)
@@ -394,10 +428,11 @@ object ProjectHeaderTemplate {
       )
     }
 
-  private def buildConnections(units: Seq[UnitDef]): Seq[String] = {
+  private def buildConnections(units: Seq[UnitDef], descriptor: FullSysGenDescriptor): Seq[String] = {
     val lines = mutable.ArrayBuffer[String]()
     var net = 0
     val unitsByName = units.map(u => u.unitName -> u).toMap
+    val splitterGroups = buildStreamSplitterGroups(descriptor)
 
     units.foreach { u =>
       val inputPorts = orderTaskInputPorts(u.taskInputPorts) ++ u.rwInputPorts.sorted
@@ -421,10 +456,27 @@ object ProjectHeaderTemplate {
 
       outputPorts.zipWithIndex.foreach { case (port, outIdx) =>
         val isInternalChainOutput = port == "taskOut" && u.nextChainUnitName.nonEmpty
-        if (!isInternalChainOutput) {
+        val groupForPort = splitterGroups.find(g => g.taskName == u.taskName && g.peIndex == u.peIndex && g.outputPortTypes.contains(port))
+        if (!isInternalChainOutput && groupForPort.isEmpty) {
           val plioVar = s"${u.unitName}_$port"
           lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${plioVar}.in[0]);"
           net += 1
+        }
+      }
+
+      // Handle grouped outputs (splitter groups)
+      val groupsForUnit = splitterGroups.filter(g => g.taskName == u.taskName && g.peIndex == u.peIndex)
+      groupsForUnit.foreach { group =>
+        val groupedPorts = group.outputPortTypes
+        val groupedIndices = groupedPorts.map { port =>
+          outputPorts.indexOf(port)
+        }
+        val packedVarName = s"${u.taskName}${if (u.peCount > 1) s"_${u.peIndex}" else ""}${if (group.outputPortTypes.nonEmpty) s"_${group.outputPortTypes.mkString("_")}" else ""}"
+        groupedIndices.zipWithIndex.foreach { case (outIdx, groupIdx) =>
+          if (outIdx >= 0) {
+            lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${packedVarName}.in[$groupIdx]);"
+            net += 1
+          }
         }
       }
     }
@@ -464,6 +516,76 @@ object ProjectHeaderTemplate {
 
   private def normalizeName(value: String): String =
     value.toLowerCase.replaceAll("[^a-z0-9_]", "")
+
+  private def buildStreamSplitterGroups(descriptor: FullSysGenDescriptor): Seq[StreamSplitterGroupDef] = {
+    val outputsByTaskPe = collectTaskOutputs(descriptor).groupBy(out => (out.taskName, out.peIndex))
+
+    outputsByTaskPe
+      .toSeq
+      .sortBy { case ((taskName, peIndex), _) => (taskName, peIndex) }
+      .flatMap { case ((taskName, peIndex), outputs) =>
+        val ordered = outputs
+          .groupBy(_.portType)
+          .map(_._2.head)
+          .toSeq
+          .sortBy(out => (outputPortPriority(out.portType), out.portType))
+
+        if (ordered.size <= 2) {
+          Seq.empty
+        } else {
+          ordered.grouped(2).collect { case group if group.size > 1 =>
+            val widths = group.map(_.bitWidth)
+            StreamSplitterGroupDef(
+              groupName = s"StreamSplitter_${widths.mkString("_")}",
+              taskName = taskName,
+              peIndex = peIndex,
+              outputPortTypes = group.map(_.portType),
+              outputWidths = widths
+            )
+          }.toSeq
+        }
+      }
+  }
+
+  private def collectTaskOutputs(descriptor: FullSysGenDescriptor): Seq[TaskOutputDef] = {
+    val directOutputs = descriptor.getSystemConnectionsDescriptor().connections.flatMap { connection =>
+      val src = connection.srcPort
+      val dst = connection.dstPort
+      if (src.parentType == "PE" && dst.parentType == "HardCilk") {
+        Some(TaskOutputDef(src.parentName, src.parentIndex, src.portType, connection.bitWidth))
+      } else {
+        None
+      }
+    }
+
+    val writeBufferOutputs = descriptor.taskDescriptors.flatMap { task =>
+      (0 until task.numProcessingElements).flatMap { peIndex =>
+        val argDataOut =
+          if (task.generateArgOutWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "argDataOut", task.widthTask)) else None
+        val spawnNext =
+          if (task.generateSpawnNextWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "spawnNext", task.widthTask)) else None
+        Seq(argDataOut, spawnNext).flatten
+      }
+    }
+
+    (directOutputs ++ writeBufferOutputs)
+      .groupBy(out => (out.taskName, out.peIndex, out.portType))
+      .map(_._2.head)
+      .toSeq
+  }
+
+  private def outputPortPriority(portType: String): Int = {
+    portType match {
+      case "taskOut" => 0
+      case "taskOutGlobal" => 1
+      case "argOut" => 2
+      case "closureOut" => 3
+      case "mallocOut" => 4
+      case "argDataOut" => 5
+      case "spawnNext" => 6
+      case _ => 100
+    }
+  }
 
   private def resolvePortWidthBits(
       task: TaskDescriptor,
