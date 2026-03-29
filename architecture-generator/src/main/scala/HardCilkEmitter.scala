@@ -153,6 +153,12 @@ object HardCilkEmitter extends App {
           systemDescriptor,
           s"$outputDirPathAIE/aie_${jsonName}/src/aie"
         )
+        new java.io.File(s"$outputDirPathAIE/aie_${jsonName}/src/host/projects/pageRank/include").mkdirs()
+        CppHeaderTemplate.generateCppHeader(
+          systemDescriptor,
+          s"$outputDirPathAIE/aie_${jsonName}/src/host/projects/pageRank/include",
+          1
+        )
       } else {
         println("AIE project generation not requested.")
       }

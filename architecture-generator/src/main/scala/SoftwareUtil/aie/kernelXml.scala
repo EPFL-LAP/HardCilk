@@ -187,7 +187,7 @@ object KernelXmlTemplate {
   }
 
   private def renderStreamSplitterXml(splitter: StreamSplitterXmlDef): String = {
-    val inputWidth = splitter.outputWidths.sum
+    val inputWidth = splitter.outputWidths.max + 128
     val outputPortLines = splitter.outputWidths.zipWithIndex.map { case (width, idx) =>
       s"      <port name=\"outputs_$idx\" mode=\"read_only\" dataWidth=\"$width\" portType=\"stream\"/>"
     }
