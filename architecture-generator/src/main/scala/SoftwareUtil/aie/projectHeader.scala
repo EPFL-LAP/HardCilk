@@ -232,12 +232,14 @@ object ProjectHeaderTemplate {
     }
 
     descriptor.taskDescriptors.foreach { task =>
+      val spawnNextWidth = getSpawnNextBundleWidthBits(descriptor, task)
+      val argDataOutWidth = getArgDataOutBundleWidthBits(descriptor, task)
       (0 until task.numProcessingElements).foreach { peIndex =>
         if (task.generateArgOutWriteBuffer) {
-          widths((task.name, peIndex, "argDataOut")) = task.widthTask
+          widths((task.name, peIndex, "argDataOut")) = argDataOutWidth
         }
         if (task.generateSpawnNextWriteBuffer) {
-          widths((task.name, peIndex, "spawnNext")) = task.widthTask
+          widths((task.name, peIndex, "spawnNext")) = spawnNextWidth
         }
       }
     }
@@ -581,11 +583,13 @@ object ProjectHeaderTemplate {
     }
 
     val writeBufferOutputs = descriptor.taskDescriptors.flatMap { task =>
+      val spawnNextWidth = getSpawnNextBundleWidthBits(descriptor, task)
+      val argDataOutWidth = getArgDataOutBundleWidthBits(descriptor, task)
       (0 until task.numProcessingElements).flatMap { peIndex =>
         val argDataOut =
-          if (task.generateArgOutWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "argDataOut", task.widthTask)) else None
+          if (task.generateArgOutWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "argDataOut", argDataOutWidth)) else None
         val spawnNext =
-          if (task.generateSpawnNextWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "spawnNext", task.widthTask)) else None
+          if (task.generateSpawnNextWriteBuffer) Some(TaskOutputDef(task.name, peIndex, "spawnNext", spawnNextWidth)) else None
         Seq(argDataOut, spawnNext).flatten
       }
     }
@@ -607,6 +611,47 @@ object ProjectHeaderTemplate {
       case "spawnNext" => 6
       case _ => 100
     }
+  }
+
+  private def getSpawnNextDataWidthBits(descriptor: FullSysGenDescriptor, task: TaskDescriptor): Int = {
+    descriptor.spawnNextList
+      .get(task.name)
+      .map(_.flatMap(target => descriptor.taskDescriptors.find(_.name == target).map(_.widthTask)))
+      .filter(_.nonEmpty)
+      .map(_.max)
+      .getOrElse(task.widthTask)
+  }
+
+  private def getSpawnNextBundleWidthBits(descriptor: FullSysGenDescriptor, task: TaskDescriptor): Int = {
+    val wAddr = descriptor.widthAddress
+    val wData = getSpawnNextDataWidthBits(descriptor, task)
+    val wAllow = if (task.variableSpawn) 0 else 32
+    val nAllow = 1 + descriptor.spawnList.getOrElse(task.name, List.empty).count(_ != task.name)
+    val totalSize = wAddr + wData + 32 + nAllow * wAllow
+    nextPow2(totalSize)
+  }
+
+  private def getArgDataOutDataWidthBits(descriptor: FullSysGenDescriptor, task: TaskDescriptor): Int = {
+    if (task.generateArgOutWriteBuffer && (descriptor.mFPGASimulation || descriptor.mFPGASynth)) {
+      task.argumentSizeList.headOption.getOrElse(0)
+    } else {
+      0
+    }
+  }
+
+  private def getArgDataOutBundleWidthBits(descriptor: FullSysGenDescriptor, task: TaskDescriptor): Int = {
+    val wAddr = descriptor.widthAddress
+    val wData = getArgDataOutDataWidthBits(descriptor, task)
+    val wAllow = 32
+    val nAllow = 1
+    val totalSize = wAddr + wData + 32 + nAllow * wAllow
+    nextPow2(totalSize)
+  }
+
+  private def nextPow2(value: Int): Int = {
+    var x = 1
+    while (x < value) x = x << 1
+    x
   }
 
   private def resolvePortWidthBits(
