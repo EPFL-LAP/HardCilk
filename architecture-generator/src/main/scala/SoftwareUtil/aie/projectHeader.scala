@@ -472,11 +472,11 @@ object ProjectHeaderTemplate {
           outputPorts.indexOf(port)
         }
         val packedVarName = s"${u.taskName}${if (u.peCount > 1) s"_${u.peIndex}" else ""}${if (group.outputPortTypes.nonEmpty) s"_${group.outputPortTypes.mkString("_")}" else ""}"
-        groupedIndices.zipWithIndex.foreach { case (outIdx, groupIdx) =>
-          if (outIdx >= 0) {
-            lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${packedVarName}.in[$groupIdx]);"
-            net += 1
-          }
+        // Only connect the first grouped output; packed PLIO has single input port
+        if (groupedIndices.nonEmpty && groupedIndices(0) >= 0) {
+          val outIdx = groupedIndices(0)
+          lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$outIdx], ${packedVarName}.in[0]);"
+          net += 1
         }
       }
     }
