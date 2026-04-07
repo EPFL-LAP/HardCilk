@@ -42,40 +42,69 @@ trait SchedulerHasMfpgaSupport extends Module {
     def buildMfpgaConnections(): Unit = {
 
         if(mfpgaSupport) {
-            
-            var axisWidth = 512//1024//512 + 16
-            if(taskWidth >= 512){
-                axisWidth = 1024
-            }
-            val remoteTaskServer = Module(new RemoteTaskServer(taskWidth, peCount, axisCfgTaskAndReq.copy(wData = axisWidth), taskId))
-            remoteTaskServer.io.axi_mgmt <> s_axi_remote_task_server.get
 
 
             val serveRemoteAggregate = schedulerServers.map(_.io.serveRemote).reduce(_ || _) || spawnerServer.fold(false.B)(_.map(_.io.serveRemote).fold(false.B)(_ || _))
-
             val getTasksFromRemoteAggregate = schedulerServers.map(_.io.getTasksFromRemote).reduce(_ || _) && !serveRemoteAggregate
 
-            remoteTaskServer.io.serveRemote := serveRemoteAggregate
-            remoteTaskServer.io.getTasksFromRemote := getTasksFromRemoteAggregate && !serveRemoteAggregate
-            remoteTaskServer.io.connNetwork_0 <> stealNW_TQ.io.connVSS(schedulerServersNumber)
-            remoteTaskServer.io.connNetwork_1 <> stealNW_TQ.io.connVSS(schedulerServersNumber + 1)
-            remoteTaskServer.io.fpgaCountInputReg := fpgaCountInputReg.get
-            remoteTaskServer.io.fpgaIndexInputReg := fpgaIndexInputReg.get
-            remoteTaskServer.io.numTasksToStealOrServe := numberOfTasksToMove.get
-
-            if(axisWidth == 512){
-                elastic.SinkBuffer(m_axis_remote.get.asFull) <> remoteTaskServer.io.m_axis_taskAndReq.asFull
-                elastic.SourceBuffer(s_axis_remote.get.asFull) <> remoteTaskServer.io.s_axis_taskAndReq.asFull
-            } else if(axisWidth > 512){
+            if(taskWidth >= 512){
+               val  axisWidth = 1024
+               val remoteTaskServer = Module(new RemoteTaskServer_1024(taskWidth, peCount, axisCfgTaskAndReq.copy(wData = axisWidth), taskId))
+               remoteTaskServer.io.axi_mgmt <> s_axi_remote_task_server.get
+                remoteTaskServer.io.serveRemote := serveRemoteAggregate
+                remoteTaskServer.io.getTasksFromRemote := getTasksFromRemoteAggregate && !serveRemoteAggregate
+                remoteTaskServer.io.connNetwork_0 <> stealNW_TQ.io.connVSS(schedulerServersNumber)
+                remoteTaskServer.io.connNetwork_1 <> stealNW_TQ.io.connVSS(schedulerServersNumber + 1)
+                remoteTaskServer.io.fpgaCountInputReg := fpgaCountInputReg.get
+                remoteTaskServer.io.fpgaIndexInputReg := fpgaIndexInputReg.get
+                remoteTaskServer.io.numTasksToStealOrServe := numberOfTasksToMove.get
                 val fromNetworkConverter = Module(new Axis512To1024(axisCfgTaskAndReq, axisCfgTaskAndReq.copy(wData = axisWidth)))
-
                 fromNetworkConverter.io.out.asFull <> remoteTaskServer.io.s_axis_taskAndReq.asFull
                 elastic.SourceBuffer(s_axis_remote.get.asFull) <> fromNetworkConverter.io.in.asFull
-
                 val toNetworkConverter = Module(new Axis1024To512(axisCfgTaskAndReq.copy(wData = axisWidth), axisCfgTaskAndReq))
                 toNetworkConverter.io.in.asFull <> remoteTaskServer.io.m_axis_taskAndReq.asFull
                 elastic.SinkBuffer(m_axis_remote.get.asFull) <> toNetworkConverter.io.out.asFull
+
+            } else {
+               val axisWidth = 512
+               val remoteTaskServer = Module(new RemoteTaskServer_512(taskWidth, peCount, axisCfgTaskAndReq.copy(wData = axisWidth), taskId))
+               remoteTaskServer.io.axi_mgmt <> s_axi_remote_task_server.get
+                remoteTaskServer.io.serveRemote := serveRemoteAggregate
+                remoteTaskServer.io.getTasksFromRemote := getTasksFromRemoteAggregate && !serveRemoteAggregate
+                remoteTaskServer.io.connNetwork_0 <> stealNW_TQ.io.connVSS(schedulerServersNumber)
+                remoteTaskServer.io.connNetwork_1 <> stealNW_TQ.io.connVSS(schedulerServersNumber + 1)
+                remoteTaskServer.io.fpgaCountInputReg := fpgaCountInputReg.get
+                remoteTaskServer.io.fpgaIndexInputReg := fpgaIndexInputReg.get
+                remoteTaskServer.io.numTasksToStealOrServe := numberOfTasksToMove.get
+                elastic.SinkBuffer(m_axis_remote.get.asFull) <> remoteTaskServer.io.m_axis_taskAndReq.asFull
+                elastic.SourceBuffer(s_axis_remote.get.asFull) <> remoteTaskServer.io.s_axis_taskAndReq.asFull
             }
+            
+            // var axisWidth = 512//1024//512 + 16
+            // if(taskWidth >= 512){
+            //     axisWidth = 1024
+            // }
+            //val remoteTaskServer = Module(new RemoteTaskServer(taskWidth, peCount, axisCfgTaskAndReq.copy(wData = axisWidth), taskId))
+            
+            // There is remoteTaskServer_512 vs remoteTaskServer_1024, create based on the axis width
+
+
+
+
+
+            // if(axisWidth == 512){
+            //     elastic.SinkBuffer(m_axis_remote.get.asFull) <> remoteTaskServer.io.m_axis_taskAndReq.asFull
+            //     elastic.SourceBuffer(s_axis_remote.get.asFull) <> remoteTaskServer.io.s_axis_taskAndReq.asFull
+            // } else if(axisWidth > 512){
+            //     val fromNetworkConverter = Module(new Axis512To1024(axisCfgTaskAndReq, axisCfgTaskAndReq.copy(wData = axisWidth)))
+
+            //     fromNetworkConverter.io.out.asFull <> remoteTaskServer.io.s_axis_taskAndReq.asFull
+            //     elastic.SourceBuffer(s_axis_remote.get.asFull) <> fromNetworkConverter.io.in.asFull
+
+            //     val toNetworkConverter = Module(new Axis1024To512(axisCfgTaskAndReq.copy(wData = axisWidth), axisCfgTaskAndReq))
+            //     toNetworkConverter.io.in.asFull <> remoteTaskServer.io.m_axis_taskAndReq.asFull
+            //     elastic.SinkBuffer(m_axis_remote.get.asFull) <> toNetworkConverter.io.out.asFull
+            // }
         }
     }
 }
