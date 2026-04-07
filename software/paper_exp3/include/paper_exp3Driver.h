@@ -88,7 +88,7 @@ public:
 
         // Measure simulation wall time start 
         auto start = std::chrono::high_resolution_clock::now();
-        int history = 0
+        int history = 0;
         while (remainingTasks > 0)
         {
             wait(10000, SC_NS);
