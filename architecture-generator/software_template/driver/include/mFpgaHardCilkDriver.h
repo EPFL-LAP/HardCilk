@@ -105,5 +105,7 @@ public:
     const uint8_t fpga_id_shift = 0x8;
     const uint8_t tasks_to_move = 0x10;    
 
+    const uint16_t messages_receveid_count_shift = 0x18;
+    const uint16_t messages_sent_count_shift = 0x20;  
 };
 #endif
