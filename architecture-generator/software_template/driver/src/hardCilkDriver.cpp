@@ -23,6 +23,8 @@ int hardCilkDriver::startSystem()
         for (auto base_address = taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++)
         {
             memory_->writeReg64(*base_address + scheduler_server_rpause_shift, 0x0);
+            if(!taskDescriptor->isCont)
+                memory_->writeReg64(*base_address + scheduler_server_processorInterrupt_shift, 0xFFFFFFFFF);
         }
         for (auto base_address = taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++)
         {
