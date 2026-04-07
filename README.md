@@ -38,6 +38,7 @@ Generate the benchmark circuits:
 
 ```bash
 cd scripts
+chmod +x generate_benchmarks.sh
 ./generate_benchmarks.sh
 ```
 
@@ -46,6 +47,7 @@ cd scripts
 Compile simulations before running:
 ```bash
 cd scripts
+chmod +x build_benchmarks.sh
 ./build_benchmarks.sh
 ```
 
@@ -55,6 +57,9 @@ Run the three sweeps from the paper:
 
 ```bash
 cd scripts
+chmod +x run_sweep1.sh
+chmod +x run_sweep2.sh
+chmod +x run_sweep3.sh
 ./run_sweep1.sh
 ./run_sweep2.sh
 ./run_sweep3.sh
