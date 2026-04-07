@@ -130,7 +130,7 @@ object CppHeaderTemplate {
        |
        |    uint64_t getMfpgaBaseAddress() const
        |    {
-       |        return 0x${descriptor.getMfpgaBaseAddress().toHexString.toUpperCase};
+       |        return (0x${descriptor.getMfpgaBaseAddress().toHexString.toUpperCase} + 4 * 0x40);
        |    }
        |
        |
