@@ -29,6 +29,8 @@ import cats.instances.map
 import chisel3.util.IrrevocableIO
 import chisel3.util.Decoupled
 import chisel3.util.DecoupledIO
+import java.nio.file.Paths
+
 
 // What I need to write for passing tasks around
 
@@ -467,7 +469,8 @@ object MfpgaHardCilkEmitter extends App {
 
         // softlink "ln -s repos/jnbrq/sysc-switch/include/sysc_netw/" to "outputDirPathSC/projects/${jsonName}/include/sysc_netw"
         val home = sys.env("HOME")
-        val syscSwitchPath = s"$home/HardCilk/simulation-models/sysc-switch-main/include/sysc_netw/"
+        val projectDir = Paths.get(sys.props("user.dir"))
+        val syscSwitchPath = projectDir.resolve("../simulation-models/sysc-switch-main/include/sysc_netw/").normalize().toString
         // "/repos/jnbrq/sysc-switch/include/sysc_netw"
         val syscSwitchDestination =
           s"$outputDirPathSC/projects/${internalName}/include/sysc_netw"
