@@ -2,7 +2,7 @@
 
 > Multi-FPGA graph analytics on Alveo U55C using HardCilk and VNx.
 
-**Platform:** Ubuntu 24.04 · x86\_64 · Two Alveo U55C cards
+**Platform:** Ubuntu 24.04 · x86_64 · Two Alveo U55C cards
 
 ---
 
@@ -18,22 +18,20 @@
 
 ## 1. Hardware Setup
 
-This artifact targets a host machine with **two Alveo U55C cards** on the same PCIe complex.
-The two cards must be connected **directly via QSFP port 0** using a QSFP cable.
-No network layer is instantiated — the cards communicate point-to-point.
+This artifact targets a host machine with **two Alveo U55C cards** on the same PCIe complex. The two cards must be connected **directly via QSFP port 0** using a QSFP cable. No network layer is instantiated — the cards communicate point-to-point.
 
 ---
 
 ## 2. Software Prerequisites
 
-### 2.1 — HardCilk toolchain
+### 2.1 — HardCilk Toolchain
 
 Requires **Python 3.13**. Clone the repository and run the platform installer, which sets up all required tools and libraries into a self-contained environment:
 
 ```bash
 git clone --recursive https://github.com/Mahfouz-z/hdlstuff.git
 cd hdlstuff
-python3 ubuntu-24.04-x86_64.py
+python3 ubuntu-24.04-x86_64.py --keep-logs
 ```
 
 Activate the environment before any of the steps below (and in every new shell session):
@@ -42,63 +40,77 @@ Activate the environment before any of the steps below (and in every new shell s
 source ~/.local/opt/hdlstuff/bin/activate-hdlstuff.sh
 ```
 
-### 2.2 — Alveo U55C platform packages
+### 2.2 — Alveo U55C Platform Packages
 
 Install the following packages from the [AMD Alveo U55C download page](https://www.amd.com/en/support/downloads/alveo-downloads.html/accelerators/alveo/u55c.html#alveotabs-item-vitis-tab):
 
 | Package | Install on |
-|---|---|
+|---------|------------|
 | Xilinx Runtime (XRT) | Both servers |
 | Deployment Target Platform | Server with the two FPGAs |
 | Development Target Platform | Synthesis server |
 
 ### 2.3 — Vitis Core Development Kit 2024.1
 
-Required for place-and-route of the generated designs.
-Download from the [Xilinx Vitis 2024.1 download page](https://www.xilinx.com/support/download/index.html/content/xilinx/en/downloadNav/vitis/2024-1.html).
+Required for place-and-route of the generated designs. Download from the [Xilinx Vitis 2024.1 download page](https://www.xilinx.com/support/download/index.html/content/xilinx/en/downloadNav/vitis/2024-1.html).
 
-### 2.4 — CMAC license
+### 2.4 — CMAC License
 
-The designs in this repo use the `CMAC_USPLUS` Xilinx IP, which requires a license.
-Licenses are available **free of charge** from the [AMD CMAC UsPlus product page](https://www.amd.com/en/products/adaptive-socs-and-fpgas/intellectual-property/cmac_usplus.html).
+The designs in this repository use the `CMAC_USPLUS` Xilinx IP, which requires a license. Licenses are available **free of charge** from the [AMD CMAC UsPlus product page](https://www.amd.com/en/products/adaptive-socs-and-fpgas/intellectual-property/cmac_usplus.html).
 
 ---
 
 ## 3. Building the Hardware
 
-All scripts live under `scripts/` in the HardCilk repo. Run them in order:
+All scripts live under `scripts/` in the HardCilk repository. Run them in order from that directory:
 
 ```bash
 cd scripts
 ```
 
 **Step 1 — Compile HLS kernels to Verilog:**
+
 ```bash
 ./build_benchmarks_hls.sh
 ```
 
+Compiles all C/C++ kernels under `hls-processing-elements/` to Verilog. Output is placed under `hls-kernel-output/<benchmark_name>/`.
+
 **Step 2 — Generate the HardCilk circuit for each benchmark:**
+
 ```bash
 ./generate_benchmarks_hardcilk.sh
 ```
 
+Generates the RTL for the NetCilk scheduler and integrates the Verilog produced in Step 1. Output is placed under `HardCilk-output/<benchmark_name>_hardcilk_output/`. This step also copies the host driver source from `software/` and injects the necessary headers derived from the JSON description and circuit structure.
+
 **Step 3 — Create the Vitis xclbin workspace for a specific benchmark:**
+
 ```bash
 ./generate_benchmark_xclbin_project.sh [pageRank | triangleCount | graphRandomWalk]
 ```
 
-**Step 4 — Run place-and-route to produce the `.xclbin`**
-(ensure Vitis 2024.1 and all prerequisites are on `PATH`):
+Creates the directory structure needed to compile the xclbin, following the same layout as AMD Vitis example projects. Output is placed under `xclbin-workspace/<benchmark_name>/`.
+
+**Step 4 — Run place-and-route to produce the `.xclbin`:**
+
+Ensure Vitis 2024.1 and all prerequisites are on `PATH`, then:
+
 ```bash
 cd xclbin-workspace/<benchmark>/
 make all
+```
+
+On success, the bitstream is written to:
+```
+build_dir.hw.xilinx_u55c_gen3x16_xdma_3_202210_1/VNx_<benchmark_name>.xclbin
 ```
 
 ---
 
 ## 4. Building the Host Driver
 
-The driver source is placed inside the xclbin workspace by Step 3 above.
+The driver source is placed inside the xclbin workspace by Step 3 above:
 
 ```bash
 cd xclbin-workspace/<benchmark>/src/host
@@ -108,6 +120,7 @@ make -j
 ```
 
 The compiled binary is written to:
+
 ```
 build/projects/<benchmark>/<benchmark>_xrt
 ```
@@ -116,23 +129,31 @@ build/projects/<benchmark>/<benchmark>_xrt
 
 ## 5. Running the Benchmarks
 
-```
+```bash
 ./<benchmark>_xrt <xclbin_path> <graph_file> <enable_vnx> [fpga_count]
 ```
 
 | Argument | Required | Description |
-|---|---|---|
+|----------|----------|-------------|
 | `xclbin_path` | ✓ | Path to the `.xclbin` bitstream |
 | `graph_file` | ✓ | Input graph in edge-list format |
 | `enable_vnx` | ✓ | `1` = bring up VNx Ethernet links · `0` = skip (single-FPGA runs) |
-| `fpga_count` | optional | Number of FPGAs to use (default: `2`) |
+| `fpga_count` | — | Number of FPGAs to use (default: `2`) |
+
+The runtime of the benchmark on the FPGA is reported in the output as:
+
+```
+Time taken for management loop: <N>s
+```
+
+This corresponds to the numbers in **Table I** of the paper.
 
 **Examples:**
 
 ```bash
 # Two FPGAs with VNx networking
-./pageRank_xrt overlay.xclbin graph.edgelist 1
+./pageRank_xrt <path to .xclbin> <path to graph edge list> 1
 
 # Single FPGA, no networking
-./pageRank_xrt overlay.xclbin graph.edgelist 0 1
+./pageRank_xrt <path to .xclbin> <path to graph edge list> 0 1
 ```

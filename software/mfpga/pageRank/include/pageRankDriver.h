@@ -271,17 +271,7 @@ public:
 
         std::cout << "Time taken for management loop: " << elapsed.count() << "s" << std::endl;
 
-        sleep(5);
-        auto messages_received_0 = memories_[0]->readReg64(drivers[0]->descriptor.getMfpgaBaseAddress() + messages_receveid_count_shift);
-        auto messages_sent_0 = memories_[0]->readReg64(drivers[0]->descriptor.getMfpgaBaseAddress() + messages_sent_count_shift);
-
-        auto messages_received_1 = memories_[1]->readReg64(drivers[1]->descriptor.getMfpgaBaseAddress() + messages_receveid_count_shift);
-        auto messages_sent_1 = memories_[1]->readReg64(drivers[1]->descriptor.getMfpgaBaseAddress() + messages_sent_count_shift);
-
-        // log the message exchange count
-        printf("Messages received by FPGA 0: %lu, Messages sent by FPGA 0: %lu\n", messages_received_0, messages_sent_0);
-        printf("Messages received by FPGA 1: %lu, Messages sent by FPGA 1: %lu\n", messages_received_1, messages_sent_1);
-
+        
         return 0;
     }
 };
