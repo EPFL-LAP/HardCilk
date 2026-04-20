@@ -28,16 +28,42 @@ object ConnectivityTemplate {
 			instanceName: String,
 			taskName: String,
 			peIndex: Int,
+			aieEndpointName: String,
 			aiePortType: String,
 			outputPortTypes: Seq[String],
 			outputWidths: Seq[Int]
 	)
 
+	private case class OutputRouteDef(
+			taskName: String,
+			peIndex: Int,
+			aieEndpointName: String,
+			portType: String,
+			bitWidth: Int,
+			sink: String
+	)
+
+	private case class OrderedSubPEEndpointDef(
+			name: String,
+			normalizedName: String,
+			nextSubPE: Option[String],
+			taskInputPorts: Seq[String],
+			taskOutputPorts: Seq[String]
+	)
+
+	private case class TaskAieEndpointDef(
+			defaultInputEndpoint: String,
+			defaultOutputEndpoint: String,
+			inputByPort: Map[String, String],
+			outputByPort: Map[String, String]
+	)
+
 	def generateConnectivityCfg(descriptor: FullSysGenDescriptor, projectFolder: String): Unit = {
 		val hardCilkKernelName = s"${descriptor.name}"
 		val hardCilkInstance = s"${hardCilkKernelName}_1"
+		val aieEndpointByTask = buildAieEndpointByTask(descriptor)
 		val helperKernels = buildHelperKernelDefs(descriptor)
-		val streamSplitters = buildStreamSplitterDefs(descriptor)
+		val streamSplitters = buildStreamSplitterDefs(descriptor, aieEndpointByTask, helperKernels)
 		val hardCilkAxiPortCount = getHardCilkAxiPortCount(descriptor)
 
 		val sectionConnectivity =
@@ -46,7 +72,7 @@ object ConnectivityTemplate {
 				Seq("") ++
 				buildSpLines(hardCilkInstance, helperKernels, hardCilkAxiPortCount) ++
 				Seq("") ++
-				buildTaskConnections(descriptor, hardCilkInstance, streamSplitters) ++
+				buildTaskConnections(descriptor, hardCilkInstance, streamSplitters, aieEndpointByTask, helperKernels) ++
 				(if (helperKernels.nonEmpty) Seq("") ++ buildSubPEConnections(helperKernels) else Seq.empty)
 
 		val writer = new PrintWriter(s"$projectFolder/connectivity.cfg")
@@ -62,26 +88,27 @@ object ConnectivityTemplate {
 		val instanceCounterByBase = scala.collection.mutable.Map[String, Int]().withDefaultValue(0)
 
 		// Sort by key for stable output.
-		descriptor.subPEList.toList.sortBy(_._1).map { case (subPEName, subPE) =>
-			val req = subPE.rwRequest
-			val task = taskMap(subPE.peName)
-			val replicationCount = task.numProcessingElements
-			val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth, replicationCount)
-			val instanceBase = helperInstanceBase(req.`type`, req.mode, req.portWidth, replicationCount)
-			instanceCounterByBase(instanceBase) += 1
-			val instanceName = s"${instanceBase}_${instanceCounterByBase(instanceBase)}"
+		descriptor.subPEList.toList.sortBy(_._1).flatMap { case (subPEName, subPE) =>
+			subPE.rwRequest.map { req =>
+				val task = taskMap(subPE.peName)
+				val replicationCount = task.numProcessingElements
+				val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth, replicationCount)
+				val instanceBase = helperInstanceBase(req.`type`, req.mode, req.portWidth, replicationCount)
+				instanceCounterByBase(instanceBase) += 1
+				val instanceName = s"${instanceBase}_${instanceCounterByBase(instanceBase)}"
 
-			HelperKernelDef(
-				kernelName = kernelName,
-				instanceName = instanceName,
-				subPEName = subPEName,
-				taskName = subPE.peName,
-				taskPeCount = task.numProcessingElements,
-				requestType = req.`type`,
-				mode = req.mode,
-				portWidth = req.portWidth,
-				nextSubPE = req.nextsubPE
-			)
+				HelperKernelDef(
+					kernelName = kernelName,
+					instanceName = instanceName,
+					subPEName = subPEName,
+					taskName = subPE.peName,
+					taskPeCount = task.numProcessingElements,
+					requestType = req.`type`,
+					mode = req.mode,
+					portWidth = req.portWidth,
+					nextSubPE = req.nextsubPE
+				)
+			}
 		}
 	}
 
@@ -226,10 +253,11 @@ object ConnectivityTemplate {
 	private def buildTaskConnections(
 			descriptor: FullSysGenDescriptor,
 			hardCilkInstance: String,
-			streamSplitters: Seq[StreamSplitterDef]
+			streamSplitters: Seq[StreamSplitterDef],
+			aieEndpointByTask: Map[String, TaskAieEndpointDef],
+			helperKernels: List[HelperKernelDef]
 	): Seq[String] = {
 		val peCountsByTask = descriptor.taskDescriptors.map(t => t.name -> t.numProcessingElements).toMap
-		val aieEndpointByTask = buildAieEndpointByTask(descriptor)
 		val hcPeConnections = descriptor.getSystemConnectionsDescriptor().connections.flatMap { connection =>
 			val src = connection.srcPort
 			val dst = connection.dstPort
@@ -247,21 +275,17 @@ object ConnectivityTemplate {
 			.filter(!_._4)
 			.distinct
 			.map { case (taskName, peIndex, pePortType, fromPeToHardCilk) =>
-				val taskEndpoints = aieEndpointByTask.getOrElse(taskName, (taskName, taskName))
-				val aieTaskName = if (fromPeToHardCilk) taskEndpoints._2 else taskEndpoints._1
+				val taskEndpoints = aieEndpointByTask.getOrElse(taskName, TaskAieEndpointDef(taskName, taskName, Map.empty, Map.empty))
+				val aieTaskName = resolveInputEndpoint(taskEndpoints, pePortType)
 				val peCount = peCountsByTask.getOrElse(taskName, 1)
 				val peSuffix = suffixForPe(peIndex, peCount)
 				val bindPort = s"$hardCilkInstance.BindTo_PE_${taskName}_${peIndex}_${pePortType}"
 				val aiePort = s"ai_engine_0.PLIO_${aieTaskName}${peSuffix}_${pePortType}"
 
-				if (fromPeToHardCilk) {
-					s"sc=$aiePort:$bindPort"
-				} else {
-					s"sc=$bindPort:$aiePort"
-				}
+				s"sc=$bindPort:$aiePort"
 			}
 
-		val outputConnections = buildTaskOutputConnections(descriptor, hardCilkInstance, aieEndpointByTask, streamSplitters)
+		val outputConnections = buildTaskOutputConnections(descriptor, hardCilkInstance, aieEndpointByTask, streamSplitters, helperKernels)
 
 		(directInputConnections ++ outputConnections)
 			.distinct
@@ -271,72 +295,109 @@ object ConnectivityTemplate {
 	private def buildTaskOutputConnections(
 			descriptor: FullSysGenDescriptor,
 			hardCilkInstance: String,
-			aieEndpointByTask: Map[String, (String, String)],
-			streamSplitters: Seq[StreamSplitterDef]
+			aieEndpointByTask: Map[String, TaskAieEndpointDef],
+			streamSplitters: Seq[StreamSplitterDef],
+			helperKernels: List[HelperKernelDef]
 	): Seq[String] = {
-		val outputsByTaskPePort = collectTaskOutputs(descriptor)
+		val hardCilkRoutes = collectTaskOutputs(descriptor).map { out =>
+			val taskEndpoints = aieEndpointByTask.getOrElse(out.taskName, TaskAieEndpointDef(out.taskName, out.taskName, Map.empty, Map.empty))
+			val endpointName = resolveOutputEndpoint(taskEndpoints, out.portType)
+			OutputRouteDef(
+				taskName = out.taskName,
+				peIndex = out.peIndex,
+				aieEndpointName = endpointName,
+				portType = out.portType,
+				bitWidth = out.bitWidth,
+				sink = s"$hardCilkInstance.BindTo_PE_${out.taskName}_${out.peIndex}_${out.portType}"
+			)
+		}
+
+		val rwRoutes = collectRWOutputRoutes(helperKernels)
+		val allRoutes = hardCilkRoutes ++ rwRoutes
+
 		val splitterByTaskPePort = streamSplitters.flatMap { s =>
-			s.outputPortTypes.map(port => (s.taskName, s.peIndex, port) -> s)
+			s.outputPortTypes.map(port => (s.taskName, s.peIndex, s.aieEndpointName, port) -> s)
 		}.toMap
 
-		outputsByTaskPePort.map { out =>
-			val task = descriptor.taskDescriptors.find(_.name == out.taskName)
+		val routedConnections = allRoutes.map { route =>
+			val task = descriptor.taskDescriptors.find(_.name == route.taskName)
 			val peCount = task.map(_.numProcessingElements).getOrElse(1)
-			val peSuffix = suffixForPe(out.peIndex, peCount)
-			val aieTaskName = aieEndpointByTask.getOrElse(out.taskName, (out.taskName, out.taskName))._2
-			val bindPort = s"$hardCilkInstance.BindTo_PE_${out.taskName}_${out.peIndex}_${out.portType}"
+			val peSuffix = suffixForPe(route.peIndex, peCount)
+			val aiePort = s"ai_engine_0.PLIO_${route.aieEndpointName}${peSuffix}_${route.portType}"
 
-			splitterByTaskPePort.get((out.taskName, out.peIndex, out.portType)) match {
+			splitterByTaskPePort.get((route.taskName, route.peIndex, route.aieEndpointName, route.portType)) match {
 				case Some(splitter) =>
-					val outputIdx = splitter.outputPortTypes.indexOf(out.portType)
-					s"sc=${splitter.instanceName}.outputs_$outputIdx:$bindPort"
+					val outputIdx = splitter.outputPortTypes.indexOf(route.portType)
+					s"sc=${splitter.instanceName}.outputs_$outputIdx:${route.sink}"
 				case None =>
-					val aiePort = s"ai_engine_0.PLIO_${aieTaskName}${peSuffix}_${out.portType}"
-					s"sc=$aiePort:$bindPort"
+					s"sc=$aiePort:${route.sink}"
 			}
-		} ++ streamSplitters.map { splitter =>
+ 		}
+
+		routedConnections ++ streamSplitters.map { splitter =>
 			val task = descriptor.taskDescriptors.find(_.name == splitter.taskName)
 			val peCount = task.map(_.numProcessingElements).getOrElse(1)
 			val peSuffix = suffixForPe(splitter.peIndex, peCount)
-			val aieTaskName = aieEndpointByTask.getOrElse(splitter.taskName, (splitter.taskName, splitter.taskName))._2
-			val aiePort = s"ai_engine_0.PLIO_${aieTaskName}${peSuffix}_${splitter.aiePortType}"
+			val aiePort = s"ai_engine_0.PLIO_${splitter.aieEndpointName}${peSuffix}_${splitter.aiePortType}"
 			s"sc=$aiePort:${splitter.instanceName}.input"
 		}
 	}
 
-	private def buildStreamSplitterDefs(descriptor: FullSysGenDescriptor): Seq[StreamSplitterDef] = {
-		val outputsByTaskPe = collectTaskOutputs(descriptor).groupBy(out => (out.taskName, out.peIndex))
+	private def buildStreamSplitterDefs(
+			descriptor: FullSysGenDescriptor,
+			aieEndpointByTask: Map[String, TaskAieEndpointDef],
+			helperKernels: List[HelperKernelDef]
+	): Seq[StreamSplitterDef] = {
+		val nonLastEndpointsByTask = getNonLastEndpointsByTask(descriptor)
+
+		val hardCilkOutputRoutes = collectTaskOutputs(descriptor).map { out =>
+			val taskEndpoints = aieEndpointByTask.getOrElse(out.taskName, TaskAieEndpointDef(out.taskName, out.taskName, Map.empty, Map.empty))
+			OutputRouteDef(
+				taskName = out.taskName,
+				peIndex = out.peIndex,
+				aieEndpointName = resolveOutputEndpoint(taskEndpoints, out.portType),
+				portType = out.portType,
+				bitWidth = out.bitWidth,
+				sink = ""
+			)
+		}
+		val rwOutputRoutes = collectRWOutputRoutes(helperKernels).map(_.copy(sink = ""))
+		val outputsByTaskPeEndpoint = (hardCilkOutputRoutes ++ rwOutputRoutes)
+			.groupBy(out => (out.taskName, out.peIndex, out.aieEndpointName))
+
 		val instanceCounterByKernel = mutable.Map[String, Int]().withDefaultValue(0)
 
-		outputsByTaskPe
+		outputsByTaskPeEndpoint
 			.toSeq
-			.sortBy { case ((taskName, peIndex), _) => (taskName, peIndex) }
-			.flatMap { case ((taskName, peIndex), outputs) =>
+			.sortBy { case ((taskName, peIndex, endpointName), _) => (taskName, peIndex, endpointName) }
+			.flatMap { case ((taskName, peIndex, endpointName), outputs) =>
+				val isNonLastEndpoint = nonLastEndpointsByTask.getOrElse(taskName, Set.empty).contains(endpointName)
 				val ordered = outputs
 					.groupBy(_.portType)
 					.map(_._2.head)
 					.toSeq
 					.sortBy(out => (outputPortPriority(out.portType), out.portType))
 
-				if (ordered.size <= 2) {
+				if (!isNonLastEndpoint || ordered.size <= 1) {
 					Seq.empty
 				} else {
-					ordered.grouped(2).collect { case group if group.size > 1 =>
-						val widths = group.map(_.bitWidth)
-						val kernelName = s"StreamSplitter_${widths.mkString("_")}"
-						instanceCounterByKernel(kernelName) += 1
-						val instanceName = s"${kernelName}_${instanceCounterByKernel(kernelName)}"
+					val widths = ordered.map(_.bitWidth)
+					val kernelName = s"StreamSplitter_${widths.mkString("_")}"
+					instanceCounterByKernel(kernelName) += 1
+					val instanceName = s"${kernelName}_${instanceCounterByKernel(kernelName)}"
 
+					Seq(
 						StreamSplitterDef(
 							kernelName = kernelName,
 							instanceName = instanceName,
 							taskName = taskName,
 							peIndex = peIndex,
-							aiePortType = group.map(_.portType).mkString("_"),
-							outputPortTypes = group.map(_.portType),
+							aieEndpointName = endpointName,
+							aiePortType = ordered.map(_.portType).mkString("_"),
+							outputPortTypes = ordered.map(_.portType),
 							outputWidths = widths
 						)
-					}.toSeq
+					)
 				}
 			}
 	}
@@ -428,17 +489,10 @@ object ConnectivityTemplate {
 		val helperBySubPE = helperKernels.map(k => k.subPEName -> k).toMap
 
 		helperKernels.flatMap { k =>
-			val thisSubPE = normalizeName(k.subPEName)
 			(0 until k.taskPeCount).flatMap { peIndex =>
 				val peSuffix = suffixForPe(peIndex, k.taskPeCount)
 
 				if (k.requestType == "read") {
-					val outPort =
-						if (k.mode == "stream") s"readStream${k.portWidth}Out"
-						else s"readSingle${k.portWidth}Out"
-
-					val start = s"sc=ai_engine_0.PLIO_${thisSubPE}${peSuffix}_$outPort:${k.instanceName}.sourceTasks_${peIndex}"
-
 					val chain = k.nextSubPE.flatMap(nextName => helperBySubPE.get(nextName)).map { nextKernel =>
 						val nextSubPE = normalizeName(nextKernel.subPEName)
 						val inPort =
@@ -448,61 +502,133 @@ object ConnectivityTemplate {
 						s"sc=${k.instanceName}.sinkResults_${peIndex}:ai_engine_0.PLIO_${nextSubPE}${peSuffix}_$inPort"
 					}
 
-					Seq(start) ++ chain.toSeq
+					chain.toSeq
 				} else {
-					val outPort =
-						if (k.mode == "stream") s"writeStream${k.portWidth}Out"
-						else s"writeSingle${k.portWidth}Out"
-					Seq(s"sc=ai_engine_0.PLIO_${thisSubPE}${peSuffix}_$outPort:${k.instanceName}.sourceTasks_${peIndex}")
+					Seq.empty
 				}
 			}
 		}
 	}
 
-	private def buildAieEndpointByTask(descriptor: FullSysGenDescriptor): Map[String, (String, String)] = {
+	private def collectRWOutputRoutes(helperKernels: List[HelperKernelDef]): Seq[OutputRouteDef] = {
+		helperKernels.flatMap { helper =>
+			val endpointName = normalizeName(helper.subPEName)
+			val portType = helperOutputPortName(helper)
+			val bitWidth = helperSourceTaskWidth(helper)
+			(0 until helper.taskPeCount).map { peIndex =>
+				OutputRouteDef(
+					taskName = helper.taskName,
+					peIndex = peIndex,
+					aieEndpointName = endpointName,
+					portType = portType,
+					bitWidth = bitWidth,
+					sink = s"${helper.instanceName}.sourceTasks_${peIndex}"
+				)
+			}
+		}
+	}
+
+	private def helperOutputPortName(helper: HelperKernelDef): String = {
+		(helper.requestType, helper.mode) match {
+			case ("read", "single")  => s"readSingle${helper.portWidth}Out"
+			case ("read", "stream")  => s"readStream${helper.portWidth}Out"
+			case ("write", "single") => s"writeSingle${helper.portWidth}Out"
+			case ("write", "stream") => s"writeStream${helper.portWidth}Out"
+			case _ => throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=${helper.requestType} mode=${helper.mode}")
+		}
+	}
+
+	private def helperSourceTaskWidth(helper: HelperKernelDef): Int = {
+		(helper.requestType, helper.mode) match {
+			case ("read", "single")  => 64
+			case ("read", "stream")  => 128
+			case ("write", "single") => 128
+			case ("write", "stream") => 128
+			case _ => throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=${helper.requestType} mode=${helper.mode}")
+		}
+	}
+
+	private def getNonLastEndpointsByTask(descriptor: FullSysGenDescriptor): Map[String, Set[String]] = {
 		descriptor.taskDescriptors.map { task =>
-			val orderedSubPEs = getOrderedSubPENamesForTask(descriptor, task.name)
+			val orderedSubPEs = getOrderedSubPEEndpointsForTask(descriptor, task.name)
+			val nonLast = if (orderedSubPEs.length > 1) orderedSubPEs.dropRight(1).map(_.normalizedName).toSet else Set.empty[String]
+			task.name -> nonLast
+		}.toMap
+	}
+
+	private def buildAieEndpointByTask(descriptor: FullSysGenDescriptor): Map[String, TaskAieEndpointDef] = {
+		descriptor.taskDescriptors.map { task =>
+			val orderedSubPEs = getOrderedSubPEEndpointsForTask(descriptor, task.name)
 			if (orderedSubPEs.nonEmpty) {
-				task.name -> (orderedSubPEs.head, orderedSubPEs.last)
+				val inputByPort = mutable.Map[String, String]()
+				val outputByPort = mutable.Map[String, String]()
+
+				orderedSubPEs.foreach { sub =>
+					sub.taskInputPorts.foreach { port =>
+						inputByPort(port) = sub.normalizedName
+					}
+					sub.taskOutputPorts.foreach { port =>
+						outputByPort(port) = sub.normalizedName
+					}
+				}
+
+				task.name -> TaskAieEndpointDef(
+					defaultInputEndpoint = orderedSubPEs.head.normalizedName,
+					defaultOutputEndpoint = orderedSubPEs.last.normalizedName,
+					inputByPort = inputByPort.toMap,
+					outputByPort = outputByPort.toMap
+				)
 			} else {
-				task.name -> (task.name, task.name)
+				task.name -> TaskAieEndpointDef(task.name, task.name, Map.empty, Map.empty)
 			}
 		}.toMap
 	}
 
-	private def getOrderedSubPENamesForTask(descriptor: FullSysGenDescriptor, taskName: String): Seq[String] = {
+	private def getOrderedSubPEEndpointsForTask(descriptor: FullSysGenDescriptor, taskName: String): Seq[OrderedSubPEEndpointDef] = {
 		val subpes = descriptor.subPEList
 			.toSeq
 			.filter { case (_, sub) => sub.peName == taskName }
 			.map { case (name, sub) =>
-				(name, normalizeName(name), sub.rwRequest.nextsubPE)
+				OrderedSubPEEndpointDef(
+					name = name,
+					normalizedName = normalizeName(name),
+					nextSubPE = sub.rwRequest.flatMap(_.nextsubPE),
+					taskInputPorts = sub.taskInputPorts,
+					taskOutputPorts = sub.taskOutputPorts
+				)
 			}
 
 		if (subpes.isEmpty) {
 			Seq.empty
 		} else {
-			val byName = subpes.map(s => s._1 -> s).toMap
-			val incomingTargets = subpes.flatMap(_._3).toSet
-			val heads = subpes.filterNot(s => incomingTargets.contains(s._1)).sortBy(_._1)
+			val byName = subpes.map(s => s.name -> s).toMap
+			val incomingTargets = subpes.flatMap(_.nextSubPE).toSet
+			val heads = subpes.filterNot(s => incomingTargets.contains(s.name)).sortBy(_.name)
 
-			val ordered = mutable.ArrayBuffer[String]()
+			val ordered = mutable.ArrayBuffer[OrderedSubPEEndpointDef]()
 			val visited = mutable.Set[String]()
 
-			def walk(start: (String, String, Option[String])): Unit = {
+			def walk(start: OrderedSubPEEndpointDef): Unit = {
 				var current = Option(start)
-				while (current.nonEmpty && !visited.contains(current.get._1)) {
+				while (current.nonEmpty && !visited.contains(current.get.name)) {
 					val value = current.get
-					ordered += value._2
-					visited += value._1
-					current = value._3.flatMap(byName.get)
+					ordered += value
+					visited += value.name
+					current = value.nextSubPE.flatMap(byName.get)
 				}
 			}
 
 			heads.foreach(walk)
-			subpes.sortBy(_._1).filterNot(s => visited.contains(s._1)).foreach(walk)
+			subpes.sortBy(_.name).filterNot(s => visited.contains(s.name)).foreach(walk)
 			ordered.toSeq
 		}
 	}
+
+	private def resolveInputEndpoint(taskEndpoints: TaskAieEndpointDef, portType: String): String =
+		taskEndpoints.inputByPort.getOrElse(portType, taskEndpoints.defaultInputEndpoint)
+
+	private def resolveOutputEndpoint(taskEndpoints: TaskAieEndpointDef, portType: String): String =
+		taskEndpoints.outputByPort.getOrElse(portType, taskEndpoints.defaultOutputEndpoint)
 
 	private def suffixForPe(peIndex: Int, peCount: Int): String =
 		if (peCount > 1) s"_$peIndex" else ""

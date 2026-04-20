@@ -31,7 +31,9 @@ object ProjectHeaderTemplate {
   private case class HelperSubPE(
       name: String,
       normalizedName: String,
-      req: RWRequestDescriptor
+      req: Option[RWRequestDescriptor],
+      taskInputPorts: Seq[String],
+      taskOutputPorts: Seq[String]
   )
 
   private case class TaskOutputDef(
@@ -103,7 +105,7 @@ object ProjectHeaderTemplate {
           val prevByName = mutable.Map[String, String]()
 
           orderedSubPEs.foreach { subPE =>
-            subPE.req.nextsubPE.foreach { nextSubPE =>
+            subPE.req.flatMap(_.nextsubPE).foreach { nextSubPE =>
               if (byName.contains(nextSubPE)) {
                 prevByName(nextSubPE) = subPE.name
               }
@@ -111,28 +113,32 @@ object ProjectHeaderTemplate {
           }
 
           orderedSubPEs.zipWithIndex.foreach { case (subPE, chainIndex) =>
-            val isFirst = chainIndex == 0
             val isLast = chainIndex == orderedSubPEs.length - 1
+            val taskInputOwnerByPort = buildTaskInputOwnerByPort(hardInputs, orderedSubPEs)
+            val taskOutputOwnerByPort = buildTaskOutputOwnerByPort(hardOutputs, orderedSubPEs)
 
             val taskInputs = {
               val base = Seq("taskIn")
-              if (isFirst) {
-                uniquePreserveOrder(base ++ hardInputs.filterNot(_ == "taskIn"))
-              } else {
-                base
+              val exportedForThisSubPE = hardInputs.filter { port =>
+                port != "taskIn" && taskInputOwnerByPort.get(port).contains(subPE.name)
               }
+              uniquePreserveOrder(base ++ exportedForThisSubPE)
             }
 
             val taskOutputs = {
-              val forwarded = if (!isLast) Seq("taskOut") else Seq.empty
-              val exported = if (isLast) hardOutputs else Seq.empty
+              val forwarded = if (!isLast) Seq("taskOutInternal") else Seq.empty
+              val exported = hardOutputs.filter { port =>
+                port != "taskOut" && taskOutputOwnerByPort.get(port).contains(subPE.name)
+              } ++ {
+                if (taskOutputOwnerByPort.get("taskOut").contains(subPE.name)) Seq("taskOut") else Seq.empty
+              }
               uniquePreserveOrder(forwarded ++ exported)
             }
 
             val rwIn = incomingReadPortsBySubPE.getOrElse(subPE.name, Seq.empty)
             val rwOut = rwOutputPorts(subPE.req)
             val prevUnitName = prevByName.get(subPE.name).flatMap(byName.get).map(s => s"${s.normalizedName}$peSuffix")
-            val nextUnitName = subPE.req.nextsubPE.flatMap(byName.get).map(s => s"${s.normalizedName}$peSuffix")
+            val nextUnitName = subPE.req.flatMap(_.nextsubPE).flatMap(byName.get).map(s => s"${s.normalizedName}$peSuffix")
 
             units += UnitDef(
               unitName = s"${subPE.normalizedName}$peSuffix",
@@ -256,6 +262,9 @@ object ProjectHeaderTemplate {
           name = name,
           normalizedName = normalizeName(name),
           req = sub.rwRequest
+          ,
+          taskInputPorts = sub.taskInputPorts,
+          taskOutputPorts = sub.taskOutputPorts
         )
       }
 
@@ -263,7 +272,7 @@ object ProjectHeaderTemplate {
       Seq.empty
     } else {
       val byName = subpes.map(s => s.name -> s).toMap
-      val incomingTargets = subpes.flatMap(_.req.nextsubPE).toSet
+      val incomingTargets = subpes.flatMap(_.req.flatMap(_.nextsubPE)).toSet
       val heads = subpes.filterNot(s => incomingTargets.contains(s.name)).sortBy(_.name)
 
       val ordered = mutable.ArrayBuffer[HelperSubPE]()
@@ -275,7 +284,7 @@ object ProjectHeaderTemplate {
           val value = current.get
           ordered += value
           visited += value.name
-          current = value.req.nextsubPE.flatMap(byName.get)
+          current = value.req.flatMap(_.nextsubPE).flatMap(byName.get)
         }
       }
 
@@ -289,12 +298,13 @@ object ProjectHeaderTemplate {
     val incoming = mutable.Map[String, mutable.ArrayBuffer[String]]()
 
     orderedSubPEs.foreach { sub =>
-      val req = sub.req
-      if (req.`type` == "read") {
-        req.nextsubPE.foreach { next =>
-          val portName = rwInPortName(req)
-          val buf = incoming.getOrElseUpdate(next, mutable.ArrayBuffer[String]())
-          buf += portName
+      sub.req.foreach { req =>
+        if (req.`type` == "read") {
+          req.nextsubPE.foreach { next =>
+            val portName = rwInPortName(req)
+            val buf = incoming.getOrElseUpdate(next, mutable.ArrayBuffer[String]())
+            buf += portName
+          }
         }
       }
     }
@@ -304,11 +314,53 @@ object ProjectHeaderTemplate {
     }.toMap
   }
 
-  private def rwOutputPorts(req: RWRequestDescriptor): Seq[String] = {
-    req.`type` match {
-      case "read"  => Seq(rwOutPortName("read", req.mode, req.portWidth))
-      case "write" => Seq(rwOutPortName("write", req.mode, req.portWidth))
-      case _        => Seq.empty
+  private def buildTaskInputOwnerByPort(
+      hardInputs: Seq[String],
+      orderedSubPEs: Seq[HelperSubPE]
+  ): Map[String, String] = {
+    if (orderedSubPEs.isEmpty) {
+      Map.empty
+    } else {
+      val defaultOwner = orderedSubPEs.head.name
+      val owners = mutable.Map[String, String](hardInputs.map(_ -> defaultOwner): _*)
+      orderedSubPEs.foreach { sub =>
+        sub.taskInputPorts.foreach { port =>
+          if (hardInputs.contains(port)) {
+            owners(port) = sub.name
+          }
+        }
+      }
+      owners.toMap
+    }
+  }
+
+  private def buildTaskOutputOwnerByPort(
+      hardOutputs: Seq[String],
+      orderedSubPEs: Seq[HelperSubPE]
+  ): Map[String, String] = {
+    if (orderedSubPEs.isEmpty) {
+      Map.empty
+    } else {
+      val defaultOwner = orderedSubPEs.last.name
+      val owners = mutable.Map[String, String](hardOutputs.map(_ -> defaultOwner): _*)
+      orderedSubPEs.foreach { sub =>
+        sub.taskOutputPorts.foreach { port =>
+          if (hardOutputs.contains(port)) {
+            owners(port) = sub.name
+          }
+        }
+      }
+      owners.toMap
+    }
+  }
+
+  private def rwOutputPorts(req: Option[RWRequestDescriptor]): Seq[String] = {
+    req.toSeq.flatMap { request =>
+      request.`type` match {
+        case "read"  => Seq(rwOutPortName("read", request.mode, request.portWidth))
+        case "write" => Seq(rwOutPortName("write", request.mode, request.portWidth))
+        case _        => Seq.empty
+      }
     }
   }
 
@@ -328,15 +380,17 @@ object ProjectHeaderTemplate {
   ): Seq[PortDef] = {
     val taskByName = descriptor.taskDescriptors.map(t => t.name -> t).toMap
     val allPorts = mutable.ArrayBuffer[PortDef]()
-    val splitterGroups = buildStreamSplitterGroups(descriptor)
-    val portsByGroup = splitterGroups.flatMap { group =>
-      group.outputPortTypes.map(port => (group.taskName, group.peIndex, port) -> group)
-    }.toMap
 
     units.foreach { unit =>
       val task = taskByName(unit.taskName)
       val inputPorts = orderTaskInputPorts(unit.taskInputPorts) ++ unit.rwInputPorts.sorted
-      val outputPorts = orderTaskOutputPorts(unit.taskOutputPorts) ++ unit.rwOutputPorts.sorted
+      val taskOutputPorts = orderTaskOutputPorts(unit.taskOutputPorts)
+      val rwOutputPorts = unit.rwOutputPorts.sorted
+      val outputPorts = taskOutputPorts ++ rwOutputPorts
+      val groupedOutputPorts =
+        if (unit.nextChainUnitName.nonEmpty) outputPorts.filterNot(_ == "taskOutInternal")
+        else Seq.empty[String]
+      val groupedOutputSet = groupedOutputPorts.toSet
 
       inputPorts.foreach { p =>
         val isInternalChainInput = p == "taskIn" && unit.prevChainUnitName.nonEmpty
@@ -358,8 +412,8 @@ object ProjectHeaderTemplate {
       }
 
       outputPorts.foreach { p =>
-        val isInternalChainOutput = p == "taskOut" && unit.nextChainUnitName.nonEmpty
-        val isGroupedOutput = portsByGroup.contains((unit.taskName, unit.peIndex, p))
+        val isInternalChainOutput = p == "taskOutInternal" && unit.nextChainUnitName.nonEmpty
+        val isGroupedOutput = groupedOutputSet.contains(p)
         if (!isInternalChainOutput && !isGroupedOutput) {
           val varName = s"${unit.unitName}_$p"
           allPorts += PortDef(
@@ -376,20 +430,26 @@ object ProjectHeaderTemplate {
           )
         }
       }
-    }
 
-    // Add grouped outputs as packed PLIOs
-    splitterGroups.foreach { group =>
-      val task = taskByName.get(group.taskName)
-      val peCount = task.map(_.numProcessingElements).getOrElse(1)
-      val peSuffix = if (peCount > 1) s"_${group.peIndex}" else ""
-      val varName = s"${group.taskName}$peSuffix${if (group.outputPortTypes.nonEmpty) s"_${group.outputPortTypes.mkString("_")}" else ""}"
-      allPorts += PortDef(
-        varName = varName,
-        plioName = s"PLIO_$varName",
-        direction = "output",
-        bits = toSupportedPlioBits(group.outputWidths.sum)
-      )
+      if (groupedOutputPorts.nonEmpty) {
+        val varName = packedOutputVarName(unit, groupedOutputPorts)
+        val packedBits = toSupportedPlioBits(groupedOutputPorts.map { port =>
+          resolvePortWidthBits(
+            task = task,
+            peIndex = unit.peIndex,
+            portName = port,
+            isInput = false,
+            portBitWidthsByTaskPePort = portBitWidthsByTaskPePort
+          )
+        }.sum)
+
+        allPorts += PortDef(
+          varName = varName,
+          plioName = s"PLIO_$varName",
+          direction = "output",
+          bits = packedBits
+        )
+      }
     }
 
     uniquePortDefs(allPorts.toSeq).sortBy(_.varName)
@@ -434,12 +494,17 @@ object ProjectHeaderTemplate {
     val lines = mutable.ArrayBuffer[String]()
     var net = 0
     val unitsByName = units.map(u => u.unitName -> u).toMap
-    val splitterGroups = buildStreamSplitterGroups(descriptor)
 
     units.foreach { u =>
       val inputPorts = orderTaskInputPorts(u.taskInputPorts) ++ u.rwInputPorts.sorted
-      val outputPorts = orderTaskOutputPorts(u.taskOutputPorts) ++ u.rwOutputPorts.sorted
-      val groupsForUnit = splitterGroups.filter(g => g.taskName == u.taskName && g.peIndex == u.peIndex)
+      val taskOutputPorts = orderTaskOutputPorts(u.taskOutputPorts)
+      val rwOutputPorts = u.rwOutputPorts.sorted
+      val outputPorts = taskOutputPorts ++ rwOutputPorts
+      val groupedOutputPorts =
+        if (u.nextChainUnitName.nonEmpty) outputPorts.filterNot(_ == "taskOutInternal")
+        else Seq.empty[String]
+      val groupedOutputSet = groupedOutputPorts.toSet
+      val groupedOutputRepr = groupedOutputPorts.headOption
 
       // Build consolidated output list treating groups as single entries
       val consolidatedOutputs = mutable.ArrayBuffer[String]()
@@ -447,19 +512,18 @@ object ProjectHeaderTemplate {
       var consolidatedIdx = 0
 
       outputPorts.foreach { port =>
-        val groupContainingPort = groupsForUnit.find(_.outputPortTypes.contains(port))
-        if (groupContainingPort.isEmpty) {
+        if (!groupedOutputSet.contains(port)) {
           // Not in a group, add directly
           consolidatedOutputs += port
           portToConsolidatedIndex(port) = consolidatedIdx
           consolidatedIdx += 1
         } else {
-          // In a group, only map the first port of the group
-          val groupRepr = groupContainingPort.get.outputPortTypes.head
+          // In a per-unit group, map all grouped ports to the same consolidated index.
+          val groupRepr = groupedOutputRepr.get
           if (!portToConsolidatedIndex.contains(groupRepr)) {
             consolidatedOutputs += groupRepr
             portToConsolidatedIndex(groupRepr) = consolidatedIdx
-            groupContainingPort.get.outputPortTypes.foreach { p =>
+            groupedOutputPorts.foreach { p =>
               portToConsolidatedIndex(p) = consolidatedIdx
             }
             consolidatedIdx += 1
@@ -471,7 +535,10 @@ object ProjectHeaderTemplate {
         if (port == "taskIn" && u.prevChainUnitName.nonEmpty) {
           val prevUnit = unitsByName(u.prevChainUnitName.get)
           val prevOutputPorts = orderTaskOutputPorts(prevUnit.taskOutputPorts) ++ prevUnit.rwOutputPorts.sorted
-          val prevTaskOutIdx = prevOutputPorts.indexOf("taskOut")
+          val prevTaskOutIdx = {
+            val internalIdx = prevOutputPorts.indexOf("taskOutInternal")
+            if (internalIdx >= 0) internalIdx else prevOutputPorts.indexOf("taskOut")
+          }
           if (prevTaskOutIdx >= 0) {
             lines += s"    connect< stream > net$net (${prevUnit.unitName}_kernel.out[$prevTaskOutIdx], ${u.unitName}_kernel.in[$inIdx]);"
             net += 1
@@ -483,10 +550,10 @@ object ProjectHeaderTemplate {
         }
       }
 
-      outputPorts.zipWithIndex.foreach { case (port, outIdx) =>
-        val isInternalChainOutput = port == "taskOut" && u.nextChainUnitName.nonEmpty
-        val groupForPort = groupsForUnit.find(g => g.outputPortTypes.contains(port))
-        if (!isInternalChainOutput && groupForPort.isEmpty) {
+      outputPorts.foreach { port =>
+        val isInternalChainOutput = port == "taskOutInternal" && u.nextChainUnitName.nonEmpty
+        val isGroupedOutput = groupedOutputSet.contains(port)
+        if (!isInternalChainOutput && !isGroupedOutput) {
           val plioVar = s"${u.unitName}_$port"
           val consolidatedIdx = portToConsolidatedIndex(port)
           lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$consolidatedIdx], ${plioVar}.in[0]);"
@@ -494,14 +561,13 @@ object ProjectHeaderTemplate {
         }
       }
 
-      // Handle grouped outputs (splitter groups)
-      groupsForUnit.foreach { group =>
-        val packedVarName = s"${u.taskName}${if (u.peCount > 1) s"_${u.peIndex}" else ""}${if (group.outputPortTypes.nonEmpty) s"_${group.outputPortTypes.mkString("_")}" else ""}"
-        // Only connect the first grouped output; packed PLIO has single input port
-        val groupRepr = group.outputPortTypes.head
-        val consolidatedIdx = portToConsolidatedIndex(groupRepr)
-        lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$consolidatedIdx], ${packedVarName}.in[0]);"
-        net += 1
+      // Handle per-unit grouped PLIO output.
+      groupedOutputRepr.foreach { groupRepr =>
+        val packedVarName = packedOutputVarName(u, groupedOutputPorts)
+        portToConsolidatedIndex.get(groupRepr).foreach { consolidatedIdx =>
+          lines += s"    connect< stream > net$net (${u.unitName}_kernel.out[$consolidatedIdx], ${packedVarName}.in[0]);"
+          net += 1
+        }
       }
     }
 
@@ -514,7 +580,7 @@ object ProjectHeaderTemplate {
   }
 
   private def orderTaskOutputPorts(ports: Seq[String]): Seq[String] = {
-    val order = Seq("taskOut", "taskOutGlobal", "argOut", "closureOut", "mallocOut", "argDataOut", "spawnNext")
+    val order = Seq("taskOutInternal", "taskOut", "taskOutGlobal", "argOut", "closureOut", "mallocOut", "argDataOut", "spawnNext")
     orderByReferenceThenName(ports, order)
   }
 
@@ -540,6 +606,9 @@ object ProjectHeaderTemplate {
 
   private def normalizeName(value: String): String =
     value.toLowerCase.replaceAll("[^a-z0-9_]", "")
+
+  private def packedOutputVarName(unit: UnitDef, groupedOutputPorts: Seq[String]): String =
+    s"${unit.unitName}_${groupedOutputPorts.mkString("_")}"
 
   private def buildStreamSplitterGroups(descriptor: FullSysGenDescriptor): Seq[StreamSplitterGroupDef] = {
     val outputsByTaskPe = collectTaskOutputs(descriptor).groupBy(out => (out.taskName, out.peIndex))
@@ -681,7 +750,7 @@ object ProjectHeaderTemplate {
     } else {
       val metadataWidth = portBitWidthsByTaskPePort.get((task.name, peIndex, portName))
       val fallbackWidth = portName match {
-        case "taskIn" | "taskOut" | "taskInGlobal" | "taskOutGlobal" => task.widthTask
+        case "taskIn" | "taskOut" | "taskOutInternal" | "taskInGlobal" | "taskOutGlobal" => task.widthTask
         case "mallocIn" | "mallocOut"                                   => if (task.widthMalloc > 0) task.widthMalloc else 64
         case "closureIn" | "closureOut"                                 => widthFromSideConfigOrDefault(task, "allocator", 64)
         case "argIn" | "argOut"                                         => widthFromArgumentMetadataOrDefault(task, 64)

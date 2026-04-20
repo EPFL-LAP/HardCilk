@@ -32,6 +32,26 @@ object KernelXmlTemplate {
         bitWidth: Int
       )
 
+        private case class RoutedOutputDef(
+          taskName: String,
+          peIndex: Int,
+          endpointName: String,
+          portType: String,
+          bitWidth: Int
+        )
+
+        private case class OrderedSubPEEndpointDef(
+          name: String,
+          normalizedName: String,
+          nextSubPE: Option[String],
+          taskOutputPorts: Seq[String]
+        )
+
+        private case class TaskAieEndpointDef(
+          defaultOutputEndpoint: String,
+          outputByPort: Map[String, String]
+        )
+
       private case class StreamSplitterXmlDef(
         kernelName: String,
         outputWidths: Seq[Int]
@@ -74,19 +94,20 @@ object KernelXmlTemplate {
     val taskPeCountByName = descriptor.taskDescriptors.map(t => t.name -> t.numProcessingElements).toMap
 
     descriptor.subPEList.toSeq.sortBy(_._1).flatMap { case (_, sub) =>
-      val req = sub.rwRequest
-      taskPeCountByName.get(sub.peName).map { replicationCount =>
-        val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth, replicationCount)
-        val sourceTaskWidth = sourceTaskDataWidth(req.`type`, req.mode)
-        val sinkResultWidth = if (req.`type` == "read") Some(req.portWidth) else None
+      sub.rwRequest.flatMap { req =>
+        taskPeCountByName.get(sub.peName).map { replicationCount =>
+          val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth, replicationCount)
+          val sourceTaskWidth = sourceTaskDataWidth(req.`type`, req.mode)
+          val sinkResultWidth = if (req.`type` == "read") Some(req.portWidth) else None
 
-        HelperXmlDef(
-          kernelName = kernelName,
-          mAxiDataWidth = req.portWidth,
-          sourceTaskWidth = sourceTaskWidth,
-          sinkResultWidth = sinkResultWidth,
-          replicationCount = replicationCount
-        )
+          HelperXmlDef(
+            kernelName = kernelName,
+            mAxiDataWidth = req.portWidth,
+            sourceTaskWidth = sourceTaskWidth,
+            sinkResultWidth = sinkResultWidth,
+            replicationCount = replicationCount
+          )
+        }
       }
     }.distinctBy(_.kernelName)
   }
@@ -159,32 +180,154 @@ object KernelXmlTemplate {
   }
 
   private def buildStreamSplitterXmlDefs(descriptor: FullSysGenDescriptor): Seq[StreamSplitterXmlDef] = {
-    val outputsByTaskPe = collectTaskOutputs(descriptor).groupBy(out => (out.taskName, out.peIndex))
+    val endpointByTask = buildAieEndpointByTask(descriptor)
+    val nonLastEndpointsByTask = getNonLastEndpointsByTask(descriptor)
+    val routedOutputs = collectTaskRoutedOutputs(descriptor, endpointByTask) ++ collectRWRoutedOutputs(descriptor)
+    val outputsByTaskPeEndpoint = routedOutputs.groupBy(out => (out.taskName, out.peIndex, out.endpointName))
 
-    outputsByTaskPe
+    outputsByTaskPeEndpoint
       .toSeq
-      .sortBy { case ((taskName, peIndex), _) => (taskName, peIndex) }
-      .flatMap { case (_, outputs) =>
+      .sortBy { case ((taskName, peIndex, endpointName), _) => (taskName, peIndex, endpointName) }
+      .flatMap { case ((taskName, _, endpointName), outputs) =>
+        val isNonLastEndpoint = nonLastEndpointsByTask.getOrElse(taskName, Set.empty).contains(endpointName)
         val ordered = outputs
           .groupBy(_.portType)
           .map(_._2.head)
           .toSeq
           .sortBy(out => (outputPortPriority(out.portType), out.portType))
 
-        if (ordered.size <= 2) {
+        if (!isNonLastEndpoint || ordered.size <= 1) {
           Seq.empty
         } else {
-          ordered.grouped(2).collect { case group if group.size > 1 =>
-            val widths = group.map(_.bitWidth)
+          val widths = ordered.map(_.bitWidth)
+          Seq(
             StreamSplitterXmlDef(
               kernelName = s"StreamSplitter_${widths.mkString("_")}",
               outputWidths = widths
             )
-          }.toSeq
+          )
         }
       }
       .distinctBy(_.kernelName)
   }
+
+  private def collectTaskRoutedOutputs(
+      descriptor: FullSysGenDescriptor,
+      endpointByTask: Map[String, TaskAieEndpointDef]
+  ): Seq[RoutedOutputDef] = {
+    collectTaskOutputs(descriptor).map { out =>
+      val endpoint = endpointByTask.get(out.taskName).map(ep => ep.outputByPort.getOrElse(out.portType, ep.defaultOutputEndpoint)).getOrElse(out.taskName)
+      RoutedOutputDef(
+        taskName = out.taskName,
+        peIndex = out.peIndex,
+        endpointName = endpoint,
+        portType = out.portType,
+        bitWidth = out.bitWidth
+      )
+    }
+  }
+
+  private def collectRWRoutedOutputs(descriptor: FullSysGenDescriptor): Seq[RoutedOutputDef] = {
+    val taskPeCountByName = descriptor.taskDescriptors.map(t => t.name -> t.numProcessingElements).toMap
+
+    descriptor.subPEList.toSeq.sortBy(_._1).flatMap { case (subPEName, sub) =>
+      sub.rwRequest.toSeq.flatMap { req =>
+        taskPeCountByName.get(sub.peName).toSeq.flatMap { peCount =>
+          val portType = rwOutputPortName(req)
+          val width = sourceTaskDataWidth(req.`type`, req.mode)
+          (0 until peCount).map { peIndex =>
+            RoutedOutputDef(
+              taskName = sub.peName,
+              peIndex = peIndex,
+              endpointName = normalizeName(subPEName),
+              portType = portType,
+              bitWidth = width
+            )
+          }
+        }
+      }
+    }
+  }
+
+  private def rwOutputPortName(req: RWRequestDescriptor): String = {
+    (req.`type`, req.mode) match {
+      case ("read", "single") => s"readSingle${req.portWidth}Out"
+      case ("read", "stream") => s"readStream${req.portWidth}Out"
+      case ("write", "single") => s"writeSingle${req.portWidth}Out"
+      case ("write", "stream") => s"writeStream${req.portWidth}Out"
+      case _ => throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=${req.`type`} mode=${req.mode}")
+    }
+  }
+
+  private def buildAieEndpointByTask(descriptor: FullSysGenDescriptor): Map[String, TaskAieEndpointDef] = {
+    descriptor.taskDescriptors.map { task =>
+      val orderedSubPEs = getOrderedSubPEEndpointsForTask(descriptor, task.name)
+      if (orderedSubPEs.nonEmpty) {
+        val outputByPort = mutable.Map[String, String]()
+        orderedSubPEs.foreach { sub =>
+          sub.taskOutputPorts.foreach { port =>
+            outputByPort(port) = sub.normalizedName
+          }
+        }
+        task.name -> TaskAieEndpointDef(
+          defaultOutputEndpoint = orderedSubPEs.last.normalizedName,
+          outputByPort = outputByPort.toMap
+        )
+      } else {
+        task.name -> TaskAieEndpointDef(task.name, Map.empty)
+      }
+    }.toMap
+  }
+
+  private def getNonLastEndpointsByTask(descriptor: FullSysGenDescriptor): Map[String, Set[String]] = {
+    descriptor.taskDescriptors.map { task =>
+      val orderedSubPEs = getOrderedSubPEEndpointsForTask(descriptor, task.name)
+      val nonLast = if (orderedSubPEs.length > 1) orderedSubPEs.dropRight(1).map(_.normalizedName).toSet else Set.empty[String]
+      task.name -> nonLast
+    }.toMap
+  }
+
+  private def getOrderedSubPEEndpointsForTask(descriptor: FullSysGenDescriptor, taskName: String): Seq[OrderedSubPEEndpointDef] = {
+    val subpes = descriptor.subPEList
+      .toSeq
+      .filter { case (_, sub) => sub.peName == taskName }
+      .map { case (name, sub) =>
+        OrderedSubPEEndpointDef(
+          name = name,
+          normalizedName = normalizeName(name),
+          nextSubPE = sub.rwRequest.flatMap(_.nextsubPE),
+          taskOutputPorts = sub.taskOutputPorts
+        )
+      }
+
+    if (subpes.isEmpty) {
+      Seq.empty
+    } else {
+      val byName = subpes.map(s => s.name -> s).toMap
+      val incomingTargets = subpes.flatMap(_.nextSubPE).toSet
+      val heads = subpes.filterNot(s => incomingTargets.contains(s.name)).sortBy(_.name)
+
+      val ordered = mutable.ArrayBuffer[OrderedSubPEEndpointDef]()
+      val visited = mutable.Set[String]()
+
+      def walk(start: OrderedSubPEEndpointDef): Unit = {
+        var current = Option(start)
+        while (current.nonEmpty && !visited.contains(current.get.name)) {
+          val value = current.get
+          ordered += value
+          visited += value.name
+          current = value.nextSubPE.flatMap(byName.get)
+        }
+      }
+
+      heads.foreach(walk)
+      subpes.sortBy(_.name).filterNot(s => visited.contains(s.name)).foreach(walk)
+      ordered.toSeq
+    }
+  }
+
+  private def normalizeName(value: String): String =
+    value.toLowerCase.replaceAll("[^a-z0-9_]", "")
 
   private def renderStreamSplitterXml(splitter: StreamSplitterXmlDef): String = {
     val inputWidth = splitter.outputWidths.max + 128

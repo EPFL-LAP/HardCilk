@@ -108,11 +108,30 @@ case class RWRequestDescriptor(
 
 case class SubPEDescriptor(
     peName: String,
-    rwRequest: RWRequestDescriptor
+    rwRequest: Option[RWRequestDescriptor] = None,
+    taskInputPorts: List[String] = List.empty,
+    taskOutputPorts: List[String] = List.empty
 ) {
   def validate(subPEName: String): Unit = {
+    val allowedTaskInputPorts = Set("taskInGlobal", "argIn", "closureIn", "mallocIn", "taskIn")
+    val allowedTaskOutputPorts = Set("taskOutGlobal", "argOut", "closureOut", "mallocOut", "argDataOut", "spawnNext", "taskOut")
+
     require(peName.nonEmpty, s"subPE '$subPEName': peName must not be empty")
-    rwRequest.validate(subPEName)
+    rwRequest.foreach(_.validate(subPEName))
+
+    require(taskInputPorts.distinct.length == taskInputPorts.length,
+      s"subPE '$subPEName': taskInputPorts contains duplicate entries")
+    require(taskOutputPorts.distinct.length == taskOutputPorts.length,
+      s"subPE '$subPEName': taskOutputPorts contains duplicate entries")
+
+    taskInputPorts.foreach { port =>
+      require(allowedTaskInputPorts.contains(port),
+        s"subPE '$subPEName': invalid taskInputPorts entry '$port'. Allowed: ${allowedTaskInputPorts.toList.sorted.mkString(",")}")
+    }
+    taskOutputPorts.foreach { port =>
+      require(allowedTaskOutputPorts.contains(port),
+        s"subPE '$subPEName': invalid taskOutputPorts entry '$port'. Allowed: ${allowedTaskOutputPorts.toList.sorted.mkString(",")}")
+    }
   }
 }
 
@@ -487,6 +506,41 @@ case class FullSysGenDescriptor(
     MemStats(totalAXIPorts, interconnectDescriptorsAggregated)
   }
 
+  private def getTaskHardCilkPortsByTask(): Map[String, (Set[String], Set[String])] = {
+    val inputsByTask = mutable.Map[String, mutable.Set[String]]().withDefaultValue(mutable.Set.empty[String])
+    val outputsByTask = mutable.Map[String, mutable.Set[String]]().withDefaultValue(mutable.Set.empty[String])
+
+    getSystemConnectionsDescriptor().connections.foreach { connection =>
+      val src = connection.srcPort
+      val dst = connection.dstPort
+
+      if (src.parentType == "HardCilk" && dst.parentType == "PE") {
+        val set = inputsByTask.getOrElseUpdate(dst.parentName, mutable.Set.empty[String])
+        set += dst.portType
+      } else if (src.parentType == "PE" && dst.parentType == "HardCilk") {
+        val set = outputsByTask.getOrElseUpdate(src.parentName, mutable.Set.empty[String])
+        set += src.portType
+      }
+    }
+
+    taskDescriptors.foreach { task =>
+      val outputSet = outputsByTask.getOrElseUpdate(task.name, mutable.Set.empty[String])
+      if (task.generateArgOutWriteBuffer) {
+        outputSet += "argDataOut"
+      }
+      if (task.generateSpawnNextWriteBuffer) {
+        outputSet += "spawnNext"
+      }
+    }
+
+    taskDescriptors.map { task =>
+      task.name -> (
+        inputsByTask.getOrElse(task.name, mutable.Set.empty[String]).toSet,
+        outputsByTask.getOrElse(task.name, mutable.Set.empty[String]).toSet
+      )
+    }.toMap
+  }
+
   def validate(): Unit = {
     taskDescriptors.foreach(_.validate()) // Validate all sub-tasks
 
@@ -501,12 +555,38 @@ case class FullSysGenDescriptor(
     require(sendArgumentList.keys.forall(taskNames.contains), "sendArgumentList contains unknown task names")
     require(mallocList.keys.forall(taskNames.contains), "mallocList contains unknown task names")
 
+    val taskHardCilkPortsByTask = getTaskHardCilkPortsByTask()
+    val inputOverrideOwnerByTaskPort = mutable.Map[(String, String), String]()
+    val outputOverrideOwnerByTaskPort = mutable.Map[(String, String), String]()
+
     subPEList.foreach { case (subPEName, subPEDescriptor) =>
       require(subPEName.nonEmpty, "subPEList contains an empty subPE name")
       subPEDescriptor.validate(subPEName)
       require(taskNames.contains(subPEDescriptor.peName),
         s"subPE '$subPEName': unknown peName '${subPEDescriptor.peName}'")
-      subPEDescriptor.rwRequest.nextsubPE.foreach { nextSubPE =>
+
+      val (availableTaskInputs, availableTaskOutputs) =
+        taskHardCilkPortsByTask.getOrElse(subPEDescriptor.peName, (Set.empty[String], Set.empty[String]))
+
+      subPEDescriptor.taskInputPorts.foreach { port =>
+        require(availableTaskInputs.contains(port),
+          s"subPE '$subPEName': taskInputPorts contains '$port', but task '${subPEDescriptor.peName}' does not expose it")
+        val key = (subPEDescriptor.peName, port)
+        require(!inputOverrideOwnerByTaskPort.contains(key),
+          s"Task '${subPEDescriptor.peName}': task input port '$port' is assigned by both subPE '${inputOverrideOwnerByTaskPort(key)}' and '$subPEName'")
+        inputOverrideOwnerByTaskPort(key) = subPEName
+      }
+
+      subPEDescriptor.taskOutputPorts.foreach { port =>
+        require(availableTaskOutputs.contains(port),
+          s"subPE '$subPEName': taskOutputPorts contains '$port', but task '${subPEDescriptor.peName}' does not expose it")
+        val key = (subPEDescriptor.peName, port)
+        require(!outputOverrideOwnerByTaskPort.contains(key),
+          s"Task '${subPEDescriptor.peName}': task output port '$port' is assigned by both subPE '${outputOverrideOwnerByTaskPort(key)}' and '$subPEName'")
+        outputOverrideOwnerByTaskPort(key) = subPEName
+      }
+
+      subPEDescriptor.rwRequest.flatMap(_.nextsubPE).foreach { nextSubPE =>
         require(subPEList.contains(nextSubPE),
           s"subPE '$subPEName': nextsubPE '$nextSubPE' is not defined in subPEList")
       }
