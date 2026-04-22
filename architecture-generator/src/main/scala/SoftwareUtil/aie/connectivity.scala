@@ -463,7 +463,7 @@ object ConnectivityTemplate {
 	}
 
 	private def getArgDataOutDataWidthBits(descriptor: FullSysGenDescriptor, task: TaskDescriptor): Int = {
-		if (task.generateArgOutWriteBuffer && (descriptor.mFPGASimulation || descriptor.mFPGASynth)) {
+			if (task.generateArgOutWriteBuffer) {
 			task.argumentSizeList.headOption.getOrElse(0)
 		} else {
 			0
@@ -486,15 +486,13 @@ object ConnectivityTemplate {
 	}
 
 	private def buildSubPEConnections(helperKernels: List[HelperKernelDef]): Seq[String] = {
-		val helperBySubPE = helperKernels.map(k => k.subPEName -> k).toMap
-
 		helperKernels.flatMap { k =>
 			(0 until k.taskPeCount).flatMap { peIndex =>
 				val peSuffix = suffixForPe(peIndex, k.taskPeCount)
 
 				if (k.requestType == "read") {
-					val chain = k.nextSubPE.flatMap(nextName => helperBySubPE.get(nextName)).map { nextKernel =>
-						val nextSubPE = normalizeName(nextKernel.subPEName)
+					val chain = k.nextSubPE.map { nextName =>
+						val nextSubPE = normalizeName(nextName)
 						val inPort =
 							if (k.mode == "stream") s"readStream${k.portWidth}In"
 							else s"readSingle${k.portWidth}In"

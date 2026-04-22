@@ -701,7 +701,7 @@ object ProjectHeaderTemplate {
   }
 
   private def getArgDataOutDataWidthBits(descriptor: FullSysGenDescriptor, task: TaskDescriptor): Int = {
-    if (task.generateArgOutWriteBuffer && (descriptor.mFPGASimulation || descriptor.mFPGASynth)) {
+    if (task.generateArgOutWriteBuffer) {
       task.argumentSizeList.headOption.getOrElse(0)
     } else {
       0
