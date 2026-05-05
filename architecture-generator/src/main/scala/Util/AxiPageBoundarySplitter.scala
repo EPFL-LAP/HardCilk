@@ -11,6 +11,8 @@ import axi4.Ops._
 import chisel3.util.isPow2
 import chisel3.util.log2Ceil
 import chext.amba.axi4.full.components.helpers.SteerRight
+import chext.amba.axi4.full.components.IdSerialize
+import chext.amba.axi4.full.components.IdSerializeConfig
 import chext.exportIO
 
 case class AxiPageBoundarySplitter_Config(
@@ -26,7 +28,8 @@ case class AxiPageBoundarySplitter_Config(
   def moduleSuffix: String =
     s"${addressWidth}_${dataWidth}_${alignmentBits}_${idWidth}_${numberOfOutstanding}"
 
-  val axiCfg = axi4.Config(wAddr = addressWidth, wData = dataWidth, wId = idWidth)
+  val saxiCfg = axi4.Config(wAddr = addressWidth, wData = dataWidth, wId = idWidth)
+  val maxiCfg = axi4.Config(wAddr = addressWidth, wData = dataWidth, wId = 0)
 
 }
 
@@ -48,8 +51,12 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
   override def desiredName: String =
     s"AxiPageBoundarySplitter_Basic_${cfg.moduleSuffix}"
 
-  val s_axi = IO(axi4.Slave(axiCfg))
-  val m_axi = IO(axi4.Master(axiCfg))
+  val s_axi = IO(axi4.Slave(saxiCfg))
+  val m_axi = IO(axi4.Master(maxiCfg))
+
+  val serializer = Module(new IdSerialize(IdSerializeConfig(saxiCfg, numberOfOutstanding, numberOfOutstanding)))
+  s_axi.asFull :=> serializer.s_axi
+  val s_axi_internal = serializer.m_axi
 
   val size_queue_ar = new e.Queue(
     UInt(9.W),
@@ -72,7 +79,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
     flow = false
   )
 
-  val ar_path = new e.Fork(s_axi.asFull.ar) {
+  val ar_path = new e.Fork(s_axi_internal.ar) {
     val check_align = new e.Transducer(fork(), m_axi.asFull.ar) {
       val mask = ~((1.U(addressWidth.W) << in.size) - 1.U)
       val addr_low_bits = in.addr(alignmentBits - 1, 0) & mask
@@ -114,7 +121,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
   val aw_bool_len_wire =
     e.EWire(new AW_Bool_Len(chiselTypeOf(m_axi.asFull.aw.bits)))
 
-  val aw_path = new e.Transducer(s_axi.asFull.aw, aw_bool_len_wire) {
+  val aw_path = new e.Transducer(s_axi_internal.aw, aw_bool_len_wire) {
     val mask = ~((1.U(addressWidth.W) << in.size) - 1.U)
     val addr_low_bits = in.addr(alignmentBits - 1, 0) & mask
     val addr_end_low_bits =
@@ -169,7 +176,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
     len { (in) => in }
     out { (in, index, first, last) => last }
   }
-  val join_r = new e.Join(s_axi.asFull.r) {
+  val join_r = new e.Join(s_axi_internal.r) {
     out := join(m_axi.asFull.r)
     val last = join(repeat_r)
     when(last) {
@@ -185,7 +192,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
     out { (in, index, first, last) => last }
   }
   val join_w = new e.Join(m_axi.asFull.w) {
-    out := join(s_axi.asFull.w)
+    out := join(s_axi_internal.w)
     val last = join(repeat_w)
     when(last) {
       out.last := true.B
@@ -199,7 +206,7 @@ class AxiPageBoundarySplitter_Basic(cfg: AxiPageBoundarySplitter_Config)
     out.b := join(m_axi.asFull.b)
     out.drop_ack := join(bool_queue_b.sink)
   }
-  val b_dropper = new e.Drop(b_with_drop, s_axi.asFull.b) {
+  val b_dropper = new e.Drop(b_with_drop, s_axi_internal.b) {
     out := in.b
     cond { in.drop_ack }
   }
