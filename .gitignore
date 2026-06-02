@@ -143,8 +143,5 @@ xrt-projects/*/*_x_temp.*
 HardCilk-output
 xclbin-workspace
 
-# Generated test and benchmark artifacts
+# Generated test artifacts
 architecture-generator/test_run_dir/
-architecture-generator/taskDescriptors/mfpga/BFS.json
-software/BFS/
-xrt-projects/BFS/
