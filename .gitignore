@@ -146,6 +146,5 @@ xclbin-workspace
 # Generated test and benchmark artifacts
 architecture-generator/test_run_dir/
 architecture-generator/taskDescriptors/mfpga/BFS.json
-hls-processing-elements/mfpga/BFS/
 software/BFS/
 xrt-projects/BFS/
