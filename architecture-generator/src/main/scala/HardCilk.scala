@@ -416,8 +416,8 @@ class HardCilk(
 
     val widen = Module(new axi4.full.components.Widen(
       new axi4.full.components.WidenConfig(outputCfg)))
-    pc.m_axi    :=> widen.s_axi
-    widen.m_axi :=> axiOut.asFull
+    axi4.full.SlaveBuffer(pc.m_axi, axi4.BufferConfig.all(2)) :=> widen.s_axi
+    axi4.full.SlaveBuffer(widen.m_axi, axi4.BufferConfig.all(2)) :=> axiOut.asFull
 
     interfaceBuffer.addOne(hdlinfo.Interface(
       portName, hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),

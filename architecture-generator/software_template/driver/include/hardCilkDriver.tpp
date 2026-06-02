@@ -69,17 +69,14 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 
                 // Empty queues are defined by fifoHead/fifoTail/currLen, so the
                 // backing contents are irrelevant until the FPGA writes entries.
-                if (skipQueueZeroInEmu()) {
-                    printf("        [hw_emu] Skipping zero fill for %s scheduler backing queue (%lu bytes)\n",
-                           taskDescriptor.name.c_str(),
-                           scheduler_capacity * taskDescriptor.widthTask/8);
-                } else {
-                    std::vector <uint8_t> zeros(scheduler_capacity * taskDescriptor.widthTask/8, 0);
-                    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(zeros.data()), zeros.size());
-                }
+                printf("        Skipping zero fill for %s scheduler backing queue (%lu bytes)\n",
+                       taskDescriptor.name.c_str(),
+                       scheduler_capacity * taskDescriptor.widthTask/8);
 
-                // Initialize the scheduler server information
-                waitPaused(*base_address + scheduler_server_rpause_shift);
+                // Hold the server paused while programming its queue metadata.
+                // Some generated scheduler servers reset with rPause=0 and only
+                // self-pause after their FSM advances, so do not wait here.
+                memory_->writeReg64(*base_address + scheduler_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(*base_address + scheduler_server_raddr_shift, addr);
                 memory_->writeReg64(*base_address + scheduler_server_maxLength_shift, scheduler_capacity);
                 memory_->writeReg64(*base_address + scheduler_server_fifoTailReg_shift, 0x0);
@@ -134,7 +131,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Write the addresses to the continuation queue
                 memory_->copyToDevice(continuation_queue_addr, reinterpret_cast<const uint8_t*>(addresses.data()), addresses.size() * sizeof(uint64_t));
                 
-                waitPaused(*base_address + alloc_server_rpause_shift);   
+                memory_->writeReg64(*base_address + alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(*base_address + alloc_server_raddr_shift, continuation_queue_addr);
                 memory_->writeReg64(*base_address + alloc_server_availableSize_shift, taskDescriptor.getCapacityVirtualQueue("allocator"));
 
@@ -178,7 +175,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Write the addresses to the pre-allocated memory queue
                 memory_->copyToDevice(pre_allocated_memory_queue_addr, reinterpret_cast<const uint8_t*>(addresses.data()), addresses.size() * sizeof(uint64_t));
 
-                waitPaused(*base_address + scheduler_server_rpause_shift);
+                memory_->writeReg64(*base_address + mem_alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(*base_address + mem_alloc_server_raddr_shift, pre_allocated_memory_queue_addr);
                 memory_->writeReg64(*base_address + mem_alloc_server_availableSize_shift, taskDescriptor.getCapacityVirtualQueue("memoryAllocator"));
 
