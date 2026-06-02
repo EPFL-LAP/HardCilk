@@ -57,53 +57,139 @@ trait HasHBMInterconnect extends Module {
 
     // [This is the code block from CleanHardCilk.scala, line 316 to 512]
 
-    val interfacesPE = new ArrayBuffer[axi4.full.Interface]()
+    case class HbmInterfaceGroup(name: String, interfaces: Seq[axi4.full.Interface]) {
+      def size: Int = interfaces.length
+    }
 
+    def peOwnedPorts(pe: VitisWriteBufferModule, task: TaskDescriptor): Seq[axi4.full.Interface] = {
+      val ports = new ArrayBuffer[axi4.full.Interface]()
+      pe.io.elements
+        .get("m_axi_spawnNext")
+        .foreach(p => ports.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
+      pe.io.elements
+        .get("m_axi_argOut")
+        .foreach(p => ports.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
+      if (task.hasAXI) {
+        ports.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
+      }
+      ports.toSeq
+    }
 
-    peMap.foreach { case (taskName, peArray) =>
-      val task = fullSysGenDescriptor.taskDescriptors.find(_.name == taskName).get
-      peArray.foreach { pe =>
-        pe.io.elements.get("m_axi_spawnNext").foreach(p => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
-        pe.io.elements.get("m_axi_argOut").foreach(p => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
-        if (task.hasAXI) {
-          interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
+    val peInterfaceGroups = new ArrayBuffer[HbmInterfaceGroup]()
+
+    fullSysGenDescriptor.taskDescriptors.foreach { task =>
+      peMap.get(task.name).foreach { peArray =>
+        peArray.zipWithIndex.foreach { case (pe, peIndex) =>
+          val ports = peOwnedPorts(pe, task)
+          if (ports.nonEmpty) {
+            peInterfaceGroups.addOne(HbmInterfaceGroup(s"pe:${task.name}:$peIndex", ports))
+          }
         }
       }
     }
 
-    spawnNextWBMap.foreach {
-      case (taskName, wbArray) =>
-        wbArray.foreach { wb =>
-          interfacesPE.addOne(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+    fullSysGenDescriptor.taskDescriptors.foreach { task =>
+      spawnNextWBMap.get(task.name).foreach { wbArray =>
+        wbArray.zipWithIndex.foreach { case (wb, wbIndex) =>
+          peInterfaceGroups.addOne(
+            HbmInterfaceGroup(
+              s"spawnNextWB:${task.name}:$wbIndex",
+              Seq(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+            )
+          )
         }
-    }
-
-    sendArgumentWBMap.foreach {
-      case (taskName, wbArray) =>
-        wbArray.foreach { wb =>
-          interfacesPE.addOne(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+      }
+      sendArgumentWBMap.get(task.name).foreach { wbArray =>
+        wbArray.zipWithIndex.foreach { case (wb, wbIndex) =>
+          peInterfaceGroups.addOne(
+            HbmInterfaceGroup(
+              s"sendArgumentWB:${task.name}:$wbIndex",
+              Seq(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+            )
+          )
         }
-    }
-
-    val interfacesScheduler = schedulerMap.values.flatMap(_.io_internal.vss_axi_full).to(ArrayBuffer)
-    schedulerMap.values.foreach { s =>
-      if (s.spawnerServerAXI.isDefined) {
-        interfacesScheduler.addAll(s.spawnerServerAXI.get)
       }
     }
 
-    val interfacesClosureAllocator = closureAllocatorMap.values.flatMap(_.io_internal.vcas_axi_full).to(ArrayBuffer)
-    val interfacesArgumentNotifier = argumentNotifierMap.values.flatMap(_.axi_full_argRoute).to(ArrayBuffer)
-    val interfacesMemoryAllocator = memoryAllocatorMap.values.flatMap(_.io_internal.vcas_axi_full).to(ArrayBuffer)
+    val schedulerInterfaceGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    fullSysGenDescriptor.taskDescriptors.foreach { task =>
+      schedulerMap.get(task.name).foreach { scheduler =>
+        scheduler.io_internal.vss_axi_full.zipWithIndex.foreach { case (port, portIndex) =>
+          schedulerInterfaceGroups.addOne(
+            HbmInterfaceGroup(s"scheduler:${task.name}:vss:$portIndex", Seq(port))
+          )
+        }
+        scheduler.spawnerServerAXI.foreach { ports =>
+          ports.zipWithIndex.foreach { case (port, portIndex) =>
+            schedulerInterfaceGroups.addOne(
+              HbmInterfaceGroup(s"scheduler:${task.name}:spawner:$portIndex", Seq(port))
+            )
+          }
+        }
+      }
+    }
 
-    val interfacesRemoteMemAccess = remoteMemAccessMap.values.flatMap(v => Seq(v.io.m_axi_mem)).to(ArrayBuffer)
+    val interfacesScheduler = schedulerInterfaceGroups.flatMap(_.interfaces).to(ArrayBuffer)
+
+    val interfacesClosureAllocator = new ArrayBuffer[axi4.full.Interface]()
+    val closureAllocatorGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    fullSysGenDescriptor.taskDescriptors.foreach { task =>
+      closureAllocatorMap.get(task.name).foreach { allocator =>
+        allocator.io_internal.vcas_axi_full.zipWithIndex.foreach { case (port, portIndex) =>
+          closureAllocatorGroups.addOne(
+            HbmInterfaceGroup(s"closureAllocator:${task.name}:$portIndex", Seq(port))
+          )
+          interfacesClosureAllocator.addOne(port)
+        }
+      }
+    }
+
+    val interfacesMemoryAllocator = new ArrayBuffer[axi4.full.Interface]()
+    val memoryAllocatorGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    fullSysGenDescriptor.taskDescriptors.foreach { task =>
+      memoryAllocatorMap.get(task.name).foreach { allocator =>
+        allocator.io_internal.vcas_axi_full.zipWithIndex.foreach { case (port, portIndex) =>
+          memoryAllocatorGroups.addOne(
+            HbmInterfaceGroup(s"memoryAllocator:${task.name}:$portIndex", Seq(port))
+          )
+          interfacesMemoryAllocator.addOne(port)
+        }
+      }
+    }
+
+    val interfacesArgumentNotifier = new ArrayBuffer[axi4.full.Interface]()
+    val argumentNotifierGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    fullSysGenDescriptor.taskDescriptors.foreach { task =>
+      argumentNotifierMap.get(task.name).foreach { notifier =>
+        val serverCount = task.getNumServers("argumentNotifier")
+        for (serverIndex <- 0 until serverCount) {
+          val ports = Seq(
+            notifier.axi_full_argRoute(serverIndex),
+            notifier.axi_full_argRoute(serverIndex + serverCount)
+          )
+          argumentNotifierGroups.addOne(
+            HbmInterfaceGroup(s"argumentNotifier:${task.name}:$serverIndex", ports)
+          )
+          interfacesArgumentNotifier.addAll(ports)
+        }
+      }
+    }
+
+    val interfacesRemoteMemAccess = new ArrayBuffer[axi4.full.Interface]()
+    val remoteMemAccessGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    fullSysGenDescriptor.taskDescriptors.foreach { task =>
+      remoteMemAccessMap.get(task.name).foreach { remote =>
+        remoteMemAccessGroups.addOne(
+          HbmInterfaceGroup(s"remoteMemAccess:${task.name}", Seq(remote.io.m_axi_mem))
+        )
+        interfacesRemoteMemAccess.addOne(remote.io.m_axi_mem)
+      }
+    }
+
+    val interfacesPE = peInterfaceGroups.flatMap(_.interfaces).to(ArrayBuffer)
 
     val numHBMPorts = reduceAxi
-    val hbmSlaves =
-      scala.collection.mutable.Map[Int, ArrayBuffer[axi4.full.Interface]]()
-    for (i <- 0 until numHBMPorts) {
-      hbmSlaves += (i -> new ArrayBuffer[axi4.full.Interface]())
-    }
+    val hbmSlaves = Seq.fill(numHBMPorts)(new ArrayBuffer[axi4.full.Interface]())
 
     val totalPorts =
       interfacesPE.length + interfacesMemoryAllocator.length + interfacesScheduler.length + interfacesClosureAllocator.length + interfacesArgumentNotifier.length + interfacesRemoteMemAccess.length
@@ -119,29 +205,68 @@ trait HasHBMInterconnect extends Module {
     println(s"[HBM:Interconnect:99] Memory Allocator interfaces: ${interfacesMemoryAllocator.length}")
 
 
-    if (totalPorts > 0) {
-        val numPortsPerMux = totalPorts.toDouble / numHBMPorts.toDouble
-        val peMux = math.max(1, math.ceil(1.0 * interfacesPE.length / numPortsPerMux).toInt)
-        val serverMux = math.max(0, numHBMPorts - peMux)
+    def assignGroupsToHbmPorts(
+        groups: Seq[HbmInterfaceGroup],
+        firstPort: Int,
+        portCount: Int
+    ): Unit = {
+      if (groups.nonEmpty && portCount > 0) {
+        val targetPortsPerMux =
+          math.max(1.0, groups.map(_.size).sum.toDouble / portCount.toDouble)
+        var portIndex = firstPort
+        var portsInCurrentMux = 0
 
-        val pePortsPerMux = if (peMux > 0 && interfacesPE.length > 0) 1.0 * interfacesPE.length / peMux else 1.0
+        groups.foreach { group =>
+          val canAdvance =
+            portIndex < firstPort + portCount - 1 &&
+              portsInCurrentMux > 0 &&
+              portsInCurrentMux + group.size > targetPortsPerMux
 
-        interfacesPE.zipWithIndex
-          .groupBy(x => (x._2.toDouble / pePortsPerMux).toInt)
-          .foreach(x => {
-            if (hbmSlaves.contains(x._1)) hbmSlaves(x._1).addAll(x._2.map(_._1))
-          })
+          if (canAdvance) {
+            portIndex += 1
+            portsInCurrentMux = 0
+          }
 
-        val serverInterfaces = interfacesMemoryAllocator ++ interfacesScheduler ++ interfacesClosureAllocator ++ interfacesArgumentNotifier ++ interfacesRemoteMemAccess
-
-        val serverPortsPerMuxClamped = if (serverInterfaces.length > 0 && serverMux > 0) (1.0 * serverInterfaces.length / serverMux) else 1.0
-
-        serverInterfaces.zipWithIndex
-          .groupBy(x => peMux + (x._2.toDouble / serverPortsPerMuxClamped).toInt)
-          .foreach(x => {
-             if (hbmSlaves.contains(x._1)) hbmSlaves(x._1).addAll(x._2.map(_._1))
-          })
+          hbmSlaves(portIndex).addAll(group.interfaces)
+          portsInCurrentMux += group.size
+        }
+      }
     }
+
+    if (totalPorts > 0) {
+      val serverGroups =
+        memoryAllocatorGroups ++ schedulerInterfaceGroups ++ closureAllocatorGroups ++
+          argumentNotifierGroups ++ remoteMemAccessGroups
+
+      val numPortsPerMux = totalPorts.toDouble / numHBMPorts.toDouble
+      val requestedPeMux =
+        if (interfacesPE.nonEmpty)
+          math.ceil(interfacesPE.length.toDouble / numPortsPerMux).toInt
+        else
+          0
+      val peMux =
+        math.min(
+          numHBMPorts,
+          math.max(0, requestedPeMux)
+        ) match {
+          case mux if serverGroups.nonEmpty && mux == numHBMPorts && numHBMPorts > 1 =>
+            numHBMPorts - 1
+          case mux => mux
+        }
+      val serverMux = numHBMPorts - peMux
+
+      assignGroupsToHbmPorts(peInterfaceGroups.toSeq, 0, peMux)
+      assignGroupsToHbmPorts(serverGroups.toSeq, peMux, serverMux)
+    }
+
+    def hbmSkidBuffer(source: axi4.full.Interface): axi4.full.Interface =
+      axi4.full.SlaveBuffer(source, axi4.BufferConfig.all(2))
+
+    def connectThroughHbmSkidBuffer(
+        source: axi4.full.Interface,
+        sink: axi4.full.Interface
+    ): Unit =
+      hbmSkidBuffer(source) :=> sink
 
 
     if (false){//!isSimulation) {
@@ -159,18 +284,17 @@ trait HasHBMInterconnect extends Module {
     }
 
     val axi3CompatFlag = false
-    numHbmPortExports = hbmSlaves.filter(_._2.length > 0).size
-    hbmSlaves.filter(_._2.length > 0).zipWithIndex.map {
-      case (hbmSlaves_i, i) => {
-        val interfaceCount = hbmSlaves_i._2.length
-        val hbmSlave = hbmSlaves_i._2
+    numHbmPortExports = hbmSlaves.count(_.nonEmpty)
+    hbmSlaves.filter(_.nonEmpty).zipWithIndex.map {
+      case (hbmSlave, i) => {
+        val interfaceCount = hbmSlave.length
 
         if (
           interfaceCount == 1 && hbmSlave.head.cfg.axi3Compat && hbmSlave.head.cfg.wData == 256
         ) {
           val axiOut =
             IO(axi4.Master(hbmSlave.head.cfg)).suggestName(f"m_axi_${i}%02d")
-          hbmSlave.head :=> axiOut.asFull
+          connectThroughHbmSkidBuffer(hbmSlave.head, axiOut.asFull)
           interfaceBuffer.addOne(
             hdlinfo.Interface(
               f"m_axi_${i}%02d", hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
@@ -198,14 +322,15 @@ trait HasHBMInterconnect extends Module {
               )
             )
             axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> protocolConverter.s_axi
+            val protocolConverted = hbmSkidBuffer(protocolConverter.m_axi)
 
             // if the slave cfg has data width smaller than the axi master config instantiate a Widen
             if(slavePort.cfg.wData < muxPort.cfg.wData){
               val widen_mod = Module(new chext.amba.axi4.full.components.Widen(chext.amba.axi4.full.components.WidenConfig(muxPort.cfg)))
-              protocolConverter.m_axi :=> widen_mod.s_axi
-              widen_mod.m_axi :=> muxPort
+              protocolConverted :=> widen_mod.s_axi
+              connectThroughHbmSkidBuffer(widen_mod.m_axi, muxPort)
             } else{
-              protocolConverter.m_axi :=> muxPort
+              protocolConverted :=> muxPort
             }
           }
 
@@ -218,10 +343,10 @@ trait HasHBMInterconnect extends Module {
                 transform = Seq(33, 23, 22, 21, 20, 28, 27, 26, 25, 24, 32, 31, 30, 29, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0).reverse
               )
             ))
-            mux.m_axi :=> addressTransform.s_axi
-            addressTransform.m_axi :=> axiOut.asFull
+            connectThroughHbmSkidBuffer(mux.m_axi, addressTransform.s_axi)
+            connectThroughHbmSkidBuffer(addressTransform.m_axi, axiOut.asFull)
           } else {
-            mux.m_axi :=> axiOut.asFull
+            connectThroughHbmSkidBuffer(mux.m_axi, axiOut.asFull)
           }
 
           interfaceBuffer.addOne(
@@ -244,6 +369,7 @@ trait HasHBMInterconnect extends Module {
             )
           )
           axi4.full.SlaveBuffer(AxiUserYanker(hbmSlave.head), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
+          val protocolConverted = hbmSkidBuffer(protocolConverter.m_axi)
 
           if (addressTransformFlag) {
              val addressTransform = Module(new Util.AddressTransform(
@@ -253,16 +379,16 @@ trait HasHBMInterconnect extends Module {
               )
             ))
             // #TODO add the widen here as well.
-            protocolConverter.m_axi :=> addressTransform.s_axi
-            addressTransform.m_axi :=> axiOut.asFull
+            protocolConverted :=> addressTransform.s_axi
+            connectThroughHbmSkidBuffer(addressTransform.m_axi, axiOut.asFull)
           } else {
             // Add the Widen for V80
             if(protocolConverter.s_axi.cfg.wData < axiOut.cfg.wData){
               val widen_mod = Module(new chext.amba.axi4.full.components.Widen(chext.amba.axi4.full.components.WidenConfig(axiOut.cfg)))
-              protocolConverter.m_axi :=> widen_mod.s_axi
-              widen_mod.m_axi :=> axiOut.asFull
+              protocolConverted :=> widen_mod.s_axi
+              connectThroughHbmSkidBuffer(widen_mod.m_axi, axiOut.asFull)
             } else{
-              protocolConverter.m_axi :=> axiOut.asFull
+              protocolConverted :=> axiOut.asFull
             }
 
           }

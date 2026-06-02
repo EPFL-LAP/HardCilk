@@ -21,6 +21,7 @@
 #include <graph.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -174,6 +175,8 @@ public:
 
     std::vector<BFS_args> base_task_data = {root};
 
+    tuneSchedulerQueueCapacities(n);
+
     // ── Program management registers and seed the root task ─────────────────
     auto t_init = std::chrono::high_resolution_clock::now();
     initSystem(base_task_data, &bfsDoneConditionStub, /*fpgaId=*/0, /*taskId=*/0,
@@ -221,6 +224,29 @@ public:
   }
 
 private:
+  void tuneSchedulerQueueCapacities(int vertex_count) {
+    const uint64_t bfs_queue_entries = 64;
+    const uint64_t helper_queue_entries =
+        std::max<uint64_t>(64, static_cast<uint64_t>(vertex_count));
+
+    for (auto &task : descriptor.taskDescriptors) {
+      uint64_t target = task.name == "BFS" ? bfs_queue_entries
+                                           : helper_queue_entries;
+      for (auto &config : task.sidesConfigs) {
+        if (config.sideType != "scheduler") continue;
+        if (config.capacityVirtualQueue <= 0) continue;
+        uint64_t old_capacity =
+            static_cast<uint64_t>(config.capacityVirtualQueue);
+        if (target < old_capacity) {
+          config.capacityVirtualQueue = static_cast<int>(target);
+          std::cout << "[BFS] scheduler queue cap for " << task.name
+                    << ": " << old_capacity << " -> " << target
+                    << " entries\n";
+        }
+      }
+    }
+  }
+
   // Drive paused-server management while polling the continuation's `done` flag,
   // bounded by a wall-clock watchdog. Returns 0 on done, -1 on watchdog timeout.
   size_t countVisited(Addr visited_base, int vertex_count) {

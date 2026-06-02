@@ -1,5 +1,7 @@
 #include "hardCilkDriver.h"
 
+#include <chrono>
+#include <sstream>
 
 hardCilkDriver::hardCilkDriver(Memory *memory)
 {
@@ -40,8 +42,27 @@ int hardCilkDriver::startSystem()
 
 int hardCilkDriver::waitPaused(uint64_t addr)
 {
+    const auto start = std::chrono::steady_clock::now();
+    auto next_log = start + std::chrono::seconds(5);
+    const auto timeout = start + std::chrono::seconds(120);
     while (memory_->readReg64(addr) == 0)
     {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_log)
+        {
+            std::cerr << "Still waiting for server pause at register 0x"
+                      << std::hex << addr << std::dec << " after "
+                      << std::chrono::duration<double>(now - start).count()
+                      << "s\n";
+            next_log = now + std::chrono::seconds(5);
+        }
+        if (now >= timeout)
+        {
+            std::ostringstream oss;
+            oss << "Timed out waiting for server pause at register 0x"
+                << std::hex << addr;
+            throw std::runtime_error(oss.str());
+        }
         sleep(1);
     }
     return 0;
