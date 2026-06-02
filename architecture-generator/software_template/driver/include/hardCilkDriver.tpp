@@ -33,6 +33,20 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
         }
     }
 
+    auto skipQueueZeroInEmu = []() -> bool {
+        const char *emuMode = std::getenv("XCL_EMULATION_MODE");
+        return emuMode != nullptr && !std::string(emuMode).empty();
+    };
+
+    auto getPhysicalSchedulerCapacity = [](const TaskDescriptor &taskDescriptor) -> uint64_t {
+        for (const auto &config : taskDescriptor.sidesConfigs) {
+            if (config.sideType == "scheduler") {
+                return config.capacityPhysicalQueue;
+            }
+        }
+        return taskDescriptor.getCapacityVirtualQueue("scheduler");
+    };
+
     // Initialize the different servers
     for(auto taskDescriptor : descriptor.taskDescriptors){
       
@@ -41,33 +55,49 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
 
             // Allocate memory for all the scheduler servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++){
+                uint64_t scheduler_capacity = taskDescriptor.getCapacityVirtualQueue("scheduler");
+                if (skipQueueZeroInEmu()) {
+                    uint64_t physical_capacity = getPhysicalSchedulerCapacity(taskDescriptor);
+                    if (physical_capacity > 0 && physical_capacity < scheduler_capacity) {
+                        printf("        [hw_emu] Using physical scheduler capacity for %s (%lu entries instead of virtual %lu)\n",
+                               taskDescriptor.name.c_str(), physical_capacity, scheduler_capacity);
+                        scheduler_capacity = physical_capacity;
+                    }
+                }
                 // Allocate memory for the scheduler server
-                uint64_t addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 512);
+                uint64_t addr = memory_->allocateMemFPGA(scheduler_capacity * taskDescriptor.widthTask/8, 512);
                 
-                // Write zeros to the allocated memory 
-                std::vector <uint8_t> zeros(taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8, 0);
-                memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(zeros.data()), zeros.size());
+                // Empty queues are defined by fifoHead/fifoTail/currLen, so the
+                // backing contents are irrelevant until the FPGA writes entries.
+                if (skipQueueZeroInEmu()) {
+                    printf("        [hw_emu] Skipping zero fill for %s scheduler backing queue (%lu bytes)\n",
+                           taskDescriptor.name.c_str(),
+                           scheduler_capacity * taskDescriptor.widthTask/8);
+                } else {
+                    std::vector <uint8_t> zeros(scheduler_capacity * taskDescriptor.widthTask/8, 0);
+                    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t*>(zeros.data()), zeros.size());
+                }
 
                 // Initialize the scheduler server information
                 waitPaused(*base_address + scheduler_server_rpause_shift);
                 memory_->writeReg64(*base_address + scheduler_server_raddr_shift, addr);
-                memory_->writeReg64(*base_address + scheduler_server_maxLength_shift, taskDescriptor.getCapacityVirtualQueue("scheduler"));
+                memory_->writeReg64(*base_address + scheduler_server_maxLength_shift, scheduler_capacity);
                 memory_->writeReg64(*base_address + scheduler_server_fifoTailReg_shift, 0x0);
                 memory_->writeReg64(*base_address + scheduler_server_fifoHeadReg_shift, 0x0);
                 memory_->writeReg64(*base_address + scheduler_server_currLen_shift, 0x0);
 
                 // Read the initialized information of the scheduler server and assert that the initialization was successful
                 assert(memory_->readReg64(*base_address + scheduler_server_raddr_shift) == addr);
-                assert(memory_->readReg64(*base_address + scheduler_server_maxLength_shift) == taskDescriptor.getCapacityVirtualQueue("scheduler"));
+                assert(memory_->readReg64(*base_address + scheduler_server_maxLength_shift) == scheduler_capacity);
                 assert(memory_->readReg64(*base_address + scheduler_server_fifoTailReg_shift) == 0x0);
                 assert(memory_->readReg64(*base_address + scheduler_server_fifoHeadReg_shift) == 0x0);
                 assert(memory_->readReg64(*base_address + scheduler_server_currLen_shift) == 0x0);
 
 
                 // Log the successful initialization information of the scheduler server with indentation
-                printf("        Initialized scheduler server at address %lx with length %lx, fifoTail %lx, fifoHead %lx,\n", *base_address, taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, 0x0);
+                printf("        Initialized scheduler server at address %lx with length %lx, fifoTail %lx, fifoHead %lx,\n", *base_address, scheduler_capacity, 0x0, 0x0);
                 // Log also the start and the end of the data address addr
-                printf("        Data address start: 0x%lx, end: 0x%lx\n", addr, addr + taskDescriptor.getCapacityVirtualQueue("scheduler") * taskDescriptor.widthTask/8);
+                printf("        Data address start: 0x%lx, end: 0x%lx\n", addr, addr + scheduler_capacity * taskDescriptor.widthTask/8);
             }
             if(taskDescriptor.isRoot && !no_base_task){
                 // Read the address registered at the first virtual server of the task and write the data to that address

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VALID_BENCHMARKS=("graphRandomWalk" "pageRank" "triangleCount")
+VALID_BENCHMARKS=("BFS" "graphRandomWalk" "pageRank" "triangleCount")
 
 usage() {
     echo "Usage: $0 <benchmarkName>"
@@ -83,5 +83,18 @@ echo "Copying software into $XCLBIN_WORKSPACE_DIR/src/host/ ..."
 mkdir -p "$XCLBIN_WORKSPACE_DIR/src/host"
 
 cp -r "$SOFTWARE_DIR/." "$XCLBIN_WORKSPACE_DIR/src/host/"
+
+# --- Step 4: Stage the generated kernel.xml / connectivity cfg (if the emitter
+#     produced them). For BFS the generator emits user_0.xml + conn_u55c.cfg into
+#     <output>/xrt/; other benchmarks keep their hand-written files under
+#     xrt-projects/<name>/src/{xml,cfg}/ (already rsynced in at Step 1), so this
+#     block is a no-op for them. ---
+XRT_GEN_DIR="$HARDCILK_OUTPUT_DIR/xrt"
+if [[ -d "$XRT_GEN_DIR" ]]; then
+    echo "Staging generated kernel.xml / cfg from $XRT_GEN_DIR ..."
+    mkdir -p "$XCLBIN_WORKSPACE_DIR/src/xml" "$XCLBIN_WORKSPACE_DIR/src/cfg"
+    [[ -f "$XRT_GEN_DIR/user_0.xml" ]]     && cp "$XRT_GEN_DIR/user_0.xml"     "$XCLBIN_WORKSPACE_DIR/src/xml/"
+    [[ -f "$XRT_GEN_DIR/conn_u55c.cfg" ]]  && cp "$XRT_GEN_DIR/conn_u55c.cfg"  "$XCLBIN_WORKSPACE_DIR/src/cfg/"
+fi
 
 echo "Done. Workspace ready at: $XCLBIN_WORKSPACE_DIR"

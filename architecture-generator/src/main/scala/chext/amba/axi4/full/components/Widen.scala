@@ -29,6 +29,8 @@ class Widen(val cfg: WidenConfig) extends Module {
   val s_axi = IO(axi4.full.Slave(axiCfg))
   val m_axi = IO(axi4.full.Master(axiCfg))
 
+  private val fullWidthSize = log2Ceil(axiCfg.wData) - 3
+
   private class Control extends Bundle {
     val beatFirst = Bool()
     val beatLast = Bool()
@@ -81,6 +83,16 @@ class Widen(val cfg: WidenConfig) extends Module {
 
         out.size := size.U
         out.len := len1 -% 1.U
+
+        // BUGFIX: align the wide-side address down to the full-width (2^size)
+        // boundary. We bumped AxSIZE up to the full bus width above but left the
+        // address unaligned (`out := in`), so any narrow access whose address is
+        // not 2^size-aligned was emitted as a malformed wide burst — which hangs
+        // the read datapath or returns the wrong bytes. The read-data reassembly
+        // derives its sub-word index from the ORIGINAL in.addr (see
+        // generateControl), so the aligned wide word is still positioned
+        // correctly downstream; only the outgoing burst address needs aligning.
+        out.addr := in.addr & ~(((BigInt(1) << size) - 1).U(axiCfg.wAddr.W))
 
         // left here for debugging purposes
         dontTouch(mask0)
@@ -210,8 +222,8 @@ class Widen(val cfg: WidenConfig) extends Module {
     val fork0 = new elastic.Fork(s_axi.ar) {
       override protected def onFork: Unit = {
         val transform0 =
-          transformAx(fork(), m_axi.ar, log2Ceil(axiCfg.wData) - 3)
-        generateControl(fork(), wireControl, log2Ceil(axiCfg.wData) - 3)
+          transformAx(fork(), m_axi.ar, fullWidthSize)
+        generateControl(fork(), wireControl, fullWidthSize)
       }
     }
 
@@ -258,11 +270,50 @@ class Widen(val cfg: WidenConfig) extends Module {
   }
 
   private def implWrite() = prefix("write") {
-    // val transform0 = transformAx(s_axi.aw, m_axi.aw, log2Ceil(axiCfg.wData) - 3)
+    val wireControl = Wire(elastic.Interface(genControl))
+    dontTouch(wireControl)
 
-    // fix later:
-    s_axi.aw :=> m_axi.aw
-    s_axi.w :=> m_axi.w
+    @nowarn("cat=unused")
+    val fork0 = new elastic.Fork(s_axi.aw) {
+      override protected def onFork: Unit = {
+        val transform0 =
+          transformAx(fork(), m_axi.aw, fullWidthSize)
+        generateControl(fork(), wireControl, fullWidthSize)
+      }
+    }
+
+    val control = elastic.SourceBuffer(wireControl, 64)
+
+    val dataReg = RegInit(0.U(axiCfg.wData.W))
+    val strbReg = RegInit(0.U((axiCfg.wData / 8).W))
+    val validReg = RegInit(false.B)
+
+    val haveInput = s_axi.w.valid && control.valid
+    val nextData = Mux(control.bits.beatFirst || !validReg, 0.U, dataReg) | s_axi.w.bits.data
+    val nextStrb = Mux(control.bits.beatFirst || !validReg, 0.U, strbReg) | s_axi.w.bits.strb
+    val emitBeat = haveInput && control.bits.beatLast
+
+    m_axi.w.valid := emitBeat
+    m_axi.w.bits := s_axi.w.bits
+    m_axi.w.bits.data := nextData
+    m_axi.w.bits.strb := nextStrb
+    m_axi.w.bits.last := control.bits.transferLast
+
+    s_axi.w.ready := control.valid && (!control.bits.beatLast || m_axi.w.ready)
+    control.ready := s_axi.w.valid && (!control.bits.beatLast || m_axi.w.ready)
+
+    when(s_axi.w.valid && s_axi.w.ready && control.valid) {
+      when(control.bits.beatLast) {
+        dataReg := 0.U
+        strbReg := 0.U
+        validReg := false.B
+      }.otherwise {
+        dataReg := nextData
+        strbReg := nextStrb
+        validReg := true.B
+      }
+    }
+
     m_axi.b :=> s_axi.b
   }
 
