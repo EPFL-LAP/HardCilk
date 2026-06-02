@@ -50,6 +50,24 @@ object HardCilkEmitter extends App {
           isSimulation = false
         )
         println(s"Emitted RTL to: $outputDirPathRTL")
+
+        // Generate the Vitis kernel description (user_0.xml) and v++ connectivity
+        // (conn_u55c.cfg) from the same generator state that produced the RTL, so
+        // the port list (incl. the appended LockServer master) stays in lockstep.
+        // The emitter is generic; for now we only invoke it for BFS and leave the
+        // other benchmarks on their hand-written XML so their builds need no
+        // re-validation.
+        if (jsonName == "BFS") {
+          val xrtDir = s"${cfg.output_dir}/$outputDirName/xrt"
+          KernelXmlTemplate.generate(
+            descriptor = systemDescriptor,
+            numHbmPortExports = numHbmPortExports,
+            kernelName = s"${jsonName}_0",
+            vlnvName = jsonName,
+            outputDir = xrtDir
+          )
+          println(s"Emitted kernel.xml + conn cfg to: $xrtDir")
+        }
       }
 
       if (cfg.project_sc_generation) {

@@ -82,6 +82,8 @@ case class MemStats(
     interconnectDescriptors: List[InterconnectDescriptor]
 )
 
+case class LockConfig(N: Int, P: Int, tagStoreSize: Int)
+
 // --- SideConfig with default handling ---
 case class SideConfig(
     sideType: String,
@@ -121,6 +123,8 @@ case class TaskDescriptor(
     var mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     spawnServersCount: Int = 0, // Defaulted
     hasAXI: Boolean = true,
+    participatesInLock: Boolean = false, // Whether this task's PEs get lock req/resp lanes
+
     isAIE: Boolean = false,
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
@@ -193,6 +197,7 @@ case class FullSysGenDescriptor(
     keepAXI4Interfaces: Boolean = false,
     mFPGASynth: Boolean = false,
     mFPGASimulation: Boolean = false,
+    lockConfig: Option[LockConfig] = None,
     maximumAXIPorts: Int = 32,
     hasAXIDMAInput: Boolean = false,
     transformAXI: Boolean = false,
@@ -483,6 +488,28 @@ case class FullSysGenDescriptor(
       }
       require(decesion,"To support mfpga the IDs of tasks with argument notifiers must be contigous and starting from zero.\n")
 
+    }
+
+    // No task may opt into locking unless a lockConfig is present to serve it.
+    if (lockConfig.isEmpty) {
+      val orphans = taskDescriptors.filter(_.participatesInLock).map(_.name)
+      require(orphans.isEmpty,
+        s"Tasks have participatesInLock=true but no top-level lockConfig is set: ${orphans.mkString(", ")}")
+    }
+
+    lockConfig.foreach { lc =>
+      require(isPow2(lc.P), "lockConfig.P must be a power of two")
+      require(lc.P <= lc.N, "lockConfig.P must be <= N")
+      require(lc.tagStoreSize % lc.P == 0, "lockConfig.tagStoreSize must be a multiple of P")
+      require(lc.N % (2 * lc.P) == 0, "lockConfig.N must be a multiple of 2*P (AMU bucketing)")
+      // N must equal the total number of lock-participating PE lanes. A task opts in
+      // via participatesInLock=true; each of its PEs gets one lane. For BFS only
+      // the helper participates: 16 helper PEs = 16 lanes.
+      val lockLanes = taskDescriptors.filter(_.participatesInLock).map(_.numProcessingElements).sum
+      require(lockLanes == lc.N,
+        s"lockConfig.N (${lc.N}) must equal the total PEs of tasks with participatesInLock=true ($lockLanes)")
+      require(lockLanes > 0,
+        "lockConfig is set but no task has participatesInLock=true")
     }
   }
 }

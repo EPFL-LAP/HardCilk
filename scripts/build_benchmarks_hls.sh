@@ -16,7 +16,7 @@
 #   -f  Clock frequency in MHz          (default: 250)
 #   -b  Comma-separated list of benchmarks to build, or "all"
 #           (default: all)
-#           Valid names: graphRandomWalk, pageRank, triangleCount
+#           Valid names: BFS, graphRandomWalk, pageRank, triangleCount
 #   -D  Debug mode: pass through to build_kernels.sh to keep all
 #           intermediate build state (default: off — delete intermediates)
 #   -h  Show this help
@@ -26,6 +26,9 @@
 #
 # Output layout mirrors hls-processing-elements/mfpga/:
 #   hls-kernel-output/
+#   ├── BFS/
+#   │   ├── BFS/
+#   │   └── sparse_edgemap_helper/
 #   ├── graphRandomWalk/
 #   │   ├── walker/          ← synthesised Verilog
 #   │   └── walk_gen/
@@ -65,13 +68,14 @@ DEBUG=false                # passed through to build_kernels.sh; off by default
 # ── Benchmark → kernel mapping ────────────────────────────────────────────────
 # Associative array:  benchmark_subdir  →  "kernel1 kernel2 ..."
 declare -A BENCHMARK_KERNELS=(
+    [BFS]="BFS sparse_edgemap_helper"
     [graphRandomWalk]="walker walk_gen"
     [pageRank]="page_rank_map vertex_map"
     [triangleCount]="triangle vertex_map"
 )
 
 # Ordered list so the build sequence is deterministic
-BENCHMARK_ORDER=(graphRandomWalk pageRank triangleCount)
+BENCHMARK_ORDER=(BFS graphRandomWalk pageRank triangleCount)
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {

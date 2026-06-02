@@ -13,7 +13,8 @@ lazy val root = (project in file("."))
     name := "hardcilk",
     libraryDependencies ++= Seq(
       "org.chipsalliance" %% "chisel" % chiselVersion,
-    //  "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
+      "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion % Test,
+      "org.scalatest" %% "scalatest" % "3.2.17" % Test,
       "com.typesafe.play" %% "play-json" % "2.9.2",
       "hdlstuff" %% "chext" % "0.1.1",
       "hdlstuff" %% "hdlinfo" % "0.1.0",

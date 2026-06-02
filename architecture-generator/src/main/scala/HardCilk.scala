@@ -11,6 +11,8 @@ import Util.RemoteStreamToMem
 
 import chext.amba.axi4
 import axi4.Ops._
+import AXIHelpers._
+import Atomics.LockServer
 import axi4.lite.components._
 
 import io.circe.syntax._
@@ -111,6 +113,8 @@ class HardCilk(
 
   // This call now invokes the method from the HasHBMInterconnect trait
   buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, spawnNextWBMap, sendArgumentWBMap, remoteStreamToMemMap)
+
+  fullSysGenDescriptor.lockConfig.foreach { lc => connectLockServer(lc, peMap) }
 
   if(fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth){
     buildMfpgaConnections()
@@ -346,6 +350,83 @@ class HardCilk(
       done := false.B
     }
   }
+  
+    /** Instantiate one shared LockServer, wire each participating PE's
+    * toLock/fromLock to a lane, and export its HBM master as a dedicated m_axi port. */
+  private def connectLockServer(
+      lc: LockConfig,
+      peMap: Map[String, Seq[VitisWriteBufferModule]]
+  ): Unit = {
+
+    // --- A. Deterministic lane assignment ---
+    // Walk taskDescriptors (stable order), not peMap, so lanes are reproducible.
+    // BFS: the 16 sparse_edgemap_helper PEs become lanes 0..15.
+    val lockPEs: Seq[VitisWriteBufferModule] =
+      fullSysGenDescriptor.taskDescriptors
+        .filter(_.participatesInLock)
+        .flatMap(t => peMap(t.name))
+    require(lockPEs.length == lc.N,
+      s"lock lanes ${lockPEs.length} must equal lockConfig.N ${lc.N}")  // tripwire; validate() guarantees it
+
+    // --- B. Instantiate and tie off every lane (unconnected lanes stay safely idle) ---
+    // addrW matches the HBM port address width (widthAXIAddress, 34) so the lock
+    // tags, tag store, and AMU master are all native HBM-width -- no 64->34 address
+    // transition, and the tag-store comparators are 34-bit instead of 64-bit.
+    val lockServer = Module(new LockServer(
+      n = lc.N, p = lc.P, tagStoreSize = lc.tagStoreSize,
+      addrW = fullSysGenDescriptor.widthAXIAddress, lockTraceCsv = false))
+    for (i <- 0 until lc.N) {
+      lockServer.io.req(i).valid  := false.B
+      lockServer.io.req(i).bits   := DontCare
+      lockServer.io.resp(i).ready := false.B
+    }
+
+    // --- C. Connect endpoints (last-connect semantics override the tie-off above) ---
+    for ((pe, lane) <- lockPEs.zipWithIndex) {
+      val toLock   = pe.getPort("toLock").asInstanceOf[chext.amba.axi4s.Interface]
+      val fromLock = pe.getPort("fromLock").asInstanceOf[chext.amba.axi4s.Interface]
+      val req  = lockServer.io.req(lane)
+      val resp = lockServer.io.resp(lane)
+
+      // PE -> server
+      req.valid      := toLock.TVALID
+      toLock.TREADY  := req.ready
+      req.bits.tdata := toLock.TDATA
+      req.bits.tlast := true.B            // single-beat; PE iface has no TLAST under onlyRV
+
+      // server -> PE
+      fromLock.TVALID := resp.valid
+      resp.ready      := fromLock.TREADY
+      fromLock.TDATA  := resp.bits.tdata
+    }
+
+    // --- D. Export io.gmem as its own dedicated m_axi_NN ---
+    // gmem is wAddr=34 (== HBM), wData=64; HBM port is wAddr=34, wData=256.
+    // Address widths already match (no narrowing); the ProtocolConverter + Widen
+    // only upsize data 64->256. No AddressTransform: this master has its own channel.
+    val outputCfg = cfgAxi4HBM.copy(wId = 2)
+    val portName  = f"m_axi_${numHbmPortExports}%02d"
+    val axiOut    = IO(axi4.Master(outputCfg)).suggestName(portName)
+
+    val pc = Module(new axi4.full.components.ProtocolConverter(
+      new axi4.full.components.ProtocolConverterConfig(
+        axiSlaveCfg  = lockServer.io.gmem.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+        axiMasterCfg = outputCfg)))
+    axi4.full.SlaveBuffer(AxiUserYanker(lockServer.io.gmem.asFull), axi4.BufferConfig.all(2)) :=> pc.s_axi
+
+    val widen = Module(new axi4.full.components.Widen(
+      new axi4.full.components.WidenConfig(outputCfg)))
+    pc.m_axi    :=> widen.s_axi
+    widen.m_axi :=> axiOut.asFull
+
+    interfaceBuffer.addOne(hdlinfo.Interface(
+      portName, hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
+      "clock", "reset", Map("config" -> hdlinfo.TypedObject(axiOut.cfg))))
+
+    axiOuts.addOne(axiOut)
+    numHbmPortExports += 1
+  }
+
 
   // --- buildAndConnectHBM IS NOW GONE ---
   // (It lives in the HasHBMInterconnect trait)

@@ -19,4 +19,3 @@ struct Memory : std::enable_shared_from_this<Memory> {
 
     virtual ~Memory() = default;
 };
-

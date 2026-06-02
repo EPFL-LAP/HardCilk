@@ -63,7 +63,16 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         peType = task.name,
         debug = debug,
         spawnerServerNumber = task.spawnServersCount,
-        argRouteServersCreateTasks = task.sidesConfigs.length > 2,
+        // A continuation (isCont) re-injects its own task via the argument
+        // notifier when the join counter hits 0. With mFPGA on, that loops back
+        // through the network; single-FPGA needs the *local* outsideSpawn path,
+        // which requires this flag and a spawner (spawnServersCount > 0). The
+        // original `> 2` heuristic only fired for tasks with an extra (e.g.
+        // allocator) sideConfig, so single-FPGA continuations dropped the
+        // re-injection. The mFPGA benchmarks keep spawnServersCount=0 and are
+        // unaffected.
+        argRouteServersCreateTasks =
+          task.sidesConfigs.length > 2 || (task.isCont && task.spawnServersCount > 0),
         taskId = task.taskId,
         mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth
       ))
