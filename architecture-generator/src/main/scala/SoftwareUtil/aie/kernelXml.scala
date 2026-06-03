@@ -6,14 +6,6 @@ import scala.collection.mutable
 
 object KernelXmlTemplate {
 
-  private case class HelperXmlDef(
-      kernelName: String,
-      mAxiDataWidth: Int,
-      sourceTaskWidth: Int,
-      sinkResultWidth: Option[Int],
-      replicationCount: Int
-  )
-
   private case class TopStreamPortDef(
       bindPortName: String,
       mode: String,
@@ -69,16 +61,6 @@ object KernelXmlTemplate {
       topWriter.close()
     }
 
-    buildHelperXmlDefs(descriptor).foreach { helper =>
-      val file = new java.io.File(xmlFolder, s"${helper.kernelName}.xml")
-      val writer = new PrintWriter(file)
-      try {
-        writer.write(renderKernelXml(helper) + "\n")
-      } finally {
-        writer.close()
-      }
-    }
-
     buildStreamSplitterXmlDefs(descriptor).foreach { splitter =>
       val file = new java.io.File(xmlFolder, s"${splitter.kernelName}.xml")
       val writer = new PrintWriter(file)
@@ -90,93 +72,16 @@ object KernelXmlTemplate {
     }
   }
 
-  private def buildHelperXmlDefs(descriptor: FullSysGenDescriptor): Seq[HelperXmlDef] = {
-    val taskPeCountByName = descriptor.taskDescriptors.map(t => t.name -> t.numProcessingElements).toMap
-
-    descriptor.subPEList.toSeq.sortBy(_._1).flatMap { case (_, sub) =>
-      sub.rwRequest.flatMap { req =>
-        taskPeCountByName.get(sub.peName).map { replicationCount =>
-          val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth, replicationCount)
-          val sourceTaskWidth = sourceTaskDataWidth(req.`type`, req.mode)
-          val sinkResultWidth = if (req.`type` == "read") Some(req.portWidth) else None
-
-          HelperXmlDef(
-            kernelName = kernelName,
-            mAxiDataWidth = req.portWidth,
-            sourceTaskWidth = sourceTaskWidth,
-            sinkResultWidth = sinkResultWidth,
-            replicationCount = replicationCount
-          )
-        }
-      }
-    }.distinctBy(_.kernelName)
-  }
-
-  private def helperKernelName(requestType: String, mode: String, dataWidth: Int, replicationCount: Int): String = {
-    (requestType, mode) match {
-      case ("read", "single")  => s"ReadSingle_${dataWidth}_${replicationCount}"
-      case ("read", "stream")  => s"ReadStream_${dataWidth}_${replicationCount}"
-      case ("write", "single") => s"WriteSingle_${dataWidth}_${replicationCount}"
-      case ("write", "stream") => s"WriteStream_${dataWidth}_${replicationCount}"
+  private def sourceTaskDataWidth(req: RWRequestDescriptor): Int = {
+    val addressWidth = 64
+    (req.`type`, req.mode) match {
+      case ("read", "single") => addressWidth
+      case ("read", "stream") => paddedTo64(addressWidth + 32)
+      case ("write", "single") => paddedTo64(addressWidth + req.portWidth)
+      case ("write", "stream") => paddedTo64(addressWidth + req.portWidth)
       case _ =>
-        throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=$requestType mode=$mode")
+        throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=${req.`type`} mode=${req.mode}")
     }
-  }
-
-  private def sourceTaskDataWidth(requestType: String, mode: String): Int = {
-    (requestType, mode) match {
-      case ("read", "single") => 64
-      case ("read", "stream") => 128
-      case ("write", "single") => 128
-      case ("write", "stream") => 128
-      case _ =>
-        throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=$requestType mode=$mode")
-    }
-  }
-
-  private def renderKernelXml(helper: HelperXmlDef): String = {
-    val streamPorts = buildStreamPorts(helper)
-    val args = buildArgs(helper)
-
-    Seq(
-      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-      "<root versionMajor=\"1\" versionMinor=\"9\">",
-      s"  <kernel name=\"${helper.kernelName}\" language=\"ip\" vlnv=\"epfl.ch:hardcilk:${helper.kernelName}:1.0\" attributes=\"\" preferredWorkGroupSizeMultiple=\"0\" workGroupSize=\"1\" hwControlProtocol=\"ap_ctrl_none\">",
-      "    <ports>",
-      s"      <port name=\"m_axi\" mode=\"master\" range=\"0x3FFFFFFFF\" dataWidth=\"${helper.mAxiDataWidth}\" portType=\"addressable\" base=\"0x0\"/>",
-      "      <!-- AXI-Stream ports for AIE connectivity -->",
-      streamPorts,
-      "    </ports>",
-      "    <args>",
-      "      <arg name=\"mem_0\" addressQualifier=\"1\" id=\"0\" port=\"m_axi\" size=\"0x8\" offset=\"0x10\" hostOffset=\"0x0\" hostSize=\"0x8\" type=\"void*\"/>",
-      args,
-      "    </args>",
-      "  </kernel>",
-      "</root>"
-    ).mkString("\n")
-  }
-
-  private def buildStreamPorts(helper: HelperXmlDef): String = {
-    val lines = (0 until helper.replicationCount).flatMap { idx =>
-      val source = s"      <port name=\"sourceTasks_${idx}\" mode=\"write_only\" dataWidth=\"${helper.sourceTaskWidth}\" portType=\"stream\"/>"
-      helper.sinkResultWidth match {
-        case Some(width) => Seq(source, s"      <port name=\"sinkResults_${idx}\" mode=\"read_only\" dataWidth=\"${width}\" portType=\"stream\"/>")
-        case None => Seq(source)
-      }
-    }
-    lines.mkString("\n")
-  }
-
-  private def buildArgs(helper: HelperXmlDef): String = {
-    val lines = (0 until helper.replicationCount).flatMap { idx =>
-      val baseId = if (helper.sinkResultWidth.isDefined) 1 + idx * 2 else 1 + idx
-      val source = s"      <arg name=\"sourceTasks_${idx}\" addressQualifier=\"4\" id=\"${baseId}\" port=\"sourceTasks_${idx}\" size=\"0x4\" offset=\"0x0\" hostOffset=\"0x0\" hostSize=\"0x4\" type=\"stream\"/>"
-      helper.sinkResultWidth match {
-        case Some(_) => Seq(source, s"      <arg name=\"sinkResults_${idx}\" addressQualifier=\"4\" id=\"${baseId + 1}\" port=\"sinkResults_${idx}\" size=\"0x4\" offset=\"0x0\" hostOffset=\"0x0\" hostSize=\"0x4\" type=\"stream\"/>")
-        case None => Seq(source)
-      }
-    }
-    lines.mkString("\n")
   }
 
   private def buildStreamSplitterXmlDefs(descriptor: FullSysGenDescriptor): Seq[StreamSplitterXmlDef] = {
@@ -234,7 +139,7 @@ object KernelXmlTemplate {
       sub.rwRequest.toSeq.flatMap { req =>
         taskPeCountByName.get(sub.peName).toSeq.flatMap { peCount =>
           val portType = rwOutputPortName(req)
-          val width = sourceTaskDataWidth(req.`type`, req.mode)
+          val width = sourceTaskDataWidth(req)
           (0 until peCount).map { peIndex =>
             RoutedOutputDef(
               taskName = sub.peName,
@@ -455,6 +360,28 @@ object KernelXmlTemplate {
       }
     }
 
+    descriptor.subPEList.toSeq.sortBy(_._1).foreach { case (subPEName, sub) =>
+      sub.rwRequest.foreach { req =>
+        descriptor.taskDescriptors.find(_.name == sub.peName).foreach { task =>
+          (0 until task.numProcessingElements).foreach { peIndex =>
+            ports += TopStreamPortDef(
+              bindPortName = rwTopPortName(subPEName, peIndex, "sourceTask"),
+              mode = "write_only",
+              bitWidth = sourceTaskDataWidth(req)
+            )
+
+            if (req.`type` == "read") {
+              ports += TopStreamPortDef(
+                bindPortName = rwTopPortName(subPEName, peIndex, "sinkResult"),
+                mode = "read_only",
+                bitWidth = req.portWidth
+              )
+            }
+          }
+        }
+      }
+    }
+
     ports
       .groupBy(_.bindPortName)
       .map { case (_, defs) => defs.maxBy(_.bitWidth) }
@@ -660,8 +587,20 @@ object KernelXmlTemplate {
 
       val wbSpawnNextAxi = if (task.generateSpawnNextWriteBuffer && !hasPEModule) task.numProcessingElements else 0
       val wbArgDataAxi = if (task.generateArgOutWriteBuffer && !hasPEModule) task.numProcessingElements else 0
+      val peIORwAxi =
+        if (!hasPEModule) {
+          descriptor.subPEList.values.count(sub => sub.peName == task.name && sub.rwRequest.nonEmpty) * task.numProcessingElements
+        } else {
+          0
+        }
 
-      peCoreAxi + peSpawnNextAxi + peArgOutAxi + wbSpawnNextAxi + wbArgDataAxi
+      peCoreAxi + peSpawnNextAxi + peArgOutAxi + wbSpawnNextAxi + wbArgDataAxi + peIORwAxi
     }.sum
   }
+
+  private def paddedTo64(width: Int): Int =
+    width + ((64 - (width % 64)) % 64)
+
+  private def rwTopPortName(subPEName: String, peIndex: Int, suffix: String): String =
+    s"${subPEName}_${peIndex}_$suffix"
 }

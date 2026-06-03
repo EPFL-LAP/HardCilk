@@ -73,7 +73,7 @@ object ConnectivityTemplate {
 				buildSpLines(hardCilkInstance, helperKernels, hardCilkAxiPortCount) ++
 				Seq("") ++
 				buildTaskConnections(descriptor, hardCilkInstance, streamSplitters, aieEndpointByTask, helperKernels) ++
-				(if (helperKernels.nonEmpty) Seq("") ++ buildSubPEConnections(helperKernels) else Seq.empty)
+				(if (helperKernels.nonEmpty) Seq("") ++ buildSubPEConnections(hardCilkInstance, helperKernels) else Seq.empty)
 
 		val writer = new PrintWriter(s"$projectFolder/connectivity.cfg")
 		try {
@@ -134,17 +134,6 @@ object ConnectivityTemplate {
 	): Seq[String] = {
 		val nkHardCilk = Seq(s"nk=$hardCilkKernelName:1:$hardCilkInstance")
 
-		// Group helper kernels by kernel name and aggregate into single nk lines
-		val nkHelpers = helperKernels
-			.groupBy(_.kernelName)
-			.map { case (kernelName, instances) =>
-				val count = instances.length
-				val instanceNames = instances.map(_.instanceName).mkString(",")
-				s"nk=$kernelName:$count:$instanceNames"
-			}
-			.toSeq
-			.sorted  // Sort for deterministic output
-
 		val nkSplitters = streamSplitters
 			.groupBy(_.kernelName)
 			.map { case (kernelName, instances) =>
@@ -155,7 +144,7 @@ object ConnectivityTemplate {
 			.toSeq
 			.sorted
 
-		nkHardCilk ++ nkHelpers ++ nkSplitters
+		nkHardCilk ++ nkSplitters
 	}
 
 	private def buildSpLines(
@@ -164,8 +153,7 @@ object ConnectivityTemplate {
 			hardCilkAxiPortCount: Int
 	): Seq[String] = {
 		val hardCilkSPs = (0 until hardCilkAxiPortCount).map(i => s"sp=$hardCilkInstance.m_axi_${f"$i%02d"}:MC_NOC0")
-		val helperSPs = helperKernels.map(k => s"sp=${k.instanceName}.m_axi:MC_NOC0")
-		hardCilkSPs ++ helperSPs
+		hardCilkSPs
 	}
 
 	private def getHardCilkAxiPortCount(descriptor: FullSysGenDescriptor): Int = {
@@ -245,8 +233,14 @@ object ConnectivityTemplate {
 
 			val wbSpawnNextAxi = if (task.generateSpawnNextWriteBuffer && !hasPEModule) task.numProcessingElements else 0
 			val wbArgDataAxi = if (task.generateArgOutWriteBuffer && !hasPEModule) task.numProcessingElements else 0
+			val peIORwAxi =
+				if (!hasPEModule) {
+					descriptor.subPEList.values.count(sub => sub.peName == task.name && sub.rwRequest.nonEmpty) * task.numProcessingElements
+				} else {
+					0
+				}
 
-			peCoreAxi + peSpawnNextAxi + peArgOutAxi + wbSpawnNextAxi + wbArgDataAxi
+			peCoreAxi + peSpawnNextAxi + peArgOutAxi + wbSpawnNextAxi + wbArgDataAxi + peIORwAxi
 		}.sum
 	}
 
@@ -312,7 +306,7 @@ object ConnectivityTemplate {
 			)
 		}
 
-		val rwRoutes = collectRWOutputRoutes(helperKernels)
+		val rwRoutes = collectRWOutputRoutes(helperKernels, hardCilkInstance)
 		val allRoutes = hardCilkRoutes ++ rwRoutes
 
 		val splitterByTaskPePort = streamSplitters.flatMap { s =>
@@ -485,7 +479,7 @@ object ConnectivityTemplate {
 		x
 	}
 
-	private def buildSubPEConnections(helperKernels: List[HelperKernelDef]): Seq[String] = {
+	private def buildSubPEConnections(hardCilkInstance: String, helperKernels: List[HelperKernelDef]): Seq[String] = {
 		helperKernels.flatMap { k =>
 			(0 until k.taskPeCount).flatMap { peIndex =>
 				val peSuffix = suffixForPe(peIndex, k.taskPeCount)
@@ -497,7 +491,7 @@ object ConnectivityTemplate {
 							if (k.mode == "stream") s"readStream${k.portWidth}In"
 							else s"readSingle${k.portWidth}In"
 
-						s"sc=${k.instanceName}.sinkResults_${peIndex}:ai_engine_0.PLIO_${nextSubPE}${peSuffix}_$inPort"
+						s"sc=$hardCilkInstance.${rwTopPortName(k.subPEName, peIndex, "sinkResult")}:ai_engine_0.PLIO_${nextSubPE}${peSuffix}_$inPort"
 					}
 
 					chain.toSeq
@@ -520,7 +514,28 @@ object ConnectivityTemplate {
 					aieEndpointName = endpointName,
 					portType = portType,
 					bitWidth = bitWidth,
-					sink = s"${helper.instanceName}.sourceTasks_${peIndex}"
+					sink = ""
+				)
+			}
+		}
+	}
+
+	private def collectRWOutputRoutes(
+			helperKernels: List[HelperKernelDef],
+			hardCilkInstance: String
+	): Seq[OutputRouteDef] = {
+		helperKernels.flatMap { helper =>
+			val endpointName = normalizeName(helper.subPEName)
+			val portType = helperOutputPortName(helper)
+			val bitWidth = helperSourceTaskWidth(helper)
+			(0 until helper.taskPeCount).map { peIndex =>
+				OutputRouteDef(
+					taskName = helper.taskName,
+					peIndex = peIndex,
+					aieEndpointName = endpointName,
+					portType = portType,
+					bitWidth = bitWidth,
+					sink = s"$hardCilkInstance.${rwTopPortName(helper.subPEName, peIndex, "sourceTask")}"
 				)
 			}
 		}
@@ -537,14 +552,21 @@ object ConnectivityTemplate {
 	}
 
 	private def helperSourceTaskWidth(helper: HelperKernelDef): Int = {
+		val addressWidth = 64
 		(helper.requestType, helper.mode) match {
-			case ("read", "single")  => 64
-			case ("read", "stream")  => 128
-			case ("write", "single") => 128
-			case ("write", "stream") => 128
+			case ("read", "single")  => addressWidth
+			case ("read", "stream")  => paddedTo64(addressWidth + 32)
+			case ("write", "single") => paddedTo64(addressWidth + helper.portWidth)
+			case ("write", "stream") => paddedTo64(addressWidth + helper.portWidth)
 			case _ => throw new IllegalArgumentException(s"Unsupported rwRequest combination: type=${helper.requestType} mode=${helper.mode}")
 		}
 	}
+
+	private def paddedTo64(width: Int): Int =
+		width + ((64 - (width % 64)) % 64)
+
+	private def rwTopPortName(subPEName: String, peIndex: Int, suffix: String): String =
+		s"${subPEName}_${peIndex}_$suffix"
 
 	private def getNonLastEndpointsByTask(descriptor: FullSysGenDescriptor): Map[String, Set[String]] = {
 		descriptor.taskDescriptors.map { task =>

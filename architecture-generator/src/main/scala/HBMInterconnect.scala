@@ -8,10 +8,15 @@ import Allocator._
 import ArgumentNotifier._
 import HLSHelpers._
 import scala.collection.mutable.ArrayBuffer
+import aiehelpers._
 
 // All the AXI-related imports needed by the HBM logic
 import chext.amba.axi4
 import axi4.Ops._
+import chext.amba.axi4s
+import axi4s.Casts._
+import chext.{elasticnew => e}
+import e.ConnectOp._
 import AXIHelpers._
 import Util.AddressTransformConfig
 import io.circe.generic.auto._
@@ -69,6 +74,30 @@ trait HasHBMInterconnect extends Module {
         pe.io.elements.get("m_axi_argOut").foreach(p => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
         if (task.hasAXI) {
           interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
+        }
+      }
+    }
+    // for all tasks that do not have hdlpath for their PEs
+    // we create and export pe_io interfaces associated with the task if they exist
+    val aiePEs = fullSysGenDescriptor.taskDescriptors.filter(_.peHDLPath.isEmpty);
+    for (task <- aiePEs) {
+      val subPEs = fullSysGenDescriptor.subPEList.filter(_._2.peName == task.name)
+      if (subPEs.nonEmpty) {
+        val peIO = Module(new PeIO(subPEs, task.numProcessingElements))
+        peIO.axiMasters.foreach { port =>
+          interfacesPE.addOne(port)
+        }
+        peIO.rwPorts.foreach { rwPort =>
+          println(s"[HBMInterconnect] Adding PE IO ports for task ${rwPort.subPEName}_${rwPort.index}")
+          val sourceTask =
+            IO(chiselTypeOf(rwPort.sourceTask)).suggestName(s"${rwPort.instanceName}_sourceTask")
+          sourceTask.asLite :=> rwPort.sourceTask.asLite
+
+          rwPort.sinkResult.foreach { sink =>
+            val sinkResult =
+              IO(chiselTypeOf(sink)).suggestName(s"${rwPort.instanceName}_sinkResult")
+            sink.asFull :=> sinkResult.asFull
+          }
         }
       }
     }

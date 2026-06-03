@@ -2,6 +2,7 @@ package chext
 
 import chisel3._
 import chisel3.util.DecoupledIO
+import chisel3.util.ReadyValidIO
 
 import chisel3.experimental.SourceInfo
 import chisel3.experimental.requireIsChiselType
@@ -10,8 +11,8 @@ import chisel3.experimental.requireIsHardware
 import scala.annotation.unchecked.uncheckedVariance
 
 package object elasticnew {
-  // Use DecoupledIO as the Interface type for compatibility with AXI4 interfaces
-  type Interface[+T <: Data] = DecoupledIO[T @uncheckedVariance]
+  // Use ReadyValidIO so elasticnew can bridge both DecoupledIO and IrrevocableIO channels.
+  type Interface[+T <: Data] = ReadyValidIO[T @uncheckedVariance]
 }
 
 package elasticnew {
