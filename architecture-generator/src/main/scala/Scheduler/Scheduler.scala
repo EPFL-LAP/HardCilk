@@ -70,7 +70,7 @@ class Scheduler(
     override val mfpgaSupport: Boolean = false,
     maxNumnberToStealOrServe: Int = 256,
     override val taskId: Int = 0,
-    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
+    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4)
 ) extends Module with SchedulerHasMfpgaSupport {
 
   val vssAxiFullCfg = axi4.Config(
@@ -81,14 +81,15 @@ class Scheduler(
   )
 
 
-  val outsideSpawn = ((peCountGlobalTaskIn + argRouteServersNumber) > 0) && (argRouteServersCreateTasks || peCountGlobalTaskIn > 0)
+  val outsideSpawn = ((peCountGlobalTaskIn + argRouteServersNumber) > 0);
+  // Why? && (argRouteServersCreateTasks || peCountGlobalTaskIn > 0)
 
   println(f"Outside spawn ${outsideSpawn} of task ${peType}")
 
   val spawnerServer = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(Module(new SpawnerServer(taskWidth)))) else None
-  
+
   val spawnerServerMgmt = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(IO(axi4.lite.Slave(spawnerServer.get(0).asInstanceOf[SpawnerServer].regBlock.cfgAxi))) ) else None
-  val spawnerServerAXI = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(IO(axi4.full.Master(spawnerServer.get(0).asInstanceOf[SpawnerServer].axiCfg))) ) else None  
+  val spawnerServerAXI = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(IO(axi4.full.Master(spawnerServer.get(0).asInstanceOf[SpawnerServer].axiCfg))) ) else None
   val step = if(outsideSpawn) (peCountGlobalTaskIn + argRouteServersNumber) / spawnerServerNumber else 0
   var spawnerIndicies = Array.tabulate(spawnerServerNumber)(n => (n + n * step))
   var outTaskSpawnIndicies = Array.tabulate(peCountGlobalTaskIn + argRouteServersNumber + spawnerServerNumber)(n => (n))
@@ -325,10 +326,10 @@ class Scheduler(
   }
   // DEBUG
 
-  if (argRouteServersNumber > 0 && outsideSpawn){ //&& argRouteServersCreateTasks) { // 
+  if (argRouteServersNumber > 0){ //&& argRouteServersCreateTasks) { //
     for (i <- 0 until argRouteServersNumber) {
       getOutsideSpawnNetwork.get.io.connSS(outTaskSpawnIndicies(i)) <> connArgumentNotifier(i)
-    } 
+    }
   } else {
     for (i <- 0 until argRouteServersNumber) {
       connArgumentNotifier(i).ctrl.serveStealReq.ready := 0.U
@@ -347,7 +348,7 @@ class Scheduler(
       Module(new GlobalTaskBuffer(taskWidth, peCount))
     )
     for (i <- argRouteServersNumber until (argRouteServersNumber + peCountGlobalTaskIn)) {
-      
+
       axis_stream_converters_in_global(
         i - argRouteServersNumber
       ).io.dataIn.asLite <> io_export.taskInGlobal

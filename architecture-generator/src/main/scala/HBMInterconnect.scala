@@ -16,6 +16,8 @@ import AXIHelpers._
 import Util.AddressTransformConfig
 import io.circe.generic.auto._
 import Util.WriteBuffer
+import Util.AxiPageBoundarySplitter_Basic
+import Util.AxiPageBoundarySplitter_Config
 import Util.RemoteStreamToMem
 
 /**
@@ -170,7 +172,15 @@ trait HasHBMInterconnect extends Module {
         ) {
           val axiOut =
             IO(axi4.Master(hbmSlave.head.cfg)).suggestName(f"m_axi_${i}%02d")
-          hbmSlave.head :=> axiOut.asFull
+          val axpbs = Module(new AxiPageBoundarySplitter_Basic(new AxiPageBoundarySplitter_Config(
+            addressWidth = hbmSlave.head.cfg.wAddr,
+            dataWidth = hbmSlave.head.cfg.wData,
+            alignmentBits = 12, // 4 KB alignment
+            idWidth = hbmSlave.head.cfg.wId,
+            numberOfOutstanding = 16
+          )))
+          axpbs.s_axi :=> hbmSlave.head
+          axiOut.asFull :=> axpbs.m_axi.asFull
           interfaceBuffer.addOne(
             hdlinfo.Interface(
               f"m_axi_${i}%02d", hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
@@ -218,10 +228,26 @@ trait HasHBMInterconnect extends Module {
                 transform = Seq(33, 23, 22, 21, 20, 28, 27, 26, 25, 24, 32, 31, 30, 29, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0).reverse
               )
             ))
+            val axpbs = Module(new AxiPageBoundarySplitter_Basic(new AxiPageBoundarySplitter_Config(
+              addressWidth = axiOut.cfg.wAddr,
+              dataWidth = axiOut.cfg.wData,
+              alignmentBits = 12, // 4 KB alignment
+              idWidth = axiOut.cfg.wId,
+              numberOfOutstanding = 16
+            )))
             mux.m_axi :=> addressTransform.s_axi
-            addressTransform.m_axi :=> axiOut.asFull
+            addressTransform.m_axi :=> axpbs.s_axi.asFull
+            axpbs.m_axi :=> axiOut.asFull
           } else {
-            mux.m_axi :=> axiOut.asFull
+            val axpbs = Module(new AxiPageBoundarySplitter_Basic(new AxiPageBoundarySplitter_Config(
+              addressWidth = axiOut.cfg.wAddr,
+              dataWidth = axiOut.cfg.wData,
+              alignmentBits = 12, // 4 KB alignment
+              idWidth = axiOut.cfg.wId,
+              numberOfOutstanding = 16
+            )))
+            mux.m_axi :=> axpbs.s_axi.asFull
+            axpbs.m_axi :=> axiOut.asFull
           }
 
           interfaceBuffer.addOne(
@@ -253,16 +279,40 @@ trait HasHBMInterconnect extends Module {
               )
             ))
             // #TODO add the widen here as well.
+            val axpbs = Module(new AxiPageBoundarySplitter_Basic(new AxiPageBoundarySplitter_Config(
+              addressWidth = axiOut.cfg.wAddr,
+              dataWidth = axiOut.cfg.wData,
+              alignmentBits = 12, // 4 KB alignment
+              idWidth = axiOut.cfg.wId,
+              numberOfOutstanding = 16
+            )))
             protocolConverter.m_axi :=> addressTransform.s_axi
-            addressTransform.m_axi :=> axiOut.asFull
+            addressTransform.m_axi :=> axpbs.s_axi.asFull
+            axpbs.m_axi :=> axiOut.asFull
           } else {
             // Add the Widen for V80
             if(protocolConverter.s_axi.cfg.wData < axiOut.cfg.wData){
               val widen_mod = Module(new chext.amba.axi4.full.components.Widen(chext.amba.axi4.full.components.WidenConfig(axiOut.cfg)))
+              val axpbs = Module(new AxiPageBoundarySplitter_Basic(new AxiPageBoundarySplitter_Config(
+                addressWidth = axiOut.cfg.wAddr,
+                dataWidth = axiOut.cfg.wData,
+                alignmentBits = 12, // 4 KB alignment
+                idWidth = axiOut.cfg.wId,
+                numberOfOutstanding = 16
+              )))
               protocolConverter.m_axi :=> widen_mod.s_axi
-              widen_mod.m_axi :=> axiOut.asFull
+              widen_mod.m_axi :=> axpbs.s_axi.asFull
+              axpbs.m_axi :=> axiOut.asFull
             } else{
-              protocolConverter.m_axi :=> axiOut.asFull
+              val axpbs = Module(new AxiPageBoundarySplitter_Basic(new AxiPageBoundarySplitter_Config(
+                addressWidth = axiOut.cfg.wAddr,
+                dataWidth = axiOut.cfg.wData,
+                alignmentBits = 12, // 4 KB alignment
+                idWidth = axiOut.cfg.wId,
+                numberOfOutstanding = 16
+              )))
+              protocolConverter.m_axi :=> axpbs.s_axi.asFull
+              axpbs.m_axi :=> axiOut.asFull
             }
 
           }
