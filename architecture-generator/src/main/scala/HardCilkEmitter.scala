@@ -9,6 +9,7 @@ import Descriptors._
 import Descriptors.DescriptorJSON._
 import Util.HardCilkEmitterUtil._
 import SoftwareUtil._
+import TclResources._
 
 object HardCilkEmitter extends App {
   ArgParser.parseArgs(args) match {
@@ -51,7 +52,24 @@ object HardCilkEmitter extends App {
           isSimulation = false
         )
         println(s"Emitted RTL to: $outputDirPathRTL")
+        if(cfg.tcl_generation){
+          val outputDirPathTCL = s"${cfg.output_dir}/$outputDirName/tcl"
+          new java.io.File(outputDirPathTCL).mkdirs()
+          TclGeneratorMemPEs.generate(
+            systemDescriptor,
+            outputDirPathTCL,
+            numHbmPortExports
+          )
+          TclQuestaSim.generate(
+            systemDescriptor,
+            outputDirPathTCL,
+            numHbmPortExports
+          )
+        }
       }
+
+
+      
 
       if (cfg.project_sc_generation) {
         // Using java.nio copy a folder with all its content (files and subfolders) to another folder, source is "pwd/software_template" and destination is "outputDirPathSC"

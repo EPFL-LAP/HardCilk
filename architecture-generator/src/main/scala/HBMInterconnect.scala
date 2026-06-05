@@ -144,7 +144,7 @@ trait HasHBMInterconnect extends Module {
     }
 
 
-    if (false){//!isSimulation) {
+    if (fullSysGenDescriptor.hasAXIDMAInput){//!isSimulation) {
       val xdma_axi = IO(axi4.Slave(cfgXDMA)).suggestName("s_axi_xdma")
       hbmSlaves(numHBMPorts - 1).addOne(
         axi4.full.SlaveBuffer(xdma_axi.asFull, axi4.BufferConfig.all(8))
@@ -158,7 +158,12 @@ trait HasHBMInterconnect extends Module {
       axiXDMA.addOne(xdma_axi)
     }
 
-    val axi3CompatFlag = false
+    var axi3CompatFlag = true
+    if(fullSysGenDescriptor.isVitisProject){
+      // Vitis flow is AXI4
+      axi3CompatFlag = false
+    }
+
     numHbmPortExports = hbmSlaves.filter(_._2.length > 0).size
     hbmSlaves.filter(_._2.length > 0).zipWithIndex.map {
       case (hbmSlaves_i, i) => {

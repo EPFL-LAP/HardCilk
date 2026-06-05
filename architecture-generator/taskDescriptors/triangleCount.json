@@ -66,5 +66,6 @@
   "widthContCounter":32,
   "memorySizeSim": 16,
   "targetFrequency": 300,
-  "fpgaModel": "ALVEO_U55C"
+  "fpgaModel": "ALVEO_U55C",
+  "hasAXIDMAInput": true
 }
