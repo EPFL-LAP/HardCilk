@@ -222,8 +222,14 @@ static uint32_t edgemap_process(void *mem_0, void *mem_1, void *mem_2,
     // PRIORITY 2: append a newly discovered vertex to the next frontier.
     else if (!pending_frontier.empty() && outstanding < LOCK_WINDOW) {
       uint32_t neighbor = pending_frontier.read();
+      // BLOCKING is required: every append from every helper hits the single
+      // nextFChar tag, so it is maximally contended. A non-blocking ADD_ONE that
+      // loses the tag returns success=0 / current=0 *without* incrementing, and
+      // the slot it hands back collides on next_frontier[0] -- silently dropping
+      // and clobbering appends. Blocking makes the server retry until it wins, so
+      // every append atomically increments and gets a unique slot.
       toLock.write(make_lock_req(task.nextFChar, 1, LOCK_OP_ADD_ONE_RETURN_CURRENT,
-                                 false, ATOMIC_MODE_DOUBLEWORD));
+                                 true, ATOMIC_MODE_DOUBLEWORD));
       inflight.write({INFLIGHT_FRONTIER, neighbor});
       outstanding++;
     }
@@ -315,7 +321,20 @@ void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2,
   }
 
   MEM_OUT(mem_0, task.cont + 96, uint32_t, 0xA0); // reached lock loop
-  (void)edgemap_process(mem_0, mem_1, mem_2, task, neighbors, degree, toLock,
-                        fromLock);
-  argOut.write(task.cont);
+  uint32_t winners = edgemap_process(mem_0, mem_1, mem_2, task, neighbors,
+                                     degree, toLock, fromLock);
+  // argOut is the continuation trigger: the framework re-injects BFS once every
+  // helper's argOut has decremented the join counter. A bare argOut.write() has
+  // no dependency on edgemap_process's lock-stream work, so HLS would schedule it
+  // early -- firing the continuation before this helper's appends are committed,
+  // and the parent then reads a half-built next frontier. Gate the send on the
+  // return value (a token only available after the loop drains) so HLS keeps it
+  // ordered after edgemap_process. The sentinel compare is never true at runtime,
+  // so the send always happens; write_nb in a spin loop keeps the send itself
+  // from being optimized away.
+  bool sent = (winners == 0xDEADBEEFu);
+  while (!sent) {
+#pragma HLS PIPELINE off
+    sent = argOut.write_nb(task.cont);
+  }
 }

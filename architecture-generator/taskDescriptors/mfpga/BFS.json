@@ -14,7 +14,7 @@
     ]
   },
   "spawnNextList": {},
-  "targetFrequency": 300,
+  "targetFrequency": 200,
   "taskDescriptors": [
     {
       "spawnServersCount": 1,
@@ -53,7 +53,7 @@
       "isCont": false,
       "isRoot": false,
       "name": "sparse_edgemap_helper",
-      "numProcessingElements": 16,
+      "numProcessingElements": 8,
       "peHDLPath": "../hls-kernel-output/BFS/sparse_edgemap_helper",
       "sidesConfigs": [
         {
@@ -88,8 +88,8 @@
   "transformPattern": [],
   "widthAXIAddress": 34,
   "lockConfig": {
-    "N": 16,
+    "N": 8,
     "P": 4,
-    "tagStoreSize": 128
+    "tagStoreSize": 64
   }
 }
