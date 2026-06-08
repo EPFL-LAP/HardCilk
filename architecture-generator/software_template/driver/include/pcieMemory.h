@@ -11,11 +11,11 @@ struct PCIeMemory : Memory {
         if(d4e_xil_device_open(&xil_device, "/dev/xdma0", 0, 0, MAP_SZ) < 0)
             throw std::runtime_error("Failed to open the device");
     }
-    void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint32_t size) {
+    void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint64_t size) {
         d4e_dma_h2d(&xil_device.device, dest_addr, src, size);
     }
 
-    void copyFromDevice(uint8_t* dest, uint64_t src_addr, uint32_t size) {
+    void copyFromDevice(uint8_t* dest, uint64_t src_addr, uint64_t size) {
         d4e_dma_d2h(&xil_device.device, dest, src_addr, size);
     }
 

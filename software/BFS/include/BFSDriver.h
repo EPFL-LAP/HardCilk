@@ -53,7 +53,7 @@ struct BFS_args {
   Addr visited;              // 48  uint64[vertex_count]  (8-byte stride!)
   Addr frontier0;            // 56  uint32[vertex_count]
   Addr frontier1;            // 64  uint32[vertex_count]
-  Addr nextFChar;            // 72  uint32[vertex_count]
+  Addr nextFChar;            // 72  uint64 atomic counter (next-frontier length)
   Addr cont;                 // 80  continuation closure base (== &this on device)
   uint8_t _padding[40];      // 88..127
 };
@@ -78,9 +78,49 @@ public:
       : hardCilkDriver(memory), graph_file_(graph_file), source_(source),
         max_depth_(max_depth), watchdog_s_(watchdog_s) {}
 
+  static int run_cpu_test_bench(const std::string &graph_file, int source = 0,
+                                int max_depth_arg = 0) {
+    std::string synthetic_name;
+    int effective_source = source;
+
+    auto t_load = std::chrono::high_resolution_clock::now();
+    Graph G = loadBenchmarkGraph(graph_file, source, synthetic_name,
+                                 effective_source);
+    auto t_loaded = std::chrono::high_resolution_clock::now();
+
+    const int n = G.getNumVertices();
+    if (n <= 0) {
+      std::cerr << "[BFS-CPU] empty graph, aborting\n";
+      return 1;
+    }
+    const int max_depth = (max_depth_arg <= 0) ? n : max_depth_arg;
+    std::cout << "[BFS-CPU] vertices=" << n << " edges=" << G.num_edges
+              << " source=" << effective_source << " max_depth=" << max_depth;
+    if (!synthetic_name.empty())
+      std::cout << " graph=" << synthetic_name;
+    std::cout << "\n";
+    std::cout << "[BFS-CPU] graph setup took "
+              << std::chrono::duration<double>(t_loaded - t_load).count()
+              << "s\n";
+
+    std::vector<int> dist_ref;
+    auto t_bfs = std::chrono::high_resolution_clock::now();
+    referenceBFS(G, effective_source, dist_ref, max_depth);
+    auto t_done = std::chrono::high_resolution_clock::now();
+
+    std::cout << "[BFS-CPU] reference BFS took "
+              << std::chrono::duration<double>(t_done - t_bfs).count()
+              << "s\n";
+    print_bfs_summary(dist_ref.data(), n, "CPU");
+    return 0;
+  }
+
   int run_test_bench() override {
-    // ── Load the graph (undirected, like the CPU golden's load(path,false)) ──
-    Graph G(graph_file_, false);
+    // ── Load or synthesize the graph ────────────────────────────────────────
+    std::string synthetic_name;
+    int effective_source = source_;
+    Graph G = loadBenchmarkGraph(graph_file_, source_, synthetic_name,
+                                 effective_source);
     const int n = G.getNumVertices();
     if (n <= 0) {
       std::cerr << "[BFS] empty graph, aborting\n";
@@ -88,7 +128,10 @@ public:
     }
     const int max_depth = (max_depth_ <= 0) ? n : max_depth_;
     std::cout << "[BFS] vertices=" << n << " edges=" << G.num_edges
-              << " source=" << source_ << " max_depth=" << max_depth << "\n";
+              << " source=" << effective_source << " max_depth=" << max_depth;
+    if (!synthetic_name.empty())
+      std::cout << " graph=" << synthetic_name;
+    std::cout << "\n";
 
     // ── Lay the CSR graph into HBM ──────────────────────────────────────────
     // neighbor id stream (uint32), grouped by vertex == forward_neighbors order.
@@ -119,7 +162,9 @@ public:
     Addr visited_base   = memory_->allocateMemFPGA((uint64_t)n * VISITED_SLOT_BYTES, 512);
     Addr frontier0_base = memory_->allocateMemFPGA((uint64_t)n * sizeof(uint32_t), 512);
     Addr frontier1_base = memory_->allocateMemFPGA((uint64_t)n * sizeof(uint32_t), 512);
-    Addr nextFChar_base = memory_->allocateMemFPGA((uint64_t)n * sizeof(uint32_t), 512);
+    // nextFChar is now a single 64-bit atomic counter (the AMU ADD_ONE handout
+    // for next-frontier slots), not a per-vertex flag array. 8 bytes suffice.
+    Addr nextFChar_base = memory_->allocateMemFPGA(sizeof(uint64_t), 512);
     Addr cont_base      = memory_->allocateMemFPGA(sizeof(BFS_args), 512);
 
     // Zero / sentinel init. The PE's init() also does this for the first round,
@@ -134,10 +179,10 @@ public:
       memory_->copyToDevice(visited_base,
                             reinterpret_cast<const uint8_t *>(visInit.data()),
                             (uint64_t)n * VISITED_SLOT_BYTES);
-      std::vector<uint32_t> zeros32(n, 0);
+      uint64_t nextFCharInit = 0;
       memory_->copyToDevice(nextFChar_base,
-                            reinterpret_cast<const uint8_t *>(zeros32.data()),
-                            (uint64_t)n * sizeof(uint32_t));
+                            reinterpret_cast<const uint8_t *>(&nextFCharInit),
+                            sizeof(uint64_t));
     }
 
     std::cout << "[BFS] buffers: graph=0x" << std::hex << graph_base
@@ -154,7 +199,7 @@ public:
     // state; `done` starting at 0 is what the watchdog loop relies on.
     BFS_args root{};
     root.counter         = 0;
-    root.source          = (uint32_t)source_;
+    root.source          = (uint32_t)effective_source;
     root.vertex_count    = (uint32_t)n;
     root.currentDistance = 0;
     root.max_depth       = (uint32_t)max_depth;
@@ -200,7 +245,7 @@ public:
                             distance_base, (uint64_t)n * sizeof(int32_t));
 
     std::vector<int> dist_ref;
-    referenceBFS(G, source_, dist_ref, max_depth);
+    referenceBFS(G, effective_source, dist_ref, max_depth);
 
     int mismatches = 0;
     for (int v = 0; v < n; v++) {
@@ -224,6 +269,73 @@ public:
   }
 
 private:
+  static Graph loadBenchmarkGraph(const std::string &graph_file, int source,
+                                  std::string &synthetic_name,
+                                  int &effective_source) {
+    if (isSyntheticStarGraph(graph_file)) {
+      synthetic_name = "synthetic:star2m";
+      effective_source = 0;
+      if (source != effective_source) {
+        std::cout << "[BFS] synthetic star graph uses fixed source="
+                  << effective_source << " (ignoring requested source="
+                  << source << ")\n";
+      }
+      return Graph::twoMillionTwoLevelStar();
+    }
+
+    if (isSyntheticRingGraph(graph_file)) {
+      synthetic_name = "synthetic:ring2m";
+      effective_source = source;
+      return Graph::twoMillionRing();
+    }
+
+    if (isSyntheticStar4mGraph(graph_file)) {
+      synthetic_name = "synthetic:star4m";
+      effective_source = 0;
+      if (source != effective_source) {
+        std::cout << "[BFS] synthetic star4m graph uses fixed source="
+                  << effective_source << " (ignoring requested source="
+                  << source << ")\n";
+      }
+      return Graph::fourMillionStar();
+    }
+
+    if (isSyntheticWikiMixedGraph(graph_file)) {
+      synthetic_name = "synthetic:wikimix";
+      effective_source = 0;
+      if (source != effective_source) {
+        std::cout << "[BFS] synthetic wikimix graph uses fixed source="
+                  << effective_source << " (ignoring requested source="
+                  << source << ")\n";
+      }
+      return Graph::wikiMixed();
+    }
+
+    synthetic_name.clear();
+    effective_source = source;
+    return Graph(graph_file, false);
+  }
+
+  static bool isSyntheticStarGraph(const std::string &graph_file) {
+    return graph_file == "synthetic:star2m" || graph_file == "star2m" ||
+           graph_file == "--star2m";
+  }
+
+  static bool isSyntheticRingGraph(const std::string &graph_file) {
+    return graph_file == "synthetic:ring2m" || graph_file == "ring2m" ||
+           graph_file == "--ring2m";
+  }
+
+  static bool isSyntheticStar4mGraph(const std::string &graph_file) {
+    return graph_file == "synthetic:star4m" || graph_file == "star4m" ||
+           graph_file == "--star4m";
+  }
+
+  static bool isSyntheticWikiMixedGraph(const std::string &graph_file) {
+    return graph_file == "synthetic:wikimix" || graph_file == "wikimix" ||
+           graph_file == "--wikimix";
+  }
+
   void tuneSchedulerQueueCapacities(int vertex_count) {
     const uint64_t bfs_queue_entries = 64;
     const uint64_t helper_queue_entries =
@@ -286,6 +398,36 @@ private:
               << " active=" << cont.active
               << " done=" << cont.done
               << " elapsed=" << elapsed << "s\n";
+
+    // DEBUG: the source helper stashes diagnostics into cont._padding (which
+    // starts at byte 88 of BFS_args). Layout written by BFS.cpp:
+    //   +88 u  +92 degree  +96 path  +100 locks  +104 winners
+    //   +108 appends  +112 first_success  +116 first_current  +120 first_neighbor
+    const uint8_t *pad = reinterpret_cast<const uint8_t *>(&cont) + 88;
+    auto dbg = [&](int byteOff) {
+      uint32_t v;
+      std::memcpy(&v, pad + (byteOff - 88), sizeof(v));
+      return v;
+    };
+    uint32_t path = dbg(96);
+    const char *pathStr = path == 0xE1   ? "over-max-depth"
+                          : path == 0xE2 ? "u-out-of-range"
+                          : path == 0xE3 ? "degree==0"
+                          : path == 0xA0 ? "ran-lock-loop"
+                                         : "(unset)";
+    // DEBUG: read the atomic counter straight from HBM. If this is nonzero
+    // while the BFS PE saw next_length==0, the AMU write landed but the PE read
+    // it stale/early; if it's 0, the ADD_ONE write never persisted.
+    uint64_t nextfchar_hbm = 0;
+    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&nextfchar_hbm),
+                            cont.nextFChar, sizeof(nextfchar_hbm));
+    std::cout << "[BFS-DBG] u=" << dbg(88) << " degree=" << dbg(92)
+              << " path=0x" << std::hex << path << std::dec << "(" << pathStr
+              << ") locks=" << dbg(100) << " winners=" << dbg(104)
+              << " appends=" << dbg(108) << " first_success=" << dbg(112)
+              << " first_current=" << dbg(116)
+              << " first_neighbor=" << dbg(120)
+              << " nextFChar_hbm=" << nextfchar_hbm << "\n";
   }
 
   int managementLoopBFS(Addr cont_base, Addr visited_base, int vertex_count) {

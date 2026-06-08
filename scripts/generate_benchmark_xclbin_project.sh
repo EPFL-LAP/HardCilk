@@ -4,17 +4,27 @@ set -euo pipefail
 VALID_BENCHMARKS=("BFS" "graphRandomWalk" "pageRank" "triangleCount")
 
 usage() {
-    echo "Usage: $0 <benchmarkName>"
+    echo "Usage: $0 <benchmarkName> [workspaceNumber]"
     echo "  benchmarkName: one of ${VALID_BENCHMARKS[*]}"
+    echo "  workspaceNumber: optional numeric suffix, e.g. BFS 2 -> xclbin-workspace/BFS-2"
     exit 1
 }
 
 # --- Argument validation ---
-if [[ $# -ne 1 ]]; then
+if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
 fi
 
 BENCHMARK="$1"
+WORKSPACE_SUFFIX=""
+if [[ $# -eq 2 ]]; then
+    if [[ ! "$2" =~ ^[0-9]+$ ]]; then
+        echo "Error: workspaceNumber must be numeric, got '$2'"
+        exit 1
+    fi
+    WORKSPACE_SUFFIX="-$2"
+fi
+
 VALID=false
 for b in "${VALID_BENCHMARKS[@]}"; do
     [[ "$b" == "$BENCHMARK" ]] && VALID=true && break
@@ -30,7 +40,9 @@ HARDCILK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 HARDCILK_OUTPUT_DIR="$HARDCILK_ROOT/HardCilk-output/${BENCHMARK}_hardcilk_output"
 XRT_PROJECTS_DIR="$HARDCILK_ROOT/xrt-projects/$BENCHMARK"
-XCLBIN_WORKSPACE_DIR="$HARDCILK_ROOT/xclbin-workspace/$BENCHMARK"
+XCLBIN_WORKSPACE_DIR="$HARDCILK_ROOT/xclbin-workspace/${BENCHMARK}${WORKSPACE_SUFFIX}"
+DRIVER_TEMPLATE_INCLUDE_DIR="$HARDCILK_ROOT/architecture-generator/software_template/driver/include"
+DRIVER_TEMPLATE_SRC_DIR="$HARDCILK_ROOT/architecture-generator/software_template/driver/src"
 
 # --- Check HardCilk output exists ---
 if [[ ! -d "$HARDCILK_OUTPUT_DIR" ]]; then
@@ -65,6 +77,14 @@ if [[ ! -d "$XRT_PROJECTS_DIR" ]]; then
     echo "Error: xrt-projects directory not found: $XRT_PROJECTS_DIR"
     exit 1
 fi
+if [[ ! -d "$DRIVER_TEMPLATE_INCLUDE_DIR" ]]; then
+    echo "Error: driver template include directory not found: $DRIVER_TEMPLATE_INCLUDE_DIR"
+    exit 1
+fi
+if [[ ! -d "$DRIVER_TEMPLATE_SRC_DIR" ]]; then
+    echo "Error: driver template source directory not found: $DRIVER_TEMPLATE_SRC_DIR"
+    exit 1
+fi
 
 # --- Step 1: Copy xrt-projects/<benchmark> to xclbin-workspace, excluding *-arxiv folders ---
 echo "Creating workspace at $XCLBIN_WORKSPACE_DIR ..."
@@ -82,10 +102,29 @@ find "$RTL_DIR" -maxdepth 1 -type f -exec cp {} "$XCLBIN_WORKSPACE_DIR/src/IP/" 
 echo "Copying software into $XCLBIN_WORKSPACE_DIR/src/host/ ..."
 mkdir -p "$XCLBIN_WORKSPACE_DIR/src/host"
 
+DEST_DRIVER_INCLUDE_DIR="$XCLBIN_WORKSPACE_DIR/src/host/driver/include"
+DEST_DRIVER_SRC_DIR="$XCLBIN_WORKSPACE_DIR/src/host/driver/src"
+if [[ -d "$DEST_DRIVER_INCLUDE_DIR" ]]; then
+    echo "Removing stale driver headers from $DEST_DRIVER_INCLUDE_DIR ..."
+    rm -rf "$DEST_DRIVER_INCLUDE_DIR"
+fi
+if [[ -d "$DEST_DRIVER_SRC_DIR" ]]; then
+    echo "Removing stale driver sources from $DEST_DRIVER_SRC_DIR ..."
+    rm -rf "$DEST_DRIVER_SRC_DIR"
+fi
+
 cp -r "$SOFTWARE_DIR/." "$XCLBIN_WORKSPACE_DIR/src/host/"
 
-# --- Step 4: Stage the generated kernel.xml / connectivity cfg (if the emitter
-#     produced them). For BFS the generator emits user_0.xml + conn_u55c.cfg into
+echo "Refreshing driver headers from $DRIVER_TEMPLATE_INCLUDE_DIR ..."
+mkdir -p "$DEST_DRIVER_INCLUDE_DIR"
+cp -a "$DRIVER_TEMPLATE_INCLUDE_DIR/." "$DEST_DRIVER_INCLUDE_DIR/"
+
+echo "Refreshing driver sources from $DRIVER_TEMPLATE_SRC_DIR ..."
+mkdir -p "$DEST_DRIVER_SRC_DIR"
+cp -a "$DRIVER_TEMPLATE_SRC_DIR/." "$DEST_DRIVER_SRC_DIR/"
+
+# --- Step 4: Stage the generated kernel.xml / connectivity cfg
+#     (if the emitter produced them). For BFS the generator emits these into
 #     <output>/xrt/; other benchmarks keep their hand-written files under
 #     xrt-projects/<name>/src/{xml,cfg}/ (already rsynced in at Step 1), so this
 #     block is a no-op for them. ---
@@ -93,8 +132,15 @@ XRT_GEN_DIR="$HARDCILK_OUTPUT_DIR/xrt"
 if [[ -d "$XRT_GEN_DIR" ]]; then
     echo "Staging generated kernel.xml / cfg from $XRT_GEN_DIR ..."
     mkdir -p "$XCLBIN_WORKSPACE_DIR/src/xml" "$XCLBIN_WORKSPACE_DIR/src/cfg"
-    [[ -f "$XRT_GEN_DIR/user_0.xml" ]]     && cp "$XRT_GEN_DIR/user_0.xml"     "$XCLBIN_WORKSPACE_DIR/src/xml/"
-    [[ -f "$XRT_GEN_DIR/conn_u55c.cfg" ]]  && cp "$XRT_GEN_DIR/conn_u55c.cfg"  "$XCLBIN_WORKSPACE_DIR/src/cfg/"
+    [[ -f "$XRT_GEN_DIR/user_0.xml" ]]                 && cp "$XRT_GEN_DIR/user_0.xml"                 "$XCLBIN_WORKSPACE_DIR/src/xml/"
+    if [[ -f "$XRT_GEN_DIR/conn_u55c.cfg" ]]; then
+        cp "$XRT_GEN_DIR/conn_u55c.cfg" "$XCLBIN_WORKSPACE_DIR/src/cfg/"
+        awk '
+            /^\[clock\]/ { skip = 1; next }
+            /^\[/ { skip = 0 }
+            !skip { print }
+        ' "$XRT_GEN_DIR/conn_u55c.cfg" > "$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c_hw_emu.cfg"
+    fi
 fi
 
 echo "Done. Workspace ready at: $XCLBIN_WORKSPACE_DIR"

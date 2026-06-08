@@ -141,29 +141,67 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     // Read the rAddress of the scheduler server and the maxLength and write the data in the free memory
     uint64_t addr = memory_->readReg64(base_address + scheduler_server_raddr_shift);
     uint64_t maxLength = memory_->readReg64(base_address + scheduler_server_maxLength_shift);
+    uint64_t fifoTail = memory_->readReg64(base_address + scheduler_server_fifoTailReg_shift);
+    uint64_t fifoHead = memory_->readReg64(base_address + scheduler_server_fifoHeadReg_shift);
+    uint64_t currLen = memory_->readReg64(base_address + scheduler_server_currLen_shift);
 
     // Log the information of calling this function
-    std::cout << "Managing scheduler server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << " and maxLength " << maxLength << std::endl;
+    std::cout << "Managing scheduler server of task type " << taskDescriptor.name
+              << " at address " << base_address
+              << " with rAddress " << addr
+              << " maxLength " << maxLength
+              << " fifoHead " << fifoHead
+              << " fifoTail " << fifoTail
+              << " currLen " << currLen << std::endl;
+
+    if (maxLength == 0 || currLen > maxLength || fifoHead >= maxLength || fifoTail >= maxLength)
+    {
+        std::ostringstream oss;
+        oss << "Invalid scheduler FIFO metadata while extending " << taskDescriptor.name
+            << ": maxLength=" << maxLength
+            << " fifoHead=" << fifoHead
+            << " fifoTail=" << fifoTail
+            << " currLen=" << currLen;
+        throw std::runtime_error(oss.str());
+    }
 
     //freed_mem_blocks.push_back(freedMemBlock{addr, maxLength * taskDescriptor.widthTask / 8}); // Free the memory and write it in bytes.
 
     // Allocate double the maxLength of the scheduler server
     uint64_t new_addr = memory_->allocateMemFPGA(2 * maxLength * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
 
-    // Read the data from the scheduler server to the cpu
-    void *data = malloc(maxLength * taskDescriptor.widthTask / 8);
-    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(data), addr, maxLength * taskDescriptor.widthTask / 8);
+    const uint64_t entryBytes = taskDescriptor.widthTask / 8;
+    const uint64_t liveBytes = currLen * entryBytes;
+    std::vector<uint8_t> data(liveBytes);
+
+    if (currLen > 0)
+    {
+        // The scheduler backing store is a circular FIFO. Pack live entries in
+        // dequeue order so the resized FIFO can restart with head=0.
+        uint64_t firstEntries = std::min(currLen, maxLength - fifoHead);
+        uint64_t firstBytes = firstEntries * entryBytes;
+        memory_->copyFromDevice(data.data(), addr + fifoHead * entryBytes, firstBytes);
+
+        uint64_t secondEntries = currLen - firstEntries;
+        if (secondEntries > 0)
+        {
+            memory_->copyFromDevice(data.data() + firstBytes, addr, secondEntries * entryBytes);
+        }
+    }
 
     // Write the data to the new address
-    memory_->copyToDevice(new_addr, reinterpret_cast<const uint8_t *>(data), maxLength * taskDescriptor.widthTask / 8);
+    if (liveBytes > 0)
+    {
+        memory_->copyToDevice(new_addr, data.data(), liveBytes);
+    }
 
     // Write the new address to the rAddress register
     memory_->writeReg64(base_address + scheduler_server_raddr_shift, new_addr);
 
     // Write the new head and tail registers
-    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, maxLength);
+    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, currLen);
     memory_->writeReg64(base_address + scheduler_server_fifoHeadReg_shift, 0x0);
-    memory_->writeReg64(base_address + scheduler_server_currLen_shift, maxLength);
+    memory_->writeReg64(base_address + scheduler_server_currLen_shift, currLen);
 
     // Write the new MaxLength
     memory_->writeReg64(base_address + scheduler_server_maxLength_shift, maxLength * 2);

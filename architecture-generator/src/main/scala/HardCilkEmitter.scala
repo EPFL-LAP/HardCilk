@@ -1,6 +1,5 @@
 package HardCilk
 
-import _root_.circt.stage.ChiselStage
 import java.time.format.DateTimeFormatter
 import java.time.{LocalDate, LocalTime}
 import java.nio.file.{Files, Paths, StandardCopyOption}
@@ -9,6 +8,7 @@ import Descriptors._
 import Descriptors.DescriptorJSON._
 import Util.HardCilkEmitterUtil._
 import SoftwareUtil._
+import TclResources.TclGeneratorMemPEs
 
 object HardCilkEmitter extends App {
   ArgParser.parseArgs(args) match {
@@ -26,20 +26,20 @@ object HardCilkEmitter extends App {
 
       val systemDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
 
+      // Read system descriptor from JSON
+      try {
+        systemDescriptor.validate()
+      } catch {
+        case e: IllegalArgumentException =>
+          System.err.println(s"JSON Validation Failed: ${e.getMessage}")
+          System.exit(1)
+      }
+
       if (!cfg.rtl_generation) {
         println("RTL generation not requested.")
       } else {
         val outputDirPathRTL = s"${cfg.output_dir}/$outputDirName/rtl"
         Files.createDirectories(Paths.get(outputDirPathRTL))
-
-        // Read system descriptor from JSON
-        try {
-          systemDescriptor.validate()
-        } catch {
-          case e: IllegalArgumentException =>
-            System.err.println(s"JSON Validation Failed: ${e.getMessage}")
-            System.exit(1)
-        }
 
         // Call the generate RTL function
         val numHbmPortExports = generateRTL(
@@ -68,6 +68,26 @@ object HardCilkEmitter extends App {
           )
           println(s"Emitted kernel.xml + conn cfg to: $xrtDir")
         }
+      }
+
+      if (cfg.tcl_generation) {
+        val outputDirPathTcl = s"${cfg.output_dir}/$outputDirName/tcl"
+        Files.createDirectories(Paths.get(outputDirPathTcl))
+        val lockAxiPortCount = if (systemDescriptor.lockConfig.nonEmpty) 1 else 0
+        val tclAxiPortCount = cfg.reduce_axi + lockAxiPortCount
+        require(
+          tclAxiPortCount <= 32,
+          s"Tcl HBM port count is $tclAxiPortCount, but U55C HBM exposes at most 32 AXI ports. " +
+            s"reduce_axi=${cfg.reduce_axi}, lock ports=$lockAxiPortCount"
+        )
+
+        TclGeneratorMemPEs.generate(
+          fullSysGenDescriptor = systemDescriptor,
+          tclFileDirectory = outputDirPathTcl,
+          reduce_axi = tclAxiPortCount
+        )
+
+        println(s"Emitted Vivado block-design Tcl to: $outputDirPathTcl")
       }
 
       if (cfg.project_sc_generation) {

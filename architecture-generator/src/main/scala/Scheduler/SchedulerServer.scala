@@ -19,6 +19,7 @@ class SchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth
   val write_data = DecoupledIO(UInt(taskWidth.W))
   val write_burst_len = Output(UInt(4.W))
   val write_last = Output(UInt(1.W))
+  val write_idle = Input(Bool())
   val ntwDataUnitOccupancy = Input(Bool())
   val paused = Output(Bool())
   val lengths_of_hardware_queues = Vec(peCount, Input(UInt(8.W)))
@@ -82,8 +83,20 @@ class SchedulerServer(
   private val addrShift = RegInit((log2Ceil(taskWidth / 8)).U)
   private val taskQueueBuffer = Module(new Queue(UInt(), nBeats))
   private val memDataCounter = RegInit(0.U(5.W))
+  private val splitPushPending = RegInit(false.B)
   private val queuesUtil = RegInit(0.U(64.W))
   private val enableMfpgaSteal = RegInit(0.U(64.W))
+  private val nBeatsUInt = nBeats.U(5.W)
+
+  private def capBurstAtFifoEnd(requestedBeats: UInt, ptr: UInt): UInt = {
+    val slotsToEnd = maxLength - ptr
+    Mux(slotsToEnd < requestedBeats, slotsToEnd(4, 0), requestedBeats)
+  }
+
+  private val pushRequestedBeats = Mux(splitPushPending, taskQueueBuffer.io.count, nBeatsUInt)
+  private val pushBurstBeats = capBurstAtFifoEnd(pushRequestedBeats, fifoTailReg)
+  private val popRequestedBeats = Mux(currLen < nBeats.U, currLen(4, 0), nBeatsUInt)
+  private val popBurstBeats = capBurstAtFifoEnd(popRequestedBeats, fifoHeadReg)
 
   regBlock.base(0x00)
   regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
@@ -165,7 +178,15 @@ class SchedulerServer(
   // transition of FSM
   when(stateReg === state.init) {
 
-    when(interruptCondition) {
+    when(!io.write_idle) {
+
+      stateReg := state.init
+
+    }.elsewhen(splitPushPending && taskQueueBuffer.io.count =/= 0.U) {
+
+      stateReg := state.pushTaskMemAddress
+
+    }.elsewhen(interruptCondition) {
       stateReg := state.processInterruptState
       rPause := "hFFFFFFFFFFFFFFFF".U
     }.elsewhen((currLen === maxLength && networkCongested) || maxLength < (nBeats.U + currLen)) {
@@ -211,7 +232,8 @@ class SchedulerServer(
 
     when(io.write_address.ready) {
       stateReg := state.pushTaskMem
-      memDataCounter := nBeats.U
+      memDataCounter := pushBurstBeats
+      splitPushPending := pushBurstBeats < pushRequestedBeats
     }
 
   }.elsewhen(stateReg === state.pushTaskMem) {
@@ -240,7 +262,7 @@ class SchedulerServer(
 
     when(io.read_address.ready) {
       stateReg := state.popTaskMem
-      memDataCounter := Mux(currLen < nBeats.U, currLen, nBeats.U)
+      memDataCounter := popBurstBeats
     }
 
   }.elsewhen(stateReg === state.popTaskMem) {
@@ -347,7 +369,7 @@ class SchedulerServer(
 
     io.write_address.valid := true.B
     io.write_address.bits := (fifoTailReg << addrShift) + rAddr
-    io.write_burst_len := (nBeats - 1).U // equivalent to 16 values
+    io.write_burst_len := (pushBurstBeats - 1.U)(3, 0)
 
   }.elsewhen(stateReg === state.pushTaskMem) {
 
@@ -361,7 +383,7 @@ class SchedulerServer(
 
     io.read_address.valid := true.B
     io.read_address.bits := (fifoHeadReg << addrShift) + rAddr
-    io.read_burst_len := Mux(currLen < nBeats.U, currLen - 1.U, (nBeats - 1).U)
+    io.read_burst_len := (popBurstBeats - 1.U)(3, 0)
 
   }.elsewhen(stateReg === state.popTaskMem) {
 

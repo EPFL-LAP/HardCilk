@@ -25,8 +25,8 @@ using Addr = uint64_t;
 using lock_req = ap_axiu<136, 0, 0, 0>;
 using lock_resp = ap_axiu<136, 0, 0, 0>;
 
-// Opcodes accepted by the LockServer (lockchisel.Operation). The operation field
-// of a request lives at tdata[131:128].
+// Opcodes accepted by the LockServer (lockchisel.Operation). The operation
+// field of a request lives at tdata[131:128].
 enum LockOperation : uint8_t {
   LOCK_OP_UNLOCK = 0b0000,
   LOCK_OP_LOCK = 0b0001,
@@ -39,9 +39,10 @@ enum LockOperation : uint8_t {
 
 enum BfsVisitFlags : uint32_t { BFS_VISIT_VERTEX_ALREADY_MARKED = 1 };
 
-// Atomic granularity selector (lockchisel.AtomicMode), carried in tdata[134:133]
-// of a lock request. The AMU read-modify-writes only the selected sub-field of
-// the 64-bit beat (byte-strobed), so Visited can be a plain byte array.
+// Atomic granularity selector (lockchisel.AtomicMode), carried in
+// tdata[134:133] of a lock request. The AMU read-modify-writes only the
+// selected sub-field of the 64-bit beat (byte-strobed), so Visited can be a
+// plain byte array.
 enum AtomicMode : uint8_t {
   ATOMIC_MODE_DOUBLEWORD = 0b00, // 8 bytes (legacy 64-bit behaviour)
   ATOMIC_MODE_BYTE = 0b01,       // 1 byte
@@ -73,17 +74,26 @@ struct BFS_args {
 };
 
 struct sparse_edgemap_helper_args {
-  addr_t graph;
-  addr_t distance;
-  addr_t visited;
-  addr_t frontier;
-  addr_t nextFChar;
-  addr_t cont;
-  uint32_t index;
-  uint32_t currentDistance;
-  uint32_t vertex_count;
-  uint32_t max_depth;
+  addr_t graph;             // 0
+  addr_t distance;          // 8
+  addr_t visited;           // 16
+  addr_t frontier;          // 24
+  addr_t next_frontier;     // 32
+  addr_t nextFChar;         // 40
+  addr_t cont;              // 48
+  uint32_t index;           // 56
+  uint32_t currentDistance; // 60
+  uint32_t vertex_count;    // 64
+  uint32_t max_depth;       // 68
+  // The scheduler's PE-facing AXIS width and backing-queue entry size are both
+  // driven by the descriptor's widthTask, which must be a power of two. The real
+  // payload is 72 bytes; pad to 128 bytes (1024 bits) so it matches
+  // widthTask=1024 in BFS.json. Without this the trailing fields (vertex_count,
+  // max_depth) are truncated off the task stream.
+  uint8_t _pad[56];         // 72..127
 };
+static_assert(sizeof(sparse_edgemap_helper_args) == 128,
+              "sparse_edgemap_helper_args must be 1024 bits (widthTask=1024)");
 
 // Build a lock request beat:
 //   tdata[63:0]    = byte address of the slot (tag)
@@ -112,7 +122,8 @@ static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
 
 // Decode a lock response beat. The AMU response path packs Cat(0, data, 1), so:
 //   tdata[63:0]    = status (1 == read-modify-write completed)
-//   tdata[127:64]  = previous memory contents (the full 64-bit beat that was read)
+//   tdata[127:64]  = previous memory contents (the full 64-bit beat that was
+//   read)
 static inline bool lock_resp_success(const lock_resp &resp) {
 #pragma HLS INLINE
   return resp.data(63, 0) != 0;

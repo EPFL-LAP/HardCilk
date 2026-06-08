@@ -35,11 +35,23 @@ inline void bfs_print_usage(const char *prog) {
       << "\nUsage:\n  " << prog
       << " <xclbin_path> <graph_file> [source] [max_depth] [watchdog_s]\n\n"
       << "Arguments:\n"
-      << "  xclbin_path   .xclbin to load onto the FPGA\n"
-      << "  graph_file    edge-list graph (loaded undirected)\n"
+      << "  xclbin_path   .xclbin to load onto the FPGA, or --cpu for CPU-only\n"
+      << "  graph_file    edge-list graph (loaded undirected), synthetic:star2m,\n"
+      << "                synthetic:star4m, synthetic:ring2m, or synthetic:wikimix\n"
       << "  source        BFS source vertex            [default: 0]\n"
       << "  max_depth     stop after this depth, 0=full [default: 0]\n"
-      << "  watchdog_s    management-loop timeout (s)   [default: 600]\n\n";
+      << "  watchdog_s    management-loop timeout (s)   [default: 600]\n\n"
+      << "Synthetic graphs:\n"
+      << "  synthetic:star2m creates a 2,000,002-vertex / 4,000,000-edge\n"
+      << "  convergence graph: one root -> 2,000,000 middle vertices -> one\n"
+      << "  shared sink. Source is fixed to root vertex 0.\n"
+      << "  synthetic:star4m creates a 4,000,001-vertex / 4,000,000-edge\n"
+      << "  one-level star. Source is fixed to root vertex 0.\n"
+      << "  synthetic:ring2m creates a 2,000,000-node undirected ring with\n"
+      << "  randomized vertex IDs in memory order (4,000,000 CSR arcs).\n"
+      << "  synthetic:wikimix creates a wiki-Talk-like level profile with a\n"
+      << "  1,520,907-vertex frontier that mostly points to already visited\n"
+      << "  previous/same-level vertices plus about 20k next-level vertices.\n\n";
 }
 
 inline bool bfs_parse_args(int argc, char *argv[], BfsBenchArgs &out) {
@@ -67,6 +79,11 @@ inline bool bfs_check_runtime_env() {
             << " but XILINX_XRT is not set.\n"
             << "[Init] Run: source /opt/xilinx/xrt/setup.sh\n";
   return false;
+}
+
+inline bool bfs_cpu_only_requested(const std::string &xclbin_path) {
+  return xclbin_path == "--cpu" || xclbin_path == "cpu" ||
+         xclbin_path == "CPU";
 }
 
 class ScopedHeartbeat {
@@ -108,6 +125,16 @@ inline int run_bfs_benchmark(int argc, char *argv[],
                              const std::string &kernel_name) {
   BfsBenchArgs args;
   if (!bfs_parse_args(argc, argv, args)) return EXIT_FAILURE;
+  if (bfs_cpu_only_requested(args.xclbin_path)) {
+    auto start = std::chrono::high_resolution_clock::now();
+    int rc = BFSDriver::run_cpu_test_bench(args.graph_file, args.source,
+                                           args.max_depth);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "[Run] CPU-only total wall time: "
+              << std::chrono::duration<double>(end - start).count() << "s\n";
+    return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+
   if (!bfs_check_runtime_env()) return EXIT_FAILURE;
 
   xrt::device device(0);
