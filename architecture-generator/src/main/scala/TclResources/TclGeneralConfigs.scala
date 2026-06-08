@@ -302,7 +302,7 @@ object TclGeneralConfigs {
     // Connect it to the clock wizard and the axi resets of the system
     sb.append("connect_bd_net [get_bd_pins clk_wiz_0/locked] [get_bd_pins proc_sys_reset_1/dcm_locked]\n")
     sb.append("connect_bd_net [get_bd_pins proc_sys_reset_1/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out1]\n")
-    sb.append(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_reset] [get_bd_pins ${descriptor.name}_0/reset]\n")
+    sb.append(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins ${descriptor.name}_0/reset_n]\n")
     sb.append(
       "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_clock_converter_0/m_axi_aresetn]\n"
     )

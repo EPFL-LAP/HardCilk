@@ -260,7 +260,7 @@ trait HasHBMInterconnect extends Module {
     }
 
     def hbmSkidBuffer(source: axi4.full.Interface): axi4.full.Interface =
-      axi4.full.SlaveBuffer(source, axi4.BufferConfig.all(2))
+      axi4.full.SlaveBuffer(source, axi4.BufferConfig.all(8))
 
     def connectThroughHbmSkidBuffer(
         source: axi4.full.Interface,
@@ -269,7 +269,7 @@ trait HasHBMInterconnect extends Module {
       hbmSkidBuffer(source) :=> sink
 
 
-    if (false){//!isSimulation) {
+    if (fullSysGenDescriptor.hasAXIDMAInput) {
       val xdma_axi = IO(axi4.Slave(cfgXDMA)).suggestName("s_axi_xdma")
       hbmSlaves(numHBMPorts - 1).addOne(
         axi4.full.SlaveBuffer(xdma_axi.asFull, axi4.BufferConfig.all(8))
@@ -291,7 +291,7 @@ trait HasHBMInterconnect extends Module {
 
         if (
           interfaceCount == 1 && hbmSlave.head.cfg.axi3Compat && hbmSlave.head.cfg.wData == 256
-        ) {
+          ) {
           val axiOut =
             IO(axi4.Master(hbmSlave.head.cfg)).suggestName(f"m_axi_${i}%02d")
           connectThroughHbmSkidBuffer(hbmSlave.head, axiOut.asFull)
@@ -326,11 +326,15 @@ trait HasHBMInterconnect extends Module {
 
             // if the slave cfg has data width smaller than the axi master config instantiate a Widen
             if(slavePort.cfg.wData < muxPort.cfg.wData){
-              val widen_mod = Module(new chext.amba.axi4.full.components.Widen(chext.amba.axi4.full.components.WidenConfig(muxPort.cfg)))
-              protocolConverted :=> widen_mod.s_axi
+              val widen_mod = Module(
+                new chext.amba.axi4.full.components.Widen(
+                  chext.amba.axi4.full.components.WidenConfig(muxPort.cfg)
+                )
+              )
+              connectThroughHbmSkidBuffer(protocolConverted, widen_mod.s_axi)
               connectThroughHbmSkidBuffer(widen_mod.m_axi, muxPort)
             } else{
-              protocolConverted :=> muxPort
+              connectThroughHbmSkidBuffer(protocolConverted, muxPort)
             }
           }
 
@@ -379,16 +383,20 @@ trait HasHBMInterconnect extends Module {
               )
             ))
             // #TODO add the widen here as well.
-            protocolConverted :=> addressTransform.s_axi
+            connectThroughHbmSkidBuffer(protocolConverted, addressTransform.s_axi)
             connectThroughHbmSkidBuffer(addressTransform.m_axi, axiOut.asFull)
           } else {
             // Add the Widen for V80
             if(protocolConverter.s_axi.cfg.wData < axiOut.cfg.wData){
-              val widen_mod = Module(new chext.amba.axi4.full.components.Widen(chext.amba.axi4.full.components.WidenConfig(axiOut.cfg)))
-              protocolConverted :=> widen_mod.s_axi
+              val widen_mod = Module(
+                new chext.amba.axi4.full.components.Widen(
+                  chext.amba.axi4.full.components.WidenConfig(axiOut.cfg)
+                )
+              )
+              connectThroughHbmSkidBuffer(protocolConverted, widen_mod.s_axi)
               connectThroughHbmSkidBuffer(widen_mod.m_axi, axiOut.asFull)
             } else{
-              protocolConverted :=> axiOut.asFull
+              connectThroughHbmSkidBuffer(protocolConverted, axiOut.asFull)
             }
 
           }

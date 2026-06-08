@@ -40,6 +40,8 @@ class RVtoAXIBridgeIO(
     })
     else None
 
+  val writeIdle = Output(Bool())
+
 }
 
 class RVtoAXIBridge(
@@ -70,6 +72,8 @@ class RVtoAXIBridge(
 
   val axi = IO(axi4.full.Master(axiFullCfg))
   private val axiData = axi
+
+  io.writeIdle := true.B
 
   private def connectZeros[T <: Data](bits: T) = {
     bits := 0.U(bits.getWidth.W).asTypeOf(bits)
@@ -151,6 +155,7 @@ class RVtoAXIBridge(
     axiData.b.ready := true.B
 
     io.write.get.address.ready := axiData.aw.ready
+    io.writeIdle := !writeHandshakeDetector
 
   } else {
     axiData.aw.valid := false.B

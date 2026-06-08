@@ -217,6 +217,7 @@ class Scheduler(
     vssRvm(i).io.readBurst.get.len := schedulerServers(i).io.read_burst_len
     vssRvm(i).io.writeBurst.get.len := schedulerServers(i).io.write_burst_len
     vssRvm(i).io.writeBurst.get.last := schedulerServers(i).io.write_last
+    schedulerServers(i).io.write_idle := vssRvm(i).io.writeIdle
     schedulerServers(i).io.connNetwork <> stealNW_TQ.io.connVSS(i)
 
     // DEBUG

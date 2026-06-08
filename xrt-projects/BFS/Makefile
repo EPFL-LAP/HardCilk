@@ -26,8 +26,14 @@ VPP    := v++
 VIVADO := $(XILINX_VIVADO)/bin/vivado
 EMCONFIGUTIL := emconfigutil
 
-#--- Config file (generated in step 6, staged into src/cfg) ---
-SRC_CFG := $(CUR_DIR)/src/cfg/conn_u55c.cfg
+#--- Generated config files staged into src/cfg ---
+SRC_CFG       := $(CUR_DIR)/src/cfg/conn_u55c.cfg
+SRC_CFG_HW_EMU := $(CUR_DIR)/src/cfg/conn_u55c_hw_emu.cfg
+ifeq ($(TARGET),hw_emu)
+ifneq ($(wildcard $(SRC_CFG_HW_EMU)),)
+SRC_CFG := $(SRC_CFG_HW_EMU)
+endif
+endif
 
 #--- VPP flags ---
 VPP_FLAGS   := -t $(TARGET) --platform $(XPLATFORM) --save-temps
@@ -42,7 +48,8 @@ VPP_LINKHOOK_FLAGS += --linkhook.do_last  vpl.impl.opt_design,scripts/clear_drc_
 endif
 
 #--- Input .xo files ---
-XO_DIR      := ./BFS/xo
+XO_ROOT     := ./BFS/xo
+XO_DIR      := $(XO_ROOT)/$(TARGET)
 KERNEL_OBJS := $(XO_DIR)/BFS_0.xo
 
 #--- Output xclbin ---
@@ -95,7 +102,7 @@ clean:
 	-rm -rf $(BUILD_DIR) $(TEMP_DIR) *.log *.jou
 
 cleanall: clean
-	-rm -rf _x_temp.* build_dir.* $(CUR_DIR)/reports $(XO_DIR)
+	-rm -rf _x_temp.* build_dir.* $(CUR_DIR)/reports $(XO_ROOT)
 	-rm -rf .ipcache .Xil
 	-rm -rf packaged_kernel_*
 	-rm -rf tmp_kernel_pack_*

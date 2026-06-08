@@ -85,7 +85,7 @@ struct questaMemory : Memory
             8);
     }
 
-    void copyToDevice(uint64_t dest_addr, uint8_t const *src, uint32_t size)
+    void copyToDevice(uint64_t dest_addr, uint8_t const *src, uint64_t size)
     {
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
@@ -188,7 +188,7 @@ struct questaMemory : Memory
         }
     }
 
-    void copyFromDevice(uint8_t *dest, uint64_t src_addr, uint32_t size)
+    void copyFromDevice(uint8_t *dest, uint64_t src_addr, uint64_t size)
     {
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));

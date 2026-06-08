@@ -1,8 +1,6 @@
 package TclResources
 
 import Descriptors._
-import scala.collection.mutable.Map
-import scala.util.control.Breaks._
 
 object TclGeneratorMemPEs {
   def generate(fullSysGenDescriptor: FullSysGenDescriptor, tclFileDirectory: String, reduce_axi: Int) = {
@@ -21,9 +19,6 @@ object TclGeneratorMemPEs {
     // Add any tcl generated with the PEs from HLS
     tclWriteln(TclGeneralConfigs.getPEsTcl(fullSysGenDescriptor))
 
-    // Get the stats of the memory connections
-    val memConnectionsStats = fullSysGenDescriptor.getMemoryConnectionsStats(reduce_axi)
-
     // Create and configure the xdma
     tclWriteln(TclGeneralConfigs.getXdmaConfigTclSyntax())
 
@@ -40,9 +35,14 @@ object TclGeneratorMemPEs {
       "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins axi_dwidth_converter_0/S_AXI]"
     )
 
-    // Connect the data port from the xdma to the compute system
-    tclWriteln("connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]")
-    tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins */s_axi_xdma]")
+    // Connect the data port from the xdma to the compute system when the
+    // descriptor asks the RTL to expose that ingress path.
+    if (fullSysGenDescriptor.hasAXIDMAInput) {
+      tclWriteln("connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]")
+      tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins */s_axi_xdma]")
+    } else {
+      tclWriteln("puts \"HardCilk BD: descriptor has hasAXIDMAInput=false; leaving XDMA data master unconnected\"")
+    }
 
     // Connect the smart connect masters to the HBM
     // [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${systemAXIPort}]
@@ -56,14 +56,17 @@ object TclGeneratorMemPEs {
       // tclWriteln(f"connect_bd_net [get_bd_pins axi_register_slice_${i}%02d/aresetn] [get_bd_pins proc_sys_reset_1/peripheral_aresetn]")
 
 
-      tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI] [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/m_axi_${i}%02d]")
-      val portName = f"m_axi_${i}%02d"
+      tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:axi_protocol_converter:2.1 hbm_axi_protocol_converter_${i}%02d")
+      tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/m_axi_${i}%02d] [get_bd_intf_pins hbm_axi_protocol_converter_${i}%02d/S_AXI]")
+      tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins hbm_axi_protocol_converter_${i}%02d/M_AXI] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
 
       //tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${portName}] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
     }
 
     // Create the clocking wizard and reset for the system
     tclWriteln(TclGeneralConfigs.getSytstemClockingAndResetConfigTclSyntax(fullSysGenDescriptor))
+    tclWriteln("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins hbm_axi_protocol_converter_*/*aclk*]")
+    tclWriteln("connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins hbm_axi_protocol_converter_*/*aresetn*]")
 
     // // clock and reset of register slices
     // tclWriteln("connect_bd_net [get_bd_pins axi_register_slice_*/aclk] [get_bd_pins clk_wiz_0/clk_out1]")

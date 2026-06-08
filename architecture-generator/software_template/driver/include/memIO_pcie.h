@@ -27,11 +27,11 @@ struct PCIeMemory : Memory {
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
 
     public:
-    void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint32_t size) {
+    void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint64_t size) {
         d4e_dma_h2d(&xil_device.device, dest_addr, src, size);
     }
 
-    void copyFromDevice(uint8_t* dest, uint64_t src_addr, uint32_t size) {
+    void copyFromDevice(uint8_t* dest, uint64_t src_addr, uint64_t size) {
         d4e_dma_d2h(&xil_device.device, dest, src_addr, size);
     }
 
