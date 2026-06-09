@@ -145,6 +145,16 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     uint64_t fifoHead = memory_->readReg64(base_address + scheduler_server_fifoHeadReg_shift);
     uint64_t currLen = memory_->readReg64(base_address + scheduler_server_currLen_shift);
 
+    // Always-visible warning (stderr, not gated by any verbosity/fast mode): a
+    // mid-run resize copies + zeroes the queue inside the timed window and hurts
+    // timing. If you see this, raise the initial queue size for this task so the
+    // resize does not happen.
+    std::cerr << "[RESIZE] " << taskDescriptor.name
+              << " scheduler/spawner queue full at " << maxLength
+              << " entries -> doubling to " << (maxLength * 2)
+              << " (mid-run resize hurts timing; increase the initial queue size)"
+              << std::endl;
+
     // Log the information of calling this function
     std::cout << "Managing scheduler server of task type " << taskDescriptor.name
               << " at address " << base_address
@@ -169,6 +179,26 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
 
     // Allocate double the maxLength of the scheduler server
     uint64_t new_addr = memory_->allocateMemFPGA(2 * maxLength * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
+
+    // Zero the new (doubled) backing store before repacking live entries into it.
+    // The resize only copies the currLen live entries below; the rest would be
+    // stale HBM (xrt-smi reset does not clear it), and later reading an
+    // unwritten-but-counted slot dispatches a garbage task (garbage `cont` ->
+    // lost join-counter decrement -> hang). Only large graphs (e.g. com-orkut)
+    // grow a frontier big enough to trigger a resize, which is why this slips
+    // past small-graph testing even with the initial allocation zeroed.
+    {
+        uint64_t newBytes = 2 * maxLength * taskDescriptor.widthTask / 8;
+        static const uint64_t kZeroChunkBytes = 16ull * 1024 * 1024;
+        static const std::vector<uint8_t> zeroChunk(kZeroChunkBytes, 0);
+        uint64_t filled = 0;
+        while (filled < newBytes)
+        {
+            uint64_t chunk = std::min<uint64_t>(kZeroChunkBytes, newBytes - filled);
+            memory_->copyToDevice(new_addr + filled, zeroChunk.data(), chunk);
+            filled += chunk;
+        }
+    }
 
     const uint64_t entryBytes = taskDescriptor.widthTask / 8;
     const uint64_t liveBytes = currLen * entryBytes;

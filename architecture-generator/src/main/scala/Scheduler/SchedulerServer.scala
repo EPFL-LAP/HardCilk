@@ -178,25 +178,35 @@ class SchedulerServer(
   // transition of FSM
   when(stateReg === state.init) {
 
-    when(!io.write_idle) {
+    // `write_idle` (== no backing-store write awaiting its B response) must gate
+    // only operations that ACCESS the HBM-backed FIFO: continuing a wrapped (split)
+    // push, relocating the FIFO, pushing, and popping (a pop is a read-after-write
+    // on the queue and must observe committed pushes). It must NOT gate the
+    // buffer-only paths: giveAwayTask serves a task straight from the in-memory
+    // taskQueueBuffer and takeInTask buffers an incoming one -- neither touches the
+    // backing store. The original blanket `when(!io.write_idle){stay}` blocked those
+    // too, so a slow/contended write B-response wedged task dispatch entirely (e.g.
+    // a re-injected BFS continuation stuck in the buffer, never handed off -- the
+    // as-skitter hang). Gate per-transition instead.
+    when(splitPushPending && taskQueueBuffer.io.count =/= 0.U) {
 
-      stateReg := state.init
-
-    }.elsewhen(splitPushPending && taskQueueBuffer.io.count =/= 0.U) {
-
-      stateReg := state.pushTaskMemAddress
+      when(io.write_idle) { stateReg := state.pushTaskMemAddress }
 
     }.elsewhen(interruptCondition) {
-      stateReg := state.processInterruptState
-      rPause := "hFFFFFFFFFFFFFFFF".U
+      when(io.write_idle) {
+        stateReg := state.processInterruptState
+        rPause := "hFFFFFFFFFFFFFFFF".U
+      }
     }.elsewhen((currLen === maxLength && networkCongested) || maxLength < (nBeats.U + currLen)) {
 
-      stateReg := state.extendFIFO
-      rPause := "hFFFFFFFFFFFFFFFF".U
+      when(io.write_idle) {
+        stateReg := state.extendFIFO
+        rPause := "hFFFFFFFFFFFFFFFF".U
+      }
 
     }.elsewhen(networkCongested && taskQueueBuffer.io.count === nBeats.U) {
 
-      stateReg := state.pushTaskMemAddress
+      when(io.write_idle) { stateReg := state.pushTaskMemAddress }
 
     }.elsewhen(networkCongested) {
 
@@ -204,7 +214,7 @@ class SchedulerServer(
 
     }.elsewhen(!networkCongested && currLen =/= 0.U && taskQueueBuffer.io.count === 0.U) {
 
-      stateReg := state.popTaskMemAddress
+      when(io.write_idle) { stateReg := state.popTaskMemAddress }
 
     }.elsewhen(!networkCongested && taskQueueBuffer.io.count =/= 0.U) {
 

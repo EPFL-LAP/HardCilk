@@ -1,0 +1,60 @@
+====================================================================
+ALGORITHM BLUEPRINT: Low-Diameter Decomposition (LDD) v2
+Harness Archetype: Multi-Source Dataflow EdgeMap (LFSR + DAE)
+====================================================================
+
+[MEMORY STATE ARRAYS]
+- Visited Array: uint8_t (MANAGED BY AMU via Test-And-Set)
+- ClusterID Array: uint32_t (Standard AXI Write)
+- Frontier Arrays: uint32_t (Active and Next)
+- BatchOffsets Array: uint32_t[32] (Stored in ultra-fast local BRAM)
+
+[INTERNAL HARDWARE FIFOS]
+- `edge_stream`: struct { neighbor_id, my_cluster } (Depth 64)
+
+--------------------------------------------------------------------
+PE 1: DISPATCHER (LDD_Top)
+--------------------------------------------------------------------
+ROLE: Generate exponential distributions (LFSR) and inject batches.
+(Remains identical to previous LFSR blueprint. Injects staggered centers into the active frontier).
+
+--------------------------------------------------------------------
+PE 2: WORKER (LDD_Worker) -> [USES #pragma HLS DATAFLOW]
+--------------------------------------------------------------------
+ROLE: Decoupled Edge Fetching and Cluster Expansion.
+
+    === SUB-PE A: The Memory Fetcher ===
+    ROLE: Pure memory bandwidth saturation.
+    STEP A1: Pop task struct (`u`, `my_cluster`) from `taskOutGlobal`.
+    STEP A2: AXI Read -> Fetch `neighbors_ptr` and `degree` for `u`.
+    STEP A3: The Burst Loop (II=1, runs `degree` times):
+        - Read 1: AXI Burst Read -> Fetch `neighbor_id`.
+        - Push -> { `neighbor_id`, `my_cluster` } into `edge_stream` FIFO.
+
+    === SUB-PE B: The Compute & Lock Engine ===
+    ROLE: Drain the FIFO, evaluate dirty-reads, and issue locks.
+    STEP B1: Inherit `degree` from Sub-PE A.
+    STEP B2: The Execution Loop (II=1, runs until `degree` processed AND locks == 0):
+        
+        PRIORITY 1: Process AMU Lock Responses (Sink and Route)
+            - POP from `fromLock`.
+            - IF response is 'Visited' AND AMU indicates SUCCESS (was 0):
+                - Write 1: AXI Write -> ClusterID[neighbor] = my_cluster.
+                - Push neighbor -> `pending_frontier` local FIFO.
+            - IF response is 'Frontier Slot':
+                - Write 2: AXI Write -> next_frontier[slot_index] = neighbor.
+                
+        PRIORITY 2: Request Frontier Slots
+            - IF `pending_frontier` is NOT empty AND outstanding_locks < LOCK_WINDOW:
+                - POP neighbor from `pending_frontier`.
+                - Push `LOCK_OP_ADD_ONE_RETURN_CURRENT` -> `toLock`.
+                
+        PRIORITY 3: Drain Edge FIFO & Issue Locks
+            - IF `edge_stream` is NOT empty AND outstanding_locks < LOCK_WINDOW:
+                - POP { `neighbor_id`, `my_cluster` } from `edge_stream`.
+                - Read 2 (Dirty Read): AXI Read -> Check `Visited[neighbor_id]`.
+                - IF `Visited == 0`:
+                    - Push `LOCK_OP_SET_AND_RETURN_CURRENT` -> `toLock`.
+
+STEP 3: Both sub-PEs finish. Push completion token -> `argOut`.
+====================================================================

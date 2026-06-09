@@ -23,6 +23,9 @@ class LockServerTests
   private val mixedParams = Params(n = 8, p = 4, tagStoreSize = 32)
   private val arbiterFairnessParams = Params(n = 32, p = 4, tagStoreSize = 16)
   private val wideParams = Params(n = 16, p = 8, tagStoreSize = 64)
+  // Exactly the BFS HW lockConfig (taskDescriptors/mfpga/BFS.json): 8 helper
+  // lock ports, 4 AMU lanes, 64-entry tag store.
+  private val bfsHwParams = Params(n = 8, p = 4, tagStoreSize = 64)
 
   private val coreParams = Seq(smallParams, mediumParams, mixedParams)
   private val allParams = coreParams :+ wideParams
@@ -1028,6 +1031,137 @@ class LockServerTests
     logDone(s"concurrent-blocking-add-one active=$activePes", params)
   }
 
+  // Faithful reproduction of BFS edgemap_process (hls-processing-elements/mfpga/
+  // BFS/BFS.cpp): each helper PE drives a SINGLE in-order request stream that
+  // INTERLEAVES two op kinds against one shared LockServer:
+  //   - non-blocking byte SET_AND_RETURN on a visited[] address (op 2, byte
+  //     mode). Multiple PEs hit the SAME visited tag -> real tag contention; the
+  //     winner is forwarded to its AMU and reads previous byte 0, the losers get
+  //     an immediate success=0 with no memory write.
+  //   - blocking ADD_ONE on the ONE shared nextFChar counter (op 5, dword mode),
+  //     maximally contended across all PEs.
+  // This is the exact mix the simplified add-one-only repro never exercises. The
+  // helper relies on STRICT in-order responses across that mix, so runRequests'
+  // per-PE in-order matching mirrors the PE's single inflight FIFO. A dropped or
+  // reordered response shows up as runRequests' "no response within N cycles"
+  // (i.e. the BFS hang), and the memory checks catch any lost/duplicated atomic.
+  private def runMixedVisitAndAppend(
+      dut: LockServer,
+      params: Params,
+      neighborsPerPe: Int,
+      sharedVisitedTags: Int
+  ): Unit = {
+    logStart(
+      s"mixed-visit-append neighborsPerPe=$neighborsPerPe shared=$sharedVisitedTags",
+      params
+    )
+    dut.clock.setTimeout(0)
+    waitForInit(dut, params)
+
+    val nextFCharAddr = 0x40000
+    val visitedBase = 0x10000
+    val counterStart = BigInt(1000)
+    val mem = new GMemModel(dut, latency = 8)
+    mem.mem(nextFCharAddr) = counterStart
+
+    // Build each PE's interleaved script. SET targets are drawn from a small
+    // shared pool so different PEs collide on the same visited byte, then every
+    // SET is chased by a blocking ADD_ONE -- the worst-case ordering pressure.
+    val perPeReqs = (0 until params.n).map { pe =>
+      (0 until neighborsPerPe).flatMap { k =>
+        val visitedTag = visitedBase + ((pe + k) % sharedVisitedTags) * 8
+        Seq(
+          Request(
+            pe = pe,
+            isLock = true,
+            tag = visitedTag,
+            data = 1,
+            isBlocking = false,
+            opcodeOverride = Some(2), // LockSetUnlockAndReturnCurrent
+            atomicModeBits = 1 // byte
+          ),
+          Request(
+            pe = pe,
+            isLock = true,
+            tag = nextFCharAddr,
+            isBlocking = true,
+            opcodeOverride = Some(5) // LockAddOneReturnCurrent
+          )
+        )
+      }
+    }
+    val allReqs = perPeReqs.flatten
+
+    // Generous bound; deadlock trips this and reports the still-pending PEs.
+    val maxCycles = 200 + allReqs.size * 400
+    val out = runRequests(dut, params, allReqs, maxCycles = maxCycles, mem = Some(mem))
+
+    // Every request got exactly one in-order response (runRequests asserts this;
+    // a BFS-style hang would already have failed above).
+    val pairs = out.values.flatten.toSeq
+    scalaAssert(
+      pairs.size == allReqs.size,
+      s"expected ${allReqs.size} responses, got ${pairs.size}"
+    )
+
+    // The shared counter must have been incremented exactly once per ADD_ONE,
+    // with no lost or double-counted atomics.
+    val addOnes = allReqs.count(_.tag == nextFCharAddr)
+    scalaAssert(
+      mem.mem(nextFCharAddr) == counterStart + addOnes,
+      s"nextFChar counter: got ${mem.mem(nextFCharAddr)}, expected ${counterStart + addOnes}"
+    )
+
+    // The returned slots from blocking ADD_ONE are the BFS next-frontier indices.
+    // They must be a contiguous, collision-free [start, start+addOnes) set -- the
+    // exact property BFS.cpp's append loop depends on for non-clobbering writes.
+    val addResp = out.values.flatten.collect {
+      case (r, resp) if r.tag == nextFCharAddr => resp.data
+    }.toSeq
+    scalaAssert(
+      addResp.toSet.size == addResp.size,
+      s"ADD_ONE returned duplicate slots (frontier clobber): ${addResp.sorted}"
+    )
+    scalaAssert(
+      addResp.toSet == (counterStart.toInt until counterStart.toInt + addOnes).map(BigInt(_)).toSet,
+      s"ADD_ONE slots not the contiguous range [$counterStart, ${counterStart + addOnes}): ${addResp.sorted}"
+    )
+
+    // Every visited byte that any PE set must read back as 1 (test-and-set landed
+    // exactly once regardless of which PE won the race).
+    for (t <- 0 until sharedVisitedTags) {
+      val tag = visitedBase + t * 8
+      val base = tag & ~0x7
+      val byteShift = (tag & 0x7) * 8
+      val b = (mem.mem(base) >> byteShift) & 0xff
+      scalaAssert(
+        b == 1,
+        s"visited byte @0x${tag.toHexString} should be 1, got $b"
+      )
+    }
+
+    // Exactly one PE may observe the 0->1 transition per visited tag (previous
+    // byte 0 AND success); everyone else either lost the race (success=0) or
+    // arrived later (previous byte 1).
+    for (t <- 0 until sharedVisitedTags) {
+      val tag = visitedBase + t * 8
+      val byteShift = (tag & 0x7) * 8
+      val firstWinners = out.values.flatten.count {
+        case (r, resp) =>
+          r.tag == tag && resp.success && ((resp.data >> byteShift) & 0xff) == 0
+      }
+      scalaAssert(
+        firstWinners == 1,
+        s"visited tag 0x${tag.toHexString}: expected exactly one 0->1 winner, got $firstWinners"
+      )
+    }
+
+    logDone(
+      s"mixed-visit-append neighborsPerPe=$neighborsPerPe shared=$sharedVisitedTags",
+      params
+    )
+  }
+
   // Reproduces the HLS PE.cpp phase-2 hang: all 8 PEs clear the barrier at the
   // same time and then hammer ONE address with blocking LockAddOneReturnCurrent,
   // one request outstanding per PE. This is the deadlock case -- the single-PE
@@ -1046,6 +1180,100 @@ class LockServerTests
       )
     ) { dut =>
       runConcurrentBlockingAddOne(dut, params, perPe = 3, activePes = params.n)
+    }
+  }
+
+  // BFS edgemap_process at the real HW lockConfig: 8 PEs interleaving
+  // non-blocking byte visited test-and-set (contended tags) with blocking
+  // ADD_ONE on the single nextFChar counter, one in-order stream per PE. This is
+  // the closest sim analogue of the workload that hangs on as-skitter.
+  it should "BFS MIX: 8 PEs interleave contended visited set + shared blocking add-one (n=8 p=4 tagStoreSize=64)" in {
+    val params = bfsHwParams
+    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+      runMixedVisitAndAppend(
+        dut,
+        params,
+        neighborsPerPe = 3,
+        sharedVisitedTags = 8
+      )
+    }
+  }
+
+  // Reproduces the real-helper case my other tests miss: a PE is SLOW to drain its
+  // responses (fromLock is only read in edgemap_process's P1, so resp.ready drops
+  // whenever the helper is staging/sending/writing memory). Each PE streams
+  // back-to-back FORWARDED ops (byte SET to its own distinct tags -> every one goes
+  // to the AMU). When a forwarded op's AMU return sets respValid(q) AND unmasks the
+  // PE, the next op can resolve before the helper drained the first -> the 1-deep
+  // per-PE response buffer overflows and a response is DROPPED (the helper then
+  // waits forever for it). The LockServer's own assert
+  // ("Response buffer overflow...") fires here; in real hardware (asserts stripped)
+  // it silently drops, which is the BFS helper hang. A correct LockServer must not
+  // need resp.ready to be continuously high.
+  private def runSlowDrainNoResponseLoss(
+      dut: LockServer,
+      params: Params,
+      opsPerPe: Int,
+      activePes: Int,
+      readyLowCycles: Int
+  ): Unit = {
+    logStart(s"slow-drain active=$activePes readyLow=$readyLowCycles", params)
+    dut.clock.setTimeout(0)
+    waitForInit(dut, params)
+    val mem = new GMemModel(dut, latency = 6)
+
+    val pes = 0 until activePes
+    val nextSeq = Array.fill(params.n)(0)         // next op index per PE (drives tag)
+    val sent = Array.fill(params.n)(0)            // requests accepted into the server
+    val got = Array.fill(params.n)(0)             // responses consumed
+    def pendingDone = pes.forall(pe => sent(pe) == opsPerPe && got(pe) == opsPerPe)
+
+    var cycles = 0
+    var lastProgress = 0
+    val stallLimit = 3000
+    while (!pendingDone && (cycles - lastProgress) < stallLimit && cycles < 200000) {
+      // Drive a forwarded byte-SET to a distinct per-PE tag whenever this PE still
+      // has ops to send (one outstanding at a time is enough; the server masks).
+      val driving = pes.collect {
+        case pe if sent(pe) < opsPerPe =>
+          Request(pe = pe, isLock = true, tag = 0x10000 + pe * 0x1000 + nextSeq(pe),
+            data = 1, isBlocking = false, opcodeOverride = Some(2), atomicModeBits = 1)
+      }.toSeq
+      driveReqs(dut, driving)
+      mem.beforeStep()
+
+      // resp.ready LOW for readyLowCycles out of every (readyLowCycles+1): the PE
+      // drains only occasionally -- the whole point of the test.
+      val drainNow = (cycles % (readyLowCycles + 1)) == readyLowCycles
+      for (i <- 0 until dut.n) dut.io.resp(i).ready.poke((drainNow).B)
+
+      val accepted = driving.filter(r => dut.io.req(r.pe).ready.peek().litToBoolean)
+      if (drainNow) {
+        for (resp <- collectResponses(dut)) {
+          got(resp.pe) += 1; lastProgress = cycles
+        }
+      }
+
+      dut.clock.step()
+      mem.afterStep()
+      cycles += 1
+      for (r <- accepted) { sent(r.pe) += 1; nextSeq(r.pe) += 1; lastProgress = cycles }
+    }
+    driveNoReq(dut)
+    for (i <- 0 until dut.n) dut.io.resp(i).ready.poke(true.B)
+
+    scalaAssert(
+      pendingDone,
+      s"LOST RESPONSE / stall after $cycles cycles: sent=${sent.mkString(",")} got=${got.mkString(",")}"
+    )
+    logDone(s"slow-drain active=$activePes readyLow=$readyLowCycles", params)
+  }
+
+  it should "RESP-OVERFLOW REPRO: no response lost when PEs drain slowly (n=8 p=4 tagStoreSize=64)" in {
+    val params = bfsHwParams
+    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+      runSlowDrainNoResponseLoss(dut, params, opsPerPe = 6, activePes = params.n,
+        readyLowCycles = 20)
     }
   }
 

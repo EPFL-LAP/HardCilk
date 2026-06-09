@@ -178,6 +178,21 @@ static uint32_t edgemap_process(void *mem_0, void *mem_1, void *mem_2,
   uint32_t outstanding = 0; // lock requests sent but not yet answered
   bool done = false;
 
+  // A single request that has been DECIDED but not yet handed to the LockServer.
+  // toLock is wired straight into the server's depth-2 per-PE input queue (no
+  // intervening FIFO), which is far shallower than LOCK_WINDOW. A *blocking*
+  // toLock.write() would therefore stall this II=1 pipeline whenever the server
+  // is momentarily busy with the other PEs -- and a stalled pipeline stops
+  // draining fromLock, which is the actual deadlock (the helper can no longer
+  // answer the responses the server is waiting to deliver). Instead we stage one
+  // request and offer it with a NON-BLOCKING write_nb: if toLock is full we just
+  // retry on a later iteration, so draining fromLock is *always* possible. The
+  // ADD_ONE keeps its server-side blocking bit (retry-until-win for a unique
+  // slot); only the stream hand-off is made non-blocking.
+  bool have_staged = false;
+  lock_req staged_req;
+  inflight_ctx staged_ctx;
+
   // ---- DEBUG counters (stashed into cont padding at the end) ----
   uint32_t dbg_locks_sent = 0;
   uint32_t dbg_winners = 0;
@@ -189,7 +204,8 @@ static uint32_t edgemap_process(void *mem_0, void *mem_1, void *mem_2,
 
   while (!done) {
 #pragma HLS PIPELINE II = 1
-    // PRIORITY 1: drain a response (frees the LockServer's response side).
+    // PRIORITY 1: drain a response (frees the LockServer's response side). Only
+    // ever reads when non-empty, so this can never stall the pipeline.
     if (!fromLock.empty()) {
       lock_resp resp = fromLock.read();
       inflight_ctx ctx = inflight.read();
@@ -219,35 +235,41 @@ static uint32_t edgemap_process(void *mem_0, void *mem_1, void *mem_2,
         dbg_appends++;
       }
     }
-    // PRIORITY 2: append a newly discovered vertex to the next frontier.
+    // PRIORITY 2: hand the staged request to the LockServer, non-blocking. If
+    // toLock is full this fails silently and we retry next iteration (after
+    // draining more responses, which frees the server to accept).
+    else if (have_staged) {
+      if (toLock.write_nb(staged_req)) {
+        inflight.write(staged_ctx);
+        outstanding++;
+        have_staged = false;
+      }
+    }
+    // PRIORITY 3: stage an append of a newly discovered vertex (server-side
+    // blocking ADD_ONE so every append wins a unique next-frontier slot).
     else if (!pending_frontier.empty() && outstanding < LOCK_WINDOW) {
       uint32_t neighbor = pending_frontier.read();
-      // BLOCKING is required: every append from every helper hits the single
-      // nextFChar tag, so it is maximally contended. A non-blocking ADD_ONE that
-      // loses the tag returns success=0 / current=0 *without* incrementing, and
-      // the slot it hands back collides on next_frontier[0] -- silently dropping
-      // and clobbering appends. Blocking makes the server retry until it wins, so
-      // every append atomically increments and gets a unique slot.
-      toLock.write(make_lock_req(task.nextFChar, 1, LOCK_OP_ADD_ONE_RETURN_CURRENT,
-                                 true, ATOMIC_MODE_DOUBLEWORD));
-      inflight.write({INFLIGHT_FRONTIER, neighbor});
-      outstanding++;
+      staged_req = make_lock_req(task.nextFChar, 1, LOCK_OP_ADD_ONE_RETURN_CURRENT,
+                                 true, ATOMIC_MODE_DOUBLEWORD);
+      staged_ctx = {INFLIGHT_FRONTIER, neighbor};
+      have_staged = true;
     }
-    // PRIORITY 3: issue the Visited test-and-set for the next neighbour.
+    // PRIORITY 4: stage the Visited test-and-set for the next neighbour.
     else if (j < degree && outstanding < LOCK_WINDOW) {
       int neighbor = MEM_ARR_IN(mem_1, neighbors, j, uint32_t);
       j++;
       if (neighbor < task.vertex_count && cond(mem_2, task.visited, neighbor)) {
-        toLock.write(make_lock_req(visited_lock_addr(task.visited, neighbor), 1,
+        staged_req = make_lock_req(visited_lock_addr(task.visited, neighbor), 1,
                                    LOCK_OP_SET_AND_RETURN_CURRENT, false,
-                                   ATOMIC_MODE_BYTE));
-        inflight.write({INFLIGHT_VISIT, (uint32_t)neighbor});
-        outstanding++;
+                                   ATOMIC_MODE_BYTE);
+        staged_ctx = {INFLIGHT_VISIT, (uint32_t)neighbor};
+        have_staged = true;
         dbg_locks_sent++;
       }
     }
 
-    if (j == degree && outstanding == 0 && pending_frontier.empty())
+    if (j == degree && outstanding == 0 && pending_frontier.empty() &&
+        !have_staged)
       done = true;
   }
 

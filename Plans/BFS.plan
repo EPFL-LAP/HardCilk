@@ -1,0 +1,65 @@
+====================================================================
+ALGORITHM BLUEPRINT: Breadth-First Search (BFS)
+Harness Archetype: Push-Based Sparse EdgeMap
+====================================================================
+
+[MEMORY STATE ARRAYS]
+- Visited Array: uint8_t (Byte-addressable, managed by AMU LockServer)
+- Distance Array: int32_t (Standard AXI write, no locks needed)
+- Frontier Arrays: uint32_t (Active and Next)
+
+--------------------------------------------------------------------
+PE 1: DISPATCHER (BFS_Top)
+--------------------------------------------------------------------
+ROLE: Generate vertex work items from the active frontier.
+
+STEP 1: Read continuation payload from `taskIn`.
+STEP 2: Evaluate Iteration State:
+    IF (currentDistance == 0 AND frontier_length == 0): // Initialization phase
+        - Loop (II=1): Set all Distance elements to -1, Visited to 0.
+        - Set Distance[source] = 0, Visited[source] = 1.
+        - Write source vertex to active frontier index 0.
+        - Reset LockServer atomic counters.
+    ELSE: // Continuation phase
+        - Swap active/next frontier pointers.
+        - Increment currentDistance.
+        - Check termination (if next_length == 0 or max_depth reached -> EXIT).
+STEP 3: Loop (II=1) over frontier_length:
+    - Read vertex `u` from active frontier.
+    - Pack `u` and state pointers into task struct.
+    - Push struct -> `taskOutGlobal` FIFO.
+STEP 4: Save continuation state to AXI memory and push completion token to scheduler.
+
+--------------------------------------------------------------------
+PE 2: WORKER (BFS_Worker)
+--------------------------------------------------------------------
+ROLE: Process a single vertex's neighbors and update shortest paths.
+
+STEP 1: Pop vertex `u` task struct from `taskOutGlobal`.
+STEP 2: AXI Read -> Fetch `neighbors_ptr` and `degree` for `u`.
+    - IF degree == 0, push completion token to `argOut` and exit early.
+STEP 3: The Dataflow Engine Loop (II=1)
+    - Run `while(!done)` until all neighbors scanned AND outstanding locks == 0.
+    
+    PRIORITY 1: Process Lock Responses
+        - POP from `fromLock`.
+        - IF response is for a 'Visited' lock AND LockServer says SUCCESS (previous value was 0):
+            - AXI Write -> Distance[neighbor] = currentDistance.
+            - Push neighbor -> `pending_frontier` local FIFO.
+        - IF response is for a 'Frontier' slot lock:
+            - AXI Write -> next_frontier[slot_index] = neighbor.
+            
+    PRIORITY 2: Request Frontier Slots
+        - IF `pending_frontier` is not empty AND outstanding_locks < LOCK_WINDOW:
+            - POP neighbor from `pending_frontier`.
+            - Push `LOCK_OP_ADD_ONE_RETURN_CURRENT` (32-bit lock) -> `toLock` stream to claim a frontier index.
+            
+    PRIORITY 3: Scan Neighbors & Issue Visit Locks
+        - IF neighbors remain to be scanned AND outstanding_locks < LOCK_WINDOW:
+            - AXI Read -> Fetch `neighbor_id`.
+            - AXI Read -> Check local memory: `if (Visited[neighbor] == 0)`.
+            - IF local check passes:
+                - Push `LOCK_OP_SET_AND_RETURN_CURRENT` (8-bit Test-and-Set) -> `toLock` stream.
+
+STEP 4: Loop finishes. Push completion token -> `argOut`.
+====================================================================
