@@ -177,6 +177,123 @@ public:
     return G;
   }
 
+  static Graph wikiMixedTarget(int pairs = 1, int next_count = 0) {
+    if (pairs < 1) pairs = 1;
+    if (next_count < 0) next_count = 0;
+    if (next_count > pairs) next_count = pairs;
+    Graph G;
+    G.num_vertices = 1 + 2 * pairs + next_count;
+    G.num_edges = 3 * pairs + next_count;
+
+    std::vector<int> degree(G.num_vertices, 0);
+    degree[0] = pairs;
+    for (int i = 0; i < pairs; i++) {
+      degree[1 + i] = 1;
+      degree[1 + pairs + i] = 1 + (i < next_count ? 1 : 0);
+    }
+
+    G.forward_offsets.assign(G.num_vertices + 1, 0);
+    for (int v = 0; v < G.num_vertices; v++)
+      G.forward_offsets[v + 1] = G.forward_offsets[v] + degree[v];
+
+    G.forward_neighbors.resize(G.num_edges);
+    std::vector<int> cursor(G.forward_offsets.begin(), G.forward_offsets.end());
+    auto add_edge = [&](int u, int v) {
+      G.forward_neighbors[cursor[u]++] = v;
+    };
+    for (int i = 0; i < pairs; i++) {
+      const int a = 1 + i;
+      const int b = 1 + pairs + i;
+      add_edge(0, a);
+      add_edge(a, b);
+      add_edge(b, 0);
+      if (i < next_count)
+        add_edge(b, 1 + 2 * pairs + i);
+    }
+    return G;
+  }
+
+  static Graph wikiMixedTargetBurst(int frontier_count = 7529,
+                                    int degree_per_frontier = 112,
+                                    int visited_edges_per_frontier = 0) {
+    if (frontier_count < 1) frontier_count = 1;
+    if (degree_per_frontier < 1) degree_per_frontier = 1;
+    if (visited_edges_per_frontier < 0) visited_edges_per_frontier = 0;
+
+    Graph G;
+    G.num_vertices = 1 + frontier_count +
+                     frontier_count * degree_per_frontier;
+    G.num_edges = frontier_count +
+                  frontier_count *
+                      (degree_per_frontier + visited_edges_per_frontier);
+
+    std::vector<int> degree(G.num_vertices, 0);
+    degree[0] = frontier_count;
+    for (int i = 0; i < frontier_count; i++)
+      degree[1 + i] = degree_per_frontier + visited_edges_per_frontier;
+
+    G.forward_offsets.assign(G.num_vertices + 1, 0);
+    for (int v = 0; v < G.num_vertices; v++)
+      G.forward_offsets[v + 1] = G.forward_offsets[v] + degree[v];
+
+    G.forward_neighbors.resize(G.num_edges);
+    std::vector<int> cursor(G.forward_offsets.begin(), G.forward_offsets.end());
+    auto add_edge = [&](int u, int v) {
+      G.forward_neighbors[cursor[u]++] = v;
+    };
+
+    const int leaf_base = 1 + frontier_count;
+    for (int i = 0; i < frontier_count; i++) {
+      const int u = 1 + i;
+      add_edge(0, u);
+      for (int j = 0; j < visited_edges_per_frontier; j++)
+        add_edge(u, 1 + ((i + j + 1) % frontier_count));
+      for (int j = 0; j < degree_per_frontier; j++)
+        add_edge(u, leaf_base + i * degree_per_frontier + j);
+    }
+    return G;
+  }
+
+  static Graph wikiMixedTargetPrefix(int first_level_count = 20,
+                                     int frontier_count = 7529,
+                                     int next_count = 840007) {
+    if (first_level_count < 1) first_level_count = 1;
+    if (frontier_count < 1) frontier_count = 1;
+    if (next_count < 1) next_count = 1;
+
+    Graph G;
+    const int first_base = 1;
+    const int frontier_base = first_base + first_level_count;
+    const int next_base = frontier_base + frontier_count;
+    G.num_vertices = next_base + next_count;
+    G.num_edges = first_level_count + frontier_count + next_count;
+
+    std::vector<int> degree(G.num_vertices, 0);
+    degree[0] = first_level_count;
+    for (int i = 0; i < frontier_count; i++)
+      degree[first_base + (i % first_level_count)]++;
+    for (int i = 0; i < next_count; i++)
+      degree[frontier_base + (i % frontier_count)]++;
+
+    G.forward_offsets.assign(G.num_vertices + 1, 0);
+    for (int v = 0; v < G.num_vertices; v++)
+      G.forward_offsets[v + 1] = G.forward_offsets[v] + degree[v];
+
+    G.forward_neighbors.resize(G.num_edges);
+    std::vector<int> cursor(G.forward_offsets.begin(), G.forward_offsets.end());
+    auto add_edge = [&](int u, int v) {
+      G.forward_neighbors[cursor[u]++] = v;
+    };
+
+    for (int i = 0; i < first_level_count; i++)
+      add_edge(0, first_base + i);
+    for (int i = 0; i < frontier_count; i++)
+      add_edge(first_base + (i % first_level_count), frontier_base + i);
+    for (int i = 0; i < next_count; i++)
+      add_edge(frontier_base + (i % frontier_count), next_base + i);
+    return G;
+  }
+
   // Two-pass edge-list loader. `directed == false` inserts both directions,
   // matching the CPU golden's `G.load(path, false)` (the BFS frontier walks the
   // forward adjacency, so undirected graphs must store both halves).

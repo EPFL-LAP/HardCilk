@@ -1,0 +1,61 @@
+====================================================================
+ALGORITHM BLUEPRINT: Approximate Set Cover (Phase 1: Claim)
+Harness Archetype: Decoupled Access-Execute (Dataflow FIFOs) + Bucketing
+====================================================================
+
+[MEMORY STATE ARRAYS]
+- ElementCovered: uint8_t (MANAGED BY AMU via byte-level Test-And-Set)
+- SetDegree: uint32_t (Standard AXI memory, tracks active uncovered elements)
+- Graph Topology: Array of structs [uint32_t element_id] (Bipartite edges)
+
+[INTERNAL HARDWARE FIFOS (The DAE Upgrade)]
+- `edge_stream`: hls::stream<uint32_t> (Depth 64) - Decouples memory from compute.
+
+--------------------------------------------------------------------
+PE 1: DISPATCHER (SetCover_Top)
+--------------------------------------------------------------------
+ROLE: Hardware Filter to find Sets in the current highest bucket.
+
+STEP 1: Read continuation payload from `taskIn`.
+STEP 2: Evaluate Iteration State:
+    - Determine `current_bucket` (e.g., exponentially decreasing thresholds).
+    - Loop (II=1) over all Sets `S`:
+        - AXI Read -> Fetch `SetDegree[S]`.
+        - IF (SetDegree[S] >= current_bucket):
+            - Pack `S` and state pointers into task struct.
+            - Push struct -> `taskOutGlobal` FIFO.
+STEP 3: Save state to AXI memory and push completion token.
+
+--------------------------------------------------------------------
+PE 2: WORKER (SetCover_Worker) -> [USES #pragma HLS DATAFLOW]
+--------------------------------------------------------------------
+ROLE: Split into two independent sub-PEs to hide memory latency.
+
+    === SUB-PE A: The Memory Fetcher ===
+    ROLE: Pure memory bandwidth saturation.
+    STEP A1: Pop task struct (`S`) from `taskOutGlobal`.
+    STEP A2: AXI Read -> Fetch `elements_ptr` and `degree` for `S`.
+    STEP A3: Loop (II=1) over degree:
+        - AXI Burst Read -> Fetch `element_id`.
+        - Push `element_id` -> `edge_stream` internal FIFO.
+    
+    === SUB-PE B: The Compute Engine ===
+    ROLE: Drain the FIFO, evaluate logic, and issue AMU locks.
+    STEP B1: Inherit `degree` from Sub-PE A.
+    STEP B2: Loop (II=1) until `degree` elements are processed AND outstanding locks == 0:
+        
+        PRIORITY 1: Process AMU Lock Responses
+            - POP from `fromLock`.
+            - IF response is for 'ElementCovered' AND AMU indicates SUCCESS (was 0):
+                - We successfully covered this element!
+                - (In Phase 2, we will use these successes to decrement other sets).
+                
+        PRIORITY 2: Drain Edge FIFO & Issue Locks
+            - IF `edge_stream` is NOT empty AND outstanding_locks < LOCK_WINDOW:
+                - POP `element_id` from `edge_stream`.
+                - AXI Read -> Check local memory: `if (ElementCovered[element_id] == 0)`.
+                - IF local check passes:
+                    - Push `LOCK_OP_SET_AND_RETURN_CURRENT` -> `toLock` stream.
+
+STEP 3: Both sub-PEs finish. Push completion token -> `argOut`.
+====================================================================

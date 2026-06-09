@@ -50,7 +50,7 @@ echo "===== STEP2 GENERATOR ====="
 source ~/.local/opt/hdlstuff/bin/activate-hdlstuff.sh
 rm -rf "$ROOT/HardCilk-output/BFS_hardcilk_output"
 cd "$ROOT/architecture-generator"
-sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/BFS.json -o ../HardCilk-output/ -g -c -r 30 -p"
+sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/BFS.json -o ../HardCilk-output/ -g -c -r 7 -p"
 
 echo "===== STEP3 STAGE ====="
 rm -rf "$ROOT/xclbin-workspace/BFS/src/IP" "$ROOT/xclbin-workspace/BFS/src/host"
