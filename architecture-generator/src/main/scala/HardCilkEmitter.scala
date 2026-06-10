@@ -10,6 +10,7 @@ import Descriptors.DescriptorJSON._
 import Util.HardCilkEmitterUtil._
 import SoftwareUtil._
 import TclResources._
+import Util.VitisFlowGenerator
 
 object HardCilkEmitter extends App {
   ArgParser.parseArgs(args) match {
@@ -71,6 +72,14 @@ object HardCilkEmitter extends App {
 
       
 
+      if (cfg.vitis_generation) {
+        val outputDirPathVitis = s"${cfg.output_dir}/$outputDirName/vitis"
+        val outputDirPathRTLForVitis = s"${cfg.output_dir}/$outputDirName/rtl"
+        Files.createDirectories(Paths.get(outputDirPathVitis))
+        VitisFlowGenerator.generate(systemDescriptor, outputDirPathVitis, cfg.reduce_axi, outputDirPathRTLForVitis)
+        println(s"Emitted Vitis xclbin project to: $outputDirPathVitis")
+      }
+
       if (cfg.project_sc_generation) {
         // Using java.nio copy a folder with all its content (files and subfolders) to another folder, source is "pwd/software_template" and destination is "outputDirPathSC"
         val source = new java.io.File("software_template")
@@ -95,7 +104,12 @@ object HardCilkEmitter extends App {
         // Rename `outputDirPathSC/projects/project_template` to `outputDirPathSC/projects/${jsonName}`
         val projectTemplate = new java.io.File(s"$outputDirPathSC/projects/project_template")
         val projectDestination =  new java.io.File(s"$outputDirPathSC/projects/${jsonName}")
-        projectTemplate.renameTo(projectDestination)
+        if (projectDestination.exists()) {
+          java.nio.file.Files.walk(projectDestination.toPath)
+            .sorted(java.util.Comparator.reverseOrder())
+            .forEach(java.nio.file.Files.delete(_))
+        }
+        java.nio.file.Files.move(projectTemplate.toPath, projectDestination.toPath)
 
         // Generate the HDL in the `outputDirPathSC/projects/${jsonName}/hdl`
         new java.io.File(s"$outputDirPathSC/projects/${jsonName}/hdl").mkdirs()

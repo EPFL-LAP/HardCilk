@@ -12,6 +12,7 @@ case class BuilderConfig(
   rtl_generation: Boolean = false,
   sc_header_generation: Boolean = false,
   project_sc_generation: Boolean = false,
+  vitis_generation: Boolean = false,
   output_dir: String = ".",
   json_path: String = "",
   // additional small flags that the HardCilk constructor sometimes uses
@@ -57,6 +58,9 @@ object ArgParser {
       opt[Unit]('p', "project-sc")
         .action((_, c) => c.copy(project_sc_generation = true))
         .text("Generates the C++ project for SystemC simulation"),
+      opt[Unit]('x', "vitis-xclbin")
+        .action((_, c) => c.copy(vitis_generation = true))
+        .text("Generates a single-FPGA Vitis xclbin project (Makefile, TCL, cfg, XML)"),
       opt[Unit]('a', "all")
         .action((_, c) =>
           c.copy(
