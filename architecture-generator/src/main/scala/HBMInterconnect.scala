@@ -63,7 +63,12 @@ trait HasHBMInterconnect extends Module {
     peMap.foreach { case (taskName, peArray) =>
       val task = fullSysGenDescriptor.taskDescriptors.find(_.name == taskName).get
       peArray.foreach { pe =>
+        // Legacy single spawnNext AXI-MM port.
         pe.io.elements.get("m_axi_spawnNext").foreach(p => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
+        // New-style: one m_axi_spawnNext_<contName> port per named continuation.
+        pe.io.elements
+          .filter { case (name, _) => name.startsWith("m_axi_spawnNext_") }
+          .foreach { case (_, p) => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull) }
         pe.io.elements.get("m_axi_argOut").foreach(p => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
         if (task.hasAXI) {
           interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)

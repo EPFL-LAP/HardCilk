@@ -130,6 +130,37 @@ class VitisWriteBufferModule(
     )
     .map(_.max)
 
+  // New-style detection: named spawnNext ports are spawnNext_<contName> rather than
+  // the legacy bare "spawnNext". When present, new-style takes precedence over legacy.
+  private val newStyleSpawnNextPairs: Seq[(String, Axis_VitisInterface)] =
+    cfg.interfaces.collect {
+      case iface: Axis_VitisInterface if iface.name.startsWith("spawnNext_") =>
+        (iface.name.stripPrefix("spawnNext_"), iface)
+    }
+
+  private val isNewStyleSpawnNext: Boolean = newStyleSpawnNextPairs.nonEmpty
+
+  // Set of all taskGlobalOut_*_depends_<contName> interface names present in this module.
+  private val newStyleDependsNames: Set[String] =
+    if (isNewStyleSpawnNext)
+      cfg.interfaces.collect {
+        case iface: Axis_VitisInterface if iface.name.contains("_depends_") => iface.name
+      }.toSet
+    else
+      Set.empty
+
+  // Returns every taskGlobalOut interface whose name encodes a dependency on contName,
+  // i.e. names of the form taskGlobalOut_<anything>_depends_<contName>.
+  private def dependsIfacesFor(contName: String): Seq[Axis_VitisInterface] =
+    cfg.interfaces.collect {
+      case iface: Axis_VitisInterface
+          if iface.name.contains("_depends_") && {
+            val parts = iface.name.split("_depends_", 2)
+            parts.length == 2 && parts(1) == contName
+          } =>
+        iface
+    }
+
   private val pe = Module(new VitisModule(cfg))
 
   println(pe.name)
@@ -141,7 +172,13 @@ class VitisWriteBufferModule(
     val elements: SeqMap[String, Data] =
       SeqMap.from(
         cfg.interfaces
-          .withFilter(x => x.name != "spawnNext" && x.name != "argDataOut")
+          .withFilter(x =>
+            x.name != "spawnNext" &&
+            x.name != "argDataOut" &&
+            // In new-style mode, named spawnNext_* ports are consumed internally;
+            // the outside world sees m_axi_spawnNext_<contName> instead.
+            !(isNewStyleSpawnNext && x.name.startsWith("spawnNext_"))
+          )
           .map { interface =>
             {
               interface.name -> interface.chiselType
@@ -153,14 +190,15 @@ class VitisWriteBufferModule(
           if (cfg.is_ap_done) Some("ap_done" -> Output(Bool())) else None,
           if (cfg.is_ap_idle) Some("ap_idle" -> Output(Bool())) else None,
           if (cfg.is_ap_ready) Some("ap_ready" -> Output(Bool())) else None,
-          wSpawnNext.map(w =>
+          // Legacy single spawnNext AXI-MM port — only emitted when not using new-style.
+          if (!isNewStyleSpawnNext) wSpawnNext.map(w =>
             "m_axi_spawnNext" -> (axi4.Master(
               new axi4.Config(
                 wAddr = fullSysGenDescriptor.widthAddress,
                 wData = w // width in bits
               )
             ))
-          ),
+          ) else None,
           pe.io.elements
             .get("argDataOut")
             .map(port => {
@@ -177,13 +215,47 @@ class VitisWriteBufferModule(
           if(cfg.hasRemoteWriteBuffer) Some("fpgaId" -> Input(UInt(4.W))) else None,
           if(cfg.hasRemoteWriteBuffer) Some("memReqToRemote" -> DecoupledIO(new MemReq(64, cfg.writeBufferDataWidth))) else None,
           if(cfg.hasRemoteWriteBuffer) Some("writeRespFromRemote" -> Flipped(DecoupledIO(new WriteResp()))) else None
-        ).flatten
+        ).flatten ++
+        // New-style: one m_axi_spawnNext_<contName> AXI-MM port per named spawnNext.
+        (if (isNewStyleSpawnNext) {
+          newStyleSpawnNextPairs.map { case (contName, iface) =>
+            s"m_axi_spawnNext_$contName" -> (axi4.Master(
+              new axi4.Config(
+                wAddr = fullSysGenDescriptor.widthAddress,
+                wData = iface.config.wData
+              )
+            ): Data)
+          }
+        } else Seq.empty[(String, Data)])
   })
 
   def getPort(name: String) = io.elements.getOrElse(
     name,
     throw new RuntimeException(f"IO port not found: ${name}")
   )
+
+  // Resolves a port by its *logical type name* (as used in PortDescriptor) plus an
+  // ordinal index.  For legacy modules both names are identical and no translation is
+  // needed.  For new-style modules some logical names differ from the physical IO names:
+  //   "taskOutGlobal" (index N) → the Nth taskGlobalOut_* port in sorted IO order
+  // Falls back to exact-name lookup for all other types.
+  def getPortByLegacyType(portType: String, portIndex: Int): chisel3.Data = {
+    if (isNewStyleSpawnNext) {
+      portType match {
+        case "taskOutGlobal" =>
+          val taskGlobalOutPorts = io.elements.keys
+            .filter(_.startsWith("taskGlobalOut_"))
+            .toSeq.sorted
+          assert(portIndex < taskGlobalOutPorts.size,
+            s"[HLS] getPortByLegacyType: portIndex $portIndex out of range for 'taskOutGlobal' " +
+            s"in module '${cfg.desiredName}'. Available taskGlobalOut ports: ${taskGlobalOutPorts.mkString(", ")}")
+          io.elements(taskGlobalOutPorts(portIndex))
+        case _ => getPort(portType)
+      }
+    } else {
+      getPort(portType)
+    }
+  }
 
   private val peTaskOut = ("taskOut", pe.io.elements.get("taskOut"))
   private val peTaskOutGlobal = pe.io.elements
@@ -197,47 +269,116 @@ class VitisWriteBufferModule(
   println(s"[HLS:HELPERS:168] ${peTaskOut}")
   println(s"[HLS:HELPERS:169] ${peTaskOutGlobal}")
 
-  wSpawnNext.foreach(w => {
-    val mWriteBuffer = Module(
-      new WriteBuffer(
-        new WriteBufferConfig(
-          wAddr = fullSysGenDescriptor.widthAddress,
-          wData = w,
-          wAllow = (if (variableSpawn) 0 else 32),
-          wAllowData =
-            taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
+  if (isNewStyleSpawnNext) {
+    // -------------------------------------------------------------------------
+    // New-style spawnNext write-buffer wiring.
+    //
+    // Each spawnNext_<contName> port feeds one WriteBuffer.  The allow signal(s)
+    // for that buffer are the taskGlobalOut_*_depends_<contName> ports — i.e.
+    // the task outputs whose delivery is gated on this spawn completing.
+    // Non-depends taskGlobalOut ports (no _depends_ in the name) are wired
+    // directly to the outer IO by the "rest of ports" block below.
+    // -------------------------------------------------------------------------
+    newStyleSpawnNextPairs.foreach { case (contName, spawnNextIface) =>
+      val depIfaces = dependsIfacesFor(contName)
+
+      assert(depIfaces.nonEmpty,
+        s"[HLS] New-style spawnNext port '${spawnNextIface.name}' has no corresponding " +
+        s"taskGlobalOut_*_depends_${contName} port. Every named spawnNext requires at least " +
+        s"one _depends_-annotated taskGlobalOut to serve as the write-buffer allow signal. " +
+        s"Available interfaces: ${cfg.interfaces.map(_.name).mkString(", ")}")
+
+      depIfaces.foreach { depIface =>
+        assert(pe.io.elements.contains(depIface.name),
+          s"[HLS] Depends interface '${depIface.name}' was parsed from the Verilog module " +
+          s"header of '${cfg.desiredName}' but is missing from the elaborated PE IO. " +
+          s"This is a parser/interface mismatch — check the Verilog port list for task '$taskName'.")
+      }
+
+      val mWriteBuffer = Module(
+        new WriteBuffer(
+          new WriteBufferConfig(
+            wAddr = fullSysGenDescriptor.widthAddress,
+            wData = pe.getPort(spawnNextIface.name).asInstanceOf[axi4s.Interface].cfg.wData,
+            wAllow = (if (variableSpawn) 0 else 32),
+            wAllowData = depIfaces.map(d =>
+              pe.getPort(d.name).asInstanceOf[axi4s.Interface].cfg.wData
+            )
+          )
         )
       )
-    )
 
-    mWriteBuffer.s_pkg <> pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
-    mWriteBuffer.m_axi <> io.elements
-      .get("m_axi_spawnNext")
-      .get
-      .asInstanceOf[axi4.RawInterface]
+      mWriteBuffer.s_pkg <> pe.getPort(spawnNextIface.name).asInstanceOf[axi4s.Interface]
+      mWriteBuffer.m_axi <> io.elements
+        .get(s"m_axi_spawnNext_$contName")
+        .get
+        .asInstanceOf[axi4.RawInterface]
 
-    var idx = 0
-    for (i <- 0 until taskOuts.length) {
-      taskOuts(i)._2 match {
-        case Some(value) => {
-          value.asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(idx)
-          mWriteBuffer.m_allows(idx) <> getPort(taskOuts(i)._1)
-          idx = idx + 1
-        }
-        case None => {}
+      depIfaces.zipWithIndex.foreach { case (depIface, idx) =>
+        pe.getPort(depIface.name).asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(idx)
+        mWriteBuffer.m_allows(idx) <> getPort(depIface.name).asInstanceOf[axi4s.Interface]
       }
     }
-  })
 
-  // If a task has a taskOutGlobal but has no spawnNext, then connect the taskOutGlobal
-  // directly to the taskOutGlobal port
-  if (wSpawnNext.isEmpty) {
-    for (i <- 0 until taskOuts.length) {
-      taskOuts(i)._2 match {
-        case Some(value) => {
-          value.asInstanceOf[axi4s.Interface] <> getPort(taskOuts(i)._1)
+    // Validate: every _depends_ port in this module must match a known spawnNext contName.
+    val knownContNames = newStyleSpawnNextPairs.map(_._1).toSet
+    newStyleDependsNames.foreach { depName =>
+      val contName = depName.split("_depends_", 2)(1)
+      assert(knownContNames.contains(contName),
+        s"[HLS] Depends port '$depName' references continuation '$contName' but no " +
+        s"spawnNext_${contName} port exists in module '${cfg.desiredName}'. " +
+        s"Known spawnNext continuations: ${knownContNames.mkString(", ")}")
+    }
+
+  } else {
+    // -------------------------------------------------------------------------
+    // Legacy spawnNext write-buffer wiring.
+    //
+    // A single bare 'spawnNext' port feeds one WriteBuffer.  taskOut is used as
+    // the allow signal if present; otherwise all taskOutGlobal ports are used.
+    // -------------------------------------------------------------------------
+    wSpawnNext.foreach(w => {
+      val mWriteBuffer = Module(
+        new WriteBuffer(
+          new WriteBufferConfig(
+            wAddr = fullSysGenDescriptor.widthAddress,
+            wData = w,
+            wAllow = (if (variableSpawn) 0 else 32),
+            wAllowData =
+              taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
+          )
+        )
+      )
+
+      mWriteBuffer.s_pkg <> pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
+      mWriteBuffer.m_axi <> io.elements
+        .get("m_axi_spawnNext")
+        .get
+        .asInstanceOf[axi4.RawInterface]
+
+      var idx = 0
+      for (i <- 0 until taskOuts.length) {
+        taskOuts(i)._2 match {
+          case Some(value) => {
+            value.asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(idx)
+            mWriteBuffer.m_allows(idx) <> getPort(taskOuts(i)._1)
+            idx = idx + 1
+          }
+          case None => {}
         }
-        case None => {}
+      }
+    })
+
+    // If a task has a taskOutGlobal but has no spawnNext, then connect the taskOutGlobal
+    // directly to the taskOutGlobal port
+    if (wSpawnNext.isEmpty) {
+      for (i <- 0 until taskOuts.length) {
+        taskOuts(i)._2 match {
+          case Some(value) => {
+            value.asInstanceOf[axi4s.Interface] <> getPort(taskOuts(i)._1)
+          }
+          case None => {}
+        }
       }
     }
   }
@@ -288,8 +429,17 @@ class VitisWriteBufferModule(
   // Connect rest of the ports
   pe.io.elements
     .withFilter(x =>
-      !((Seq("spawnNext", "argDataOut", "argOut") ++ taskOuts.map(_._1))
-        .contains(x._1))
+      !((Seq("spawnNext", "argDataOut", "argOut") ++
+        (if (isNewStyleSpawnNext) {
+          // Exclude named spawnNext_* inputs (consumed by new-style write buffers) and
+          // _depends_ ports (connected through write buffer m_allows above).
+          // Non-depends taskGlobalOut ports fall through here and are wired directly.
+          newStyleSpawnNextPairs.map(_._2.name) ++ newStyleDependsNames.toSeq
+        } else {
+          // Legacy: exclude taskOut / taskOutGlobal (handled by write buffer or direct connect).
+          taskOuts.map(_._1)
+        })
+      ).contains(x._1))
     )
     .foreach {
       case (name, port) => {
@@ -531,21 +681,24 @@ object VitisModuleFactory {
       // if (name == moduleName) {
 
 
-    val ModuleRegex = s"""(?s)module\\s+$moduleName\\s*\\((.*?)\\);""".r
+    // extractModule strips "module <name>" already, so moduleContent starts with "(\n  port1,\n  ...);".
+    // Match the port list directly from the leading "(...);".
+    val PortListRegex = """(?s)^\s*\((.*?)\);""".r
 
-    // apply the regex on the moduleContent
-    val moduleDefinitionMatch = ModuleRegex.findFirstMatchIn(moduleContent)
-    if (moduleDefinitionMatch.isDefined) {
-      println(s"[HLS:HELPERS:480] Found module definition for ${moduleName}")
+    val modulePortList: String = PortListRegex.findFirstMatchIn(moduleContent) match {
+      case Some(m) =>
+        println(s"[HLS:HELPERS:480] Found module port list for ${moduleName}")
+        m.group(1)
+      case None    =>
+        println(s"[HLS:HELPERS:480] WARNING: no port list found for ${moduleName}")
+        ""
     }
-
-    // print moduleDefinitionMatch
-    println(s"[HLS:HELPERS:483] Module Definition Match: ${moduleDefinitionMatch}")
-
-    is_ap_start = moduleDefinitionMatch.contains("ap_start")
-    is_ap_done = moduleDefinitionMatch.contains("ap_done")
-    is_ap_idle = moduleDefinitionMatch.contains("ap_idle")
-    is_ap_ready = moduleDefinitionMatch.contains("ap_ready")
+    println(s"[HLS:HELPERS:483] Module Port List: ${modulePortList.take(80)}...")
+    is_ap_start = "ap_start".r.findFirstIn(modulePortList).isDefined
+    is_ap_done  = "ap_done".r.findFirstIn(modulePortList).isDefined
+    is_ap_idle  = "ap_idle".r.findFirstIn(modulePortList).isDefined
+    is_ap_ready = "ap_ready".r.findFirstIn(modulePortList).isDefined
+    
       // }
     //}
 
@@ -572,7 +725,7 @@ object VitisModuleFactory {
       is_ap_idle,
       is_ap_ready,
       hasArgumentWriteBuffer_,
-      if(hasArgumentWriteBuffer_) taskDescriptor.argumentSizeList.head else 0,
+      if(taskDescriptor.generateArgOutWriteBuffer) taskDescriptor.argumentSizeList.head else 0,
       taskDescriptor.generateArgOutWriteBuffer
     )
   }

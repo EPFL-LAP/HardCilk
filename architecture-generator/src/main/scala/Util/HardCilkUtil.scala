@@ -71,7 +71,7 @@ object HardCilkUtil {
         getPhysicalSubsystemPort(port, scheds, allocs, notifiers, memAllocs)
       case "PE" =>
         pes(port.parentName)(port.parentIndex)
-          .getPort(port.portType)
+          .getPortByLegacyType(port.portType, port.portIndex)
       case "spawnNextWB" | "sendArgumentWB" =>
         getPhysicalWBPort(port, spawnNextWBs, sendArgumentWBs)
     }
