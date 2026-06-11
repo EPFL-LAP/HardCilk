@@ -277,8 +277,8 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
           op = Operation.LockSetUnlockAndReturnCurrent,
           mode = AtomicMode.Byte
         )))
-      scalaAssert(byteOut == Seq((0, BigInt("1122334455667788", 16))),
-        s"byte op should return previous full beat, got $byteOut")
+      scalaAssert(byteOut == Seq((0, BigInt(0x55))),
+        s"byte op should return the selected byte (lane 3 = 0x55) right-justified, got $byteOut")
       scalaAssert(mem.mem(0x40) == BigInt("11223344aa667788", 16),
         s"byte op should only replace byte lane 3, got ${mem.mem(0x40).toString(16)}")
 

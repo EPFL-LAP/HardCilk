@@ -1,6 +1,5 @@
 package Descriptors
 
-
 import chisel3.util.isPow2
 import scala.collection.mutable
 import org.slf4j.{LoggerFactory, Logger} // For logging warnings
@@ -24,14 +23,27 @@ case class PortDescriptor(
     parentType: String,
     parentIndex: Int = 0, // Defaulted
     portType: String,
-    portIndex: Int = 0  // Defaulted
+    portIndex: Int = 0 // Defaulted
 ) {
   def validate(): Unit = {
-    require(parentType == "HardCilk" || parentType == "PE" || parentType == "mem", s"Invalid parentType: $parentType")
+    require(
+      parentType == "HardCilk" || parentType == "PE" || parentType == "mem",
+      s"Invalid parentType: $parentType"
+    )
     require(parentIndex >= 0, "parentIndex must be >= 0")
     require(
-      Set("taskIn", "taskOut", "taskInGlobal", "taskOutGlobal", "argIn", "argOut",
-          "closureIn", "closureOut", "mallocIn", "mallocOut").contains(portType),
+      Set(
+        "taskIn",
+        "taskOut",
+        "taskInGlobal",
+        "taskOutGlobal",
+        "argIn",
+        "argOut",
+        "closureIn",
+        "closureOut",
+        "mallocIn",
+        "mallocOut"
+      ).contains(portType),
       s"Invalid portType: $portType"
     )
     require(portIndex >= 0, "portIndex must be >= 0")
@@ -95,13 +107,16 @@ case class SideConfig(
     numSpawnerServer: Int = 0
 ) {
   def validate(): Unit = {
-    require(Set("scheduler", "allocator", "argumentNotifier", "memoryAllocator").contains(sideType),
-      s"Invalid sideType: $sideType")
+    require(
+      Set("scheduler", "allocator", "argumentNotifier", "memoryAllocator")
+        .contains(sideType),
+      s"Invalid sideType: $sideType"
+    )
 
     if (portWidth == 32) { // '32' is the default
       DescriptorLogger.logger.warn(
         s"Task side '$sideType' is using default portWidth=32. " +
-        "Ensure this is intended or specify 'portWidth' in the JSON."
+          "Ensure this is intended or specify 'portWidth' in the JSON."
       )
     }
   }
@@ -123,8 +138,9 @@ case class TaskDescriptor(
     var mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     spawnServersCount: Int = 0, // Defaulted
     hasAXI: Boolean = true,
-    participatesInLock: Boolean = false, // Whether this task's PEs get lock req/resp lanes
-
+    participatesInLock: Boolean =
+      false, // Whether this task's PEs get lock req/resp lanes
+    lockPorts: Int = 1,
     isAIE: Boolean = false,
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
@@ -133,48 +149,84 @@ case class TaskDescriptor(
 ) {
   // Helper methods are fine to keep here
   def getNumServers(sideType: String): Int = { //
-    sidesConfigs.find(_.sideType == sideType).map(_.numVirtualServers).getOrElse(0)
+    sidesConfigs
+      .find(_.sideType == sideType)
+      .map(_.numVirtualServers)
+      .getOrElse(0)
   }
   def getCapacityVirtualQueue(sideType: String): Int = { //
-    sidesConfigs.find(_.sideType == sideType).map(_.capacityVirtualQueue).getOrElse(0)
+    sidesConfigs
+      .find(_.sideType == sideType)
+      .map(_.capacityVirtualQueue)
+      .getOrElse(0)
   }
   def getCapacityPhysicalQueue(sideType: String): Int = { //
-    sidesConfigs.find(_.sideType == sideType).map(_.capacityPhysicalQueue).getOrElse(0)
+    sidesConfigs
+      .find(_.sideType == sideType)
+      .map(_.capacityPhysicalQueue)
+      .getOrElse(0)
   }
   // ... (other get... methods) ...
-  
+
   def validate(): Unit = {
     sidesConfigs.foreach(_.validate())
-    
-    require(numProcessingElements > 0, s"Task '$name': numProcessingElements must be > 0")
-    require(isPow2(widthTask) && widthTask <= 1024, s"Task '$name': widthTask must be power of 2 and <= 1024")
-    
+
+    require(
+      numProcessingElements > 0,
+      s"Task '$name': numProcessingElements must be > 0"
+    )
+    require(
+      isPow2(widthTask) && widthTask <= 1024,
+      s"Task '$name': widthTask must be power of 2 and <= 1024"
+    )
+
     if (peHDLPath.nonEmpty) {
-      require(new java.io.File(peHDLPath).exists, s"Task '$name': peHDLPath not found at '$peHDLPath'")
+      require(
+        new java.io.File(peHDLPath).exists,
+        s"Task '$name': peHDLPath not found at '$peHDLPath'"
+      )
     } else {
-      DescriptorLogger.logger.warn(s"Task '$name' has no 'peHDLPath'. Ports will be exported.")
+      DescriptorLogger.logger.warn(
+        s"Task '$name' has no 'peHDLPath'. Ports will be exported."
+      )
     }
 
-    require(getNumServers("scheduler") > 0, s"Task '$name': must have > 0 scheduler servers")
+    require(
+      getNumServers("scheduler") > 0,
+      s"Task '$name': must have > 0 scheduler servers"
+    )
     // ... (all other 'asserts' converted to 'require') ...
-    
-    require(dynamicMemAlloc && widthMalloc > 0 || !dynamicMemAlloc && widthMalloc == 0,
-      s"Task '$name': dynamicMemAlloc requires widthMalloc > 0")
+
+    require(
+      dynamicMemAlloc && widthMalloc > 0 || !dynamicMemAlloc && widthMalloc == 0,
+      s"Task '$name': dynamicMemAlloc requires widthMalloc > 0"
+    )
 
     if (isCont) {
-      //require(getNumServers("allocator") > 0, s"Task '$name' (Cont): must have > 0 allocator servers")
-      require(getNumServers("argumentNotifier") > 0, s"Task '$name' (Cont): must have > 0 argumentNotifier servers")
+      // require(getNumServers("allocator") > 0, s"Task '$name' (Cont): must have > 0 allocator servers")
+      require(
+        getNumServers("argumentNotifier") > 0,
+        s"Task '$name' (Cont): must have > 0 argumentNotifier servers"
+      )
     }
-    
+
     if (dynamicMemAlloc) {
-       require(getNumServers("memoryAllocator") > 0, s"Task '$name' (DynMem): must have > 0 memoryAllocator servers")
+      require(
+        getNumServers("memoryAllocator") > 0,
+        s"Task '$name' (DynMem): must have > 0 memoryAllocator servers"
+      )
     }
-    
-    if(generateArgOutWriteBuffer) {
-      require(!argumentSizeList.isEmpty, s"Task '$name': argumentSizeList must not be empty!")
-      require(argumentSizeList.head > 0, s"Task '$name': argumentWidth must be > 0 to has a write buffer!")
+
+    if (generateArgOutWriteBuffer) {
+      require(
+        !argumentSizeList.isEmpty,
+        s"Task '$name': argumentSizeList must not be empty!"
+      )
+      require(
+        argumentSizeList.head > 0,
+        s"Task '$name': argumentWidth must be > 0 to has a write buffer!"
+      )
     }
-    
 
   }
 }
@@ -209,25 +261,25 @@ case class FullSysGenDescriptor(
   // Assign base addresses
   var j = 0
   val base = if (isVitisProject) 0x10 else 0x0
-  
 
-  taskDescriptors.foreach(task => {    
-    task.mgmtBaseAddresses = MemSystemDescriptor() 
+  taskDescriptors.foreach(task => {
+    task.mgmtBaseAddresses = MemSystemDescriptor()
     val numSchedulerServers = task.getNumServers("scheduler")
     for (i <- j until j + numSchedulerServers) {
-      task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
+      task.mgmtBaseAddresses.schedulerServersBaseAddresses =
+        task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
     }
     j += numSchedulerServers
     println("J value after scheduler: " + j)
 
-    if(task.spawnServersCount > 0) {
-      for (i <- j until j + task.spawnServersCount ) {
-        task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
+    if (task.spawnServersCount > 0) {
+      for (i <- j until j + task.spawnServersCount) {
+        task.mgmtBaseAddresses.schedulerServersBaseAddresses =
+          task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
       }
-      j += task.spawnServersCount 
+      j += task.spawnServersCount
     }
     println("J value after spawner servers: " + j)
-
 
     if (task.isCont) {
       val numAllocationServers = task.getNumServers("allocator")
@@ -238,7 +290,6 @@ case class FullSysGenDescriptor(
       j += numAllocationServers
     }
     println("J value after allocator: " + j)
-
 
     if (task.dynamicMemAlloc) {
       val numMemoryAllocatorServers = task.getNumServers("memoryAllocator")
@@ -252,10 +303,11 @@ case class FullSysGenDescriptor(
   })
 
   // For each task log base addresses
-  taskDescriptors.foreach(
-    task => 
-      println(f"Task: ${task.name}:  task.mgmtBaseAddresses: ${task.mgmtBaseAddresses}")
+  taskDescriptors.foreach(task =>
+    println(
+      f"Task: ${task.name}:  task.mgmtBaseAddresses: ${task.mgmtBaseAddresses}"
     )
+  )
 
   def getMfpgaBaseAddress(): Int = {
     (j << 6) + base
@@ -266,7 +318,10 @@ case class FullSysGenDescriptor(
     spawnList.get(task_name) match {
       case Some(spawnedTasks) =>
         if (spawnedTasks.contains(task_name))
-          taskDescriptors.find(_.name == task_name).map(_.numProcessingElements).getOrElse(0)
+          taskDescriptors
+            .find(_.name == task_name)
+            .map(_.numProcessingElements)
+            .getOrElse(0)
         else 0
       case None => 0
     }
@@ -279,7 +334,8 @@ case class FullSysGenDescriptor(
       case "spawnNext"    => spawnNextList
       case "sendArgument" => sendArgumentList
       case "mallocIn"     => mallocList
-      case _              => throw new IllegalArgumentException(s"Invalid port type: $port_type")
+      case _              =>
+        throw new IllegalArgumentException(s"Invalid port type: $port_type")
     }
 
     // Get the total number of processing elements that needs that type of port
@@ -294,7 +350,8 @@ case class FullSysGenDescriptor(
     }
 
     // if the port_type is spawn, decrement the return value by the value returned by selfSpawnCount
-    val finalCount = if (port_type == "spawn") sum - selfSpawnedCount(task_name) else sum
+    val finalCount =
+      if (port_type == "spawn") sum - selfSpawnedCount(task_name) else sum
 
     finalCount
   }
@@ -320,64 +377,95 @@ case class FullSysGenDescriptor(
         )
       }
 
-      val selfSpawnedConnections = (0 until selfSpawnedCount(task.name)).map { i =>
-        ConnectionDescriptor(
-          PortDescriptor(task.name, "PE", i, "taskOut", 0),
-          PortDescriptor(f"${task.name}", "HardCilk", 0, "taskIn", i),
-          task.widthTask,
-          "AXIS"
-        )
-      }
-
-      val spawnedConnections = spawnedTasks.filterNot(_ == task.name).zipWithIndex.flatMap { case (spawnedTask, j) =>
-        val spawnedTaskDescriptor = taskDescriptors.find(_.name == spawnedTask).get
-        (0 until task.numProcessingElements).map { i =>
+      val selfSpawnedConnections = (0 until selfSpawnedCount(task.name)).map {
+        i =>
           ConnectionDescriptor(
-            PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
-            PortDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal", i),
-            spawnedTaskDescriptor.widthTask,
+            PortDescriptor(task.name, "PE", i, "taskOut", 0),
+            PortDescriptor(f"${task.name}", "HardCilk", 0, "taskIn", i),
+            task.widthTask,
             "AXIS"
           )
-        }
       }
 
-      val argumentConnections = argumentTasks.zipWithIndex.flatMap { case (argumentTask, j) =>
-        taskDescriptors.find(_.name == argumentTask).get
-        (0 until task.numProcessingElements).map { i =>
-          aggregatorMapSendArg(argumentTask) += 1
-          ConnectionDescriptor(
-            PortDescriptor(task.name, "PE", i, "argOut", j),
-            PortDescriptor(f"${argumentTask}", "HardCilk", 0, "argIn", aggregatorMapSendArg(argumentTask) - 1),
-            widthAddress,
-            "AXIS"
-          )
+      val spawnedConnections =
+        spawnedTasks.filterNot(_ == task.name).zipWithIndex.flatMap {
+          case (spawnedTask, j) =>
+            val spawnedTaskDescriptor =
+              taskDescriptors.find(_.name == spawnedTask).get
+            (0 until task.numProcessingElements).map { i =>
+              ConnectionDescriptor(
+                PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
+                PortDescriptor(
+                  f"${spawnedTask}",
+                  "HardCilk",
+                  0,
+                  "taskInGlobal",
+                  i
+                ),
+                spawnedTaskDescriptor.widthTask,
+                "AXIS"
+              )
+            }
         }
+
+      val argumentConnections = argumentTasks.zipWithIndex.flatMap {
+        case (argumentTask, j) =>
+          taskDescriptors.find(_.name == argumentTask).get
+          (0 until task.numProcessingElements).map { i =>
+            aggregatorMapSendArg(argumentTask) += 1
+            ConnectionDescriptor(
+              PortDescriptor(task.name, "PE", i, "argOut", j),
+              PortDescriptor(
+                f"${argumentTask}",
+                "HardCilk",
+                0,
+                "argIn",
+                aggregatorMapSendArg(argumentTask) - 1
+              ),
+              widthAddress,
+              "AXIS"
+            )
+          }
       }
 
-      val spawnNextConnections = spawnNextTasks.zipWithIndex.flatMap { case (spawnNextTask, j) =>
-        taskDescriptors.find(_.name == spawnNextTask).get
-        (0 until task.numProcessingElements).map { i =>
-          aggregatorMapSpawnNext(spawnNextTask) += 1
-          ConnectionDescriptor(
-            PortDescriptor(f"${spawnNextTask}", "HardCilk", 0, "closureOut", aggregatorMapSpawnNext(spawnNextTask) - 1),
-            PortDescriptor(task.name, "PE", i, "closureIn", 0),
-            widthAddress, // This is only an address disbrutor for now...
-            "AXIS"
-          )
-        }
+      val spawnNextConnections = spawnNextTasks.zipWithIndex.flatMap {
+        case (spawnNextTask, j) =>
+          taskDescriptors.find(_.name == spawnNextTask).get
+          (0 until task.numProcessingElements).map { i =>
+            aggregatorMapSpawnNext(spawnNextTask) += 1
+            ConnectionDescriptor(
+              PortDescriptor(
+                f"${spawnNextTask}",
+                "HardCilk",
+                0,
+                "closureOut",
+                aggregatorMapSpawnNext(spawnNextTask) - 1
+              ),
+              PortDescriptor(task.name, "PE", i, "closureIn", 0),
+              widthAddress, // This is only an address disbrutor for now...
+              "AXIS"
+            )
+          }
       }
 
-      val mallocConnections = mallocTasks.zipWithIndex.flatMap { case (mallocTask, j) =>
-        taskDescriptors.find(_.name == mallocTask).get
-        (0 until task.numProcessingElements).map { i =>
-          aggregatorMapMalloc(mallocTask) += 1
-          ConnectionDescriptor(
-            PortDescriptor(f"${mallocTask}", "HardCilk", 0, "mallocOut", aggregatorMapMalloc(mallocTask) - 1),
-            PortDescriptor(task.name, "PE", i, "mallocIn", 0),
-            widthAddress, // This is only an address distrbutor for now
-            "AXIS"
-          )
-        }
+      val mallocConnections = mallocTasks.zipWithIndex.flatMap {
+        case (mallocTask, j) =>
+          taskDescriptors.find(_.name == mallocTask).get
+          (0 until task.numProcessingElements).map { i =>
+            aggregatorMapMalloc(mallocTask) += 1
+            ConnectionDescriptor(
+              PortDescriptor(
+                f"${mallocTask}",
+                "HardCilk",
+                0,
+                "mallocOut",
+                aggregatorMapMalloc(mallocTask) - 1
+              ),
+              PortDescriptor(task.name, "PE", i, "mallocIn", 0),
+              widthAddress, // This is only an address distrbutor for now
+              "AXIS"
+            )
+          }
       }
 
       taskConnections ++ selfSpawnedConnections ++ spawnedConnections ++ argumentConnections ++ spawnNextConnections ++ mallocConnections
@@ -389,28 +477,28 @@ case class FullSysGenDescriptor(
   def getNumConfigPorts(): Int = {
     taskDescriptors.map(_.getNumServers("scheduler")).sum + taskDescriptors
       .map(_.getNumServers("memoryAllocator"))
-      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +  
+      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +
       {
         var spawner_count = 0
         taskDescriptors.foreach(task => {
-          if(task.spawnServersCount > 0) {
+          if (task.spawnServersCount > 0) {
             spawner_count += task.spawnServersCount
           }
         })
         spawner_count
       } +
       {
-        if(mFPGASynth || mFPGASimulation) 1 else 0
+        if (mFPGASynth || mFPGASimulation) 1 else 0
       } +
       {
         var count_info_ports = 0
-        if(mFPGASynth || mFPGASimulation){
+        if (mFPGASynth || mFPGASimulation) {
           // Add an extra one for each task type
           count_info_ports += taskDescriptors.length
 
           // Add an extra one for each task with task.generateArgOutWriteBuffer set
           taskDescriptors.foreach(task => {
-            if(task.generateArgOutWriteBuffer) {
+            if (task.generateArgOutWriteBuffer) {
               count_info_ports += 1
             }
           })
@@ -456,60 +544,98 @@ case class FullSysGenDescriptor(
 
     MemStats(totalAXIPorts, interconnectDescriptorsAggregated)
   }
-  
+
   def validate(): Unit = {
     taskDescriptors.foreach(_.validate()) // Validate all sub-tasks
-    
-    require(isPow2(widthAddress) && widthAddress <= 64, "widthAddress must be power of 2 and <= 64")
-    require(isPow2(widthContCounter) && widthContCounter <= 64, "widthContCounter must be power of 2 and <= 64")
+
+    require(
+      isPow2(widthAddress) && widthAddress <= 64,
+      "widthAddress must be power of 2 and <= 64"
+    )
+    require(
+      isPow2(widthContCounter) && widthContCounter <= 64,
+      "widthContCounter must be power of 2 and <= 64"
+    )
     require(taskDescriptors.nonEmpty, "must have at least one taskDescriptor")
-    
+
     val taskNames = taskDescriptors.map(_.name).toSet
-    require(spawnList.keys.forall(taskNames.contains), s"spawnList contains unknown task names: ${spawnList.keys.filterNot(taskNames.contains)}")
+    require(
+      spawnList.keys.forall(taskNames.contains),
+      s"spawnList contains unknown task names: ${spawnList.keys.filterNot(taskNames.contains)}"
+    )
     // ... (rest of list checks) ...
-    require(spawnNextList.keys.forall(taskNames.contains), "spawnNextList contains unknown task names")
-    require(sendArgumentList.keys.forall(taskNames.contains), "sendArgumentList contains unknown task names")
-    require(mallocList.keys.forall(taskNames.contains), "mallocList contains unknown task names")
-    
+    require(
+      spawnNextList.keys.forall(taskNames.contains),
+      "spawnNextList contains unknown task names"
+    )
+    require(
+      sendArgumentList.keys.forall(taskNames.contains),
+      "sendArgumentList contains unknown task names"
+    )
+    require(
+      mallocList.keys.forall(taskNames.contains),
+      "mallocList contains unknown task names"
+    )
+
     require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
 
     // Check if the system is supposed to support MFPGA, and has argument notification is that
     // tasks with argument notifiers must have contigous ids startting from ID zero
-    if(mFPGASynth || mFPGASimulation) {
+    if (mFPGASynth || mFPGASimulation) {
       // Create a list of the tasks with argument notifiers
-      val id_list = taskDescriptors.filter(_.getNumServers("argumentNotifier") > 0).map(_.taskId)
+      val id_list = taskDescriptors
+        .filter(_.getNumServers("argumentNotifier") > 0)
+        .map(_.taskId)
 
       // Require that id_list is contigous starting with ID 0
       var decesion = true
-      for(i <- 0 until id_list.length - 1) {
-        if(id_list(i) + 1 != id_list(i + 1)) {
+      for (i <- 0 until id_list.length - 1) {
+        if (id_list(i) + 1 != id_list(i + 1)) {
           decesion = false
         }
       }
-      require(decesion,"To support mfpga the IDs of tasks with argument notifiers must be contigous and starting from zero.\n")
+      require(
+        decesion,
+        "To support mfpga the IDs of tasks with argument notifiers must be contigous and starting from zero.\n"
+      )
 
     }
 
     // No task may opt into locking unless a lockConfig is present to serve it.
     if (lockConfig.isEmpty) {
       val orphans = taskDescriptors.filter(_.participatesInLock).map(_.name)
-      require(orphans.isEmpty,
-        s"Tasks have participatesInLock=true but no top-level lockConfig is set: ${orphans.mkString(", ")}")
+      require(
+        orphans.isEmpty,
+        s"Tasks have participatesInLock=true but no top-level lockConfig is set: ${orphans.mkString(", ")}"
+      )
     }
 
     lockConfig.foreach { lc =>
       require(isPow2(lc.P), "lockConfig.P must be a power of two")
       require(lc.P <= lc.N, "lockConfig.P must be <= N")
-      require(lc.tagStoreSize % lc.P == 0, "lockConfig.tagStoreSize must be a multiple of P")
-      require(lc.N % (2 * lc.P) == 0, "lockConfig.N must be a multiple of 2*P (AMU bucketing)")
+      require(
+        lc.tagStoreSize % lc.P == 0,
+        "lockConfig.tagStoreSize must be a multiple of P"
+      )
+      require(
+        lc.N % (2 * lc.P) == 0,
+        "lockConfig.N must be a multiple of 2*P (AMU bucketing)"
+      )
       // N must equal the total number of lock-participating PE lanes. A task opts in
       // via participatesInLock=true; each of its PEs gets one lane. For BFS only
       // the helper participates: 16 helper PEs = 16 lanes.
-      val lockLanes = taskDescriptors.filter(_.participatesInLock).map(_.numProcessingElements).sum
-      require(lockLanes == lc.N,
-        s"lockConfig.N (${lc.N}) must equal the total PEs of tasks with participatesInLock=true ($lockLanes)")
-      require(lockLanes > 0,
-        "lockConfig is set but no task has participatesInLock=true")
+      val lockLanes = taskDescriptors
+        .filter(_.participatesInLock)
+        .map(x => x.numProcessingElements * x.lockPorts)
+        .sum
+      require(
+        lockLanes == lc.N,
+        s"lockConfig.N (${lc.N}) must equal the total PEs of tasks with participatesInLock=true ($lockLanes)"
+      )
+      require(
+        lockLanes > 0,
+        "lockConfig is set but no task has participatesInLock=true"
+      )
     }
   }
 }
@@ -521,10 +647,19 @@ case class FullSysGenDescriptorExtended(
     val memStats: MemStats
 )
 object FullSysGenDescriptorExtended {
-  def fromFullSysGenDescriptor(fullSysGenDescriptor: FullSysGenDescriptor): FullSysGenDescriptorExtended = {
-    val systemConnections = fullSysGenDescriptor.getSystemConnectionsDescriptor()
-    val memStats = fullSysGenDescriptor.getMemoryConnectionsStats(32) // Note: 32 is hardcoded here
-    FullSysGenDescriptorExtended(fullSysGenDescriptor, systemConnections, memStats)
+  def fromFullSysGenDescriptor(
+      fullSysGenDescriptor: FullSysGenDescriptor
+  ): FullSysGenDescriptorExtended = {
+    val systemConnections =
+      fullSysGenDescriptor.getSystemConnectionsDescriptor()
+    val memStats = fullSysGenDescriptor.getMemoryConnectionsStats(
+      32
+    ) // Note: 32 is hardcoded here
+    FullSysGenDescriptorExtended(
+      fullSysGenDescriptor,
+      systemConnections,
+      memStats
+    )
   }
 }
 
