@@ -94,7 +94,10 @@ case class MemStats(
     interconnectDescriptors: List[InterconnectDescriptor]
 )
 
-case class LockConfig(N: Int, P: Int, tagStoreSize: Int)
+// inflightDepth = per-PE in-flight credit budget: how many lock requests a PE
+// may have unresolved inside the server at once. 1 mimics the original
+// one-request-at-a-time behaviour; raise it to let a PE pipeline locks.
+case class LockConfig(N: Int, P: Int, tagStoreSize: Int, inflightDepth: Int = 1)
 
 // --- SideConfig with default handling ---
 case class SideConfig(

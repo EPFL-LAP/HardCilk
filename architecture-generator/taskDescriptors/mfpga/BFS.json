@@ -91,6 +91,7 @@
   "lockConfig": {
     "N": 16,
     "P": 4,
-    "tagStoreSize": 64
+    "tagStoreSize": 64,
+    "inflightDepth": 1
   }
 }

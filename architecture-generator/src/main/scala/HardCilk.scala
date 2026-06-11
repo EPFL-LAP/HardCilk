@@ -455,7 +455,8 @@ class HardCilk(
         p = lc.P,
         tagStoreSize = lc.tagStoreSize,
         addrW = fullSysGenDescriptor.widthAXIAddress,
-        lockTraceCsv = false
+        lockTraceCsv = false,
+        inflightDepth = lc.inflightDepth
       )
     )
     for (i <- 0 until lc.N) {

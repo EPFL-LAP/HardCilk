@@ -29,7 +29,7 @@
 #define MEM_ARR_IN(mem_port, addr, idx, type) \
   *((type(*))((uint8_t *)(mem_port) + (addr) + (idx) * sizeof(type)))
 
-#define TASK_FIELD_ADDR(task, field) (uint64_t)&(((BFS_args *)task.cont)->field)
+#define TASK_FIELD_ADDR(task, field) (uint64_t)&(((wBFS_args *)task.cont)->field)
 
 using addr_t = uint64_t;
 using Addr = uint64_t;
@@ -80,7 +80,7 @@ static const addr_t VISITED_SLOT_BYTES = 1;
 #define VERTICES_PER_TASK 64
 #endif
 
-struct BFS_args
+struct wBFS_args
 {
   uint32_t counter;
   uint32_t source;

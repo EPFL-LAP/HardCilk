@@ -250,7 +250,7 @@ static uint32_t edgemap_process(void *mem_0, void *mem_1, void *mem_2,
     // blocking ADD_ONE so every append wins a unique next-frontier slot).
     else if (!pending_frontier.empty() && outstanding < LOCK_WINDOW) {
       uint32_t neighbor = pending_frontier.read();
-      staged_req = make_lock_req(task.nextFChar, 1, LOCK_OP_ADD_ONE_RETURN_CURRENT,
+      staged_req = make_lock_req(task.nextFChar, 1, LOCK_OP_ADD_N_RETURN_CURRENT,
                                  true, ATOMIC_MODE_DOUBLEWORD);
       staged_ctx = {INFLIGHT_FRONTIER, neighbor};
       have_staged = true;

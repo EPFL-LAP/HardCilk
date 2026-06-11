@@ -6,8 +6,8 @@
 #define VERTICES_PER_TASK 64
 #define MAX_OUTSTANDING_LOCKS 1
 
-void BFS(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlobal,
-         hls::stream<BFS_args> &taskIn)
+void wBFS(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlobal,
+          hls::stream<wBFS_args> &taskIn)
 {
 #pragma HLS INTERFACE ap_ctrl_none port = return
 #pragma HLS INTERFACE mode = axis port = taskIn

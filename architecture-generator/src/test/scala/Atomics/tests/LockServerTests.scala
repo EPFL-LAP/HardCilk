@@ -2,16 +2,13 @@ package Atomics.tests
 
 import chisel3._
 import chiseltest._
+import chiseltest.simulator.VerilatorBackendAnnotation
 import Atomics.LockServer
-import org.scalatest.ParallelTestExecution
 import org.scalatest.flatspec.AnyFlatSpec
 import scala.Predef.{assert => scalaAssert, _}
 import scala.collection.mutable
 
-class LockServerTests
-    extends AnyFlatSpec
-    with ChiselScalatestTester
-    with ParallelTestExecution {
+class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.scalatest.ParallelTestExecution {
   behavior of "LockServer"
 
   private case class Params(n: Int, p: Int, tagStoreSize: Int)
@@ -23,12 +20,20 @@ class LockServerTests
   private val mixedParams = Params(n = 8, p = 4, tagStoreSize = 32)
   private val arbiterFairnessParams = Params(n = 32, p = 4, tagStoreSize = 16)
   private val wideParams = Params(n = 16, p = 8, tagStoreSize = 64)
-  // Exactly the BFS HW lockConfig (taskDescriptors/mfpga/BFS.json): 8 helper
-  // lock ports, 4 AMU lanes, 64-entry tag store.
-  private val bfsHwParams = Params(n = 8, p = 4, tagStoreSize = 64)
 
   private val coreParams = Seq(smallParams, mediumParams, mixedParams)
   private val allParams = coreParams :+ wideParams
+
+  // Use Verilator for large circuits so treadle's symbol table doesn't OOM.
+  private def testDut(params: Params)(body: LockServer => Unit): Unit = {
+    val anns = if (params.n >= 16) Seq(VerilatorBackendAnnotation) else Seq()
+    test(new LockServer(params.n, params.p, params.tagStoreSize))
+      .withAnnotations(anns)(body)
+  }
+
+  private def testDutVerilator(params: Params)(body: LockServer => Unit): Unit =
+    test(new LockServer(params.n, params.p, params.tagStoreSize))
+      .withAnnotations(Seq(VerilatorBackendAnnotation))(body)
 
   private case class Request(
       pe: Int,
@@ -37,12 +42,19 @@ class LockServerTests
       data: BigInt = 0,
       isBlocking: Boolean = false,
       opcodeOverride: Option[Int] = None,
-      atomicModeBits: Int = 0
+      atomicModeBits: Int = 0,
+      meta: Int = 0
   )
-  private case class Response(pe: Int, success: Boolean, data: BigInt)
+  private case class Response(
+      pe: Int,
+      success: Boolean,
+      data: BigInt,
+      meta: Int = 0
+  )
 
   // tdata layout (see LockServer): tag in bits 63:0, atomic mode in bits
-  // 134:133, isBlocking in bit 132, opcode in bits 131:128.
+  // 134:133, isBlocking in bit 132, opcode in bits 131:128, metadata in bits
+  // 143:136 (echoed back in the response).
   // Operation.decode maps opcode 0 -> Unlock, 1 -> Lock.
   private def encodeReq(req: Request): BigInt = {
     val opcode = req.opcodeOverride
@@ -50,19 +62,22 @@ class LockServerTests
       .getOrElse(if (req.isLock) BigInt(1) else BigInt(0))
     val blocking = if (req.isBlocking) BigInt(1) else BigInt(0)
     val atomicMode = BigInt(req.atomicModeBits & 0x3)
-    (atomicMode << 133) | (blocking << 132) | (opcode << 128) |
+    (BigInt(req.meta & 0xff) << 136) |
+      (atomicMode << 133) | (blocking << 132) | (opcode << 128) |
       (req.data << 64) | BigInt(req.tag)
   }
 
-  private def lockAddOneReq(
+  private def lockAddNReq(
       pe: Int,
       addr: Int,
+      addend: BigInt = 1,
       atomicModeBits: Int = 0
   ): Request =
     Request(
       pe = pe,
       isLock = true,
       tag = addr,
+      data = addend,
       opcodeOverride = Some(5),
       atomicModeBits = atomicModeBits
     )
@@ -98,7 +113,8 @@ class LockServerTests
         out += Response(
           i,
           (tdata & 1) == 1,
-          (tdata >> 64) & ((BigInt(1) << 64) - 1)
+          (tdata >> 64) & ((BigInt(1) << 64) - 1),
+          ((tdata >> 136) & 0xff).toInt
         )
       }
     }
@@ -242,8 +258,12 @@ class LockServerTests
       s"[LockServerTests] done  $name n=${params.n} p=${params.p} tagStoreSize=${params.tagStoreSize}"
     )
 
-  // Drives one request per PE per cycle (head of that PE's pending queue) and collects
-  // responses until all requests have been submitted and all responses have been received.
+  // Drives requests in program order per PE: a PE's next request is issued only
+  // after its previous request's response arrived. The server may pipeline
+  // several requests per PE and complete them out of issue order, so dependent
+  // same-tag sequences (lock -> unlock -> relock) must be paced by the
+  // testbench; the pipelined-* tests below cover the issue-without-waiting
+  // behavior explicitly.
   private def runRequests(
       dut: LockServer,
       params: Params,
@@ -257,18 +277,19 @@ class LockServerTests
       (0 until params.n).map(i => i -> mutable.Queue.empty[Request]).toMap
     for (r <- requests) perPE(r.pe).enqueue(r)
 
-    val inflight =
-      (0 until params.n).map(i => i -> mutable.Queue.empty[Request]).toMap
+    val outstanding = Array.fill(params.n)(Option.empty[Request])
     val matched = (0 until params.n)
       .map(i => i -> mutable.ArrayBuffer.empty[(Request, Response)])
       .toMap
 
     def submissionDone: Boolean = perPE.values.forall(_.isEmpty)
-    def inflightDone: Boolean = inflight.values.forall(_.isEmpty)
+    def inflightDone: Boolean = outstanding.forall(_.isEmpty)
 
     var cycles = 0
     while ((!submissionDone || !inflightDone) && cycles < maxCycles) {
-      val driving = perPE.collect { case (pe, q) if q.nonEmpty => q.head }.toSeq
+      val driving = (0 until params.n).flatMap { pe =>
+        if (outstanding(pe).isEmpty) perPE(pe).headOption else None
+      }
       driveReqs(dut, driving)
       mem.foreach(_.beforeStep())
 
@@ -276,9 +297,10 @@ class LockServerTests
         driving.filter(r => dut.io.req(r.pe).ready.peek().litToBoolean)
 
       for (resp <- collectResponses(dut)) {
-        val q = inflight(resp.pe)
-        scalaAssert(q.nonEmpty, s"unmatched response from PE ${resp.pe}")
-        matched(resp.pe) += ((q.dequeue(), resp))
+        val req = outstanding(resp.pe)
+        scalaAssert(req.nonEmpty, s"unmatched response from PE ${resp.pe}")
+        matched(resp.pe) += ((req.get, resp))
+        outstanding(resp.pe) = None
       }
 
       dut.clock.step()
@@ -287,7 +309,7 @@ class LockServerTests
 
       for (r <- accepted) {
         perPE(r.pe).dequeue()
-        inflight(r.pe).enqueue(r)
+        outstanding(r.pe) = Some(r)
       }
     }
 
@@ -301,7 +323,9 @@ class LockServerTests
     scalaAssert(
       inflightDone,
       s"requests with no response within $maxCycles cycles: " +
-        inflight.collect { case (pe, q) if q.nonEmpty => pe -> q.length }
+        (0 until params.n).collect {
+          case pe if outstanding(pe).nonEmpty => pe -> outstanding(pe).get
+        }
     )
 
     matched.view.mapValues(_.toSeq).toMap
@@ -796,26 +820,426 @@ class LockServerTests
     logDone("mixed-distinct-no-conflict", params)
   }
 
-  private def runAddOneReturnCurrent(dut: LockServer, params: Params): Unit = {
-    logStart("add-one-return-current", params)
+  // The point of per-PE pipelining: one PE issues a burst of independent locks
+  // without waiting for responses, correlating completions via the echoed
+  // metadata. The burst is larger than the credit budget (inflightDepth=5) to
+  // exercise admission throttling. Each lock is held (never released), so the
+  // burst must stay within one lane's tag-store slot bucket: a PE maps to one
+  // lane, which draws slots only from its own AvailableSlotTracker bucket of
+  // tagStoreSize/p entries. With tagStoreSize=32, p=4 that bucket holds 8 > 6.
+  private def runPipelinedLockBurst(dut: LockServer, params: Params): Unit = {
+    logStart("pipelined-lock-burst", params)
+    scalaAssert(
+      params.tagStoreSize / params.p >= 6,
+      "burst needs a per-lane slot bucket of at least 6"
+    )
+    waitForInit(dut, params)
+    setRespReady(dut)
+
+    val total =
+      6 // just over inflightDepth=5, so admission throttling is exercised
+    val pending = mutable.Queue.empty[Request] ++ (0 until total).map(i =>
+      Request(pe = 0, isLock = true, tag = 0x500 + i, meta = i)
+    )
+    val got = mutable.ArrayBuffer.empty[Response]
+    var cycles = 0
+    while (got.size < total && cycles < 250) {
+      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head))
+      else driveNoReq(dut)
+      val accepted =
+        pending.nonEmpty && dut.io.req(0).ready.peek().litToBoolean
+      got ++= collectResponses(dut)
+      dut.clock.step()
+      cycles += 1
+      if (accepted) pending.dequeue()
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      got.size == total,
+      s"expected $total responses, got ${got.size}"
+    )
+    scalaAssert(
+      got.forall(_.success),
+      s"every distinct-tag lock should succeed: ${got.filter(!_.success)}"
+    )
+    scalaAssert(
+      got.map(_.meta).sorted.toSeq == (0 until total).toSeq,
+      s"metadata should echo each request exactly once, got ${got.map(_.meta).sorted}"
+    )
+    logDone("pipelined-lock-burst", params)
+  }
+
+  // Single PE streams testAndSet (LockSetUnlockAndReturnCurrent) atomics to
+  // distinct addresses without waiting: the pipelined forward path end to end
+  // (lock commit -> AMU read-modify-write -> UnlockAndRespond release+respond).
+  private def runPipelinedTestAndSetStream(
+      dut: LockServer,
+      params: Params
+  ): Unit = {
+    logStart("pipelined-tas-stream", params)
+    dut.clock.setTimeout(0)
+    waitForInit(dut, params)
+    setRespReady(dut)
+
+    val total = 6 // just over inflightDepth=5, but much cheaper than the old 8
+    val mem = new GMemModel(dut, latency = 4)
+    for (i <- 0 until total) mem.mem(0x800 + 8 * i) = BigInt(10 * i + 3)
+    val pending = mutable.Queue.empty[Request] ++ (0 until total).map(i =>
+      Request(
+        pe = 0,
+        isLock = true,
+        tag = 0x800 + 8 * i,
+        data = BigInt(1000 + i),
+        opcodeOverride = Some(2), // LockSetUnlockAndReturnCurrent
+        meta = i
+      )
+    )
+    val got = mutable.ArrayBuffer.empty[Response]
+    var cycles = 0
+    while (got.size < total && cycles < 600) {
+      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head))
+      else driveNoReq(dut)
+      mem.beforeStep()
+      val accepted =
+        pending.nonEmpty && dut.io.req(0).ready.peek().litToBoolean
+      got ++= collectResponses(dut)
+      dut.clock.step()
+      mem.afterStep()
+      cycles += 1
+      if (accepted) pending.dequeue()
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      got.size == total,
+      s"expected $total responses, got ${got.size} after $cycles cycles"
+    )
+    for (r <- got) {
+      scalaAssert(r.success, s"testAndSet should succeed: $r")
+      scalaAssert(
+        r.data == BigInt(10 * r.meta + 3),
+        s"testAndSet ${r.meta} should return previous value ${10 * r.meta + 3}, got $r"
+      )
+    }
+    for (i <- 0 until total) {
+      scalaAssert(
+        mem.mem(0x800 + 8 * i) == BigInt(1000 + i),
+        s"address $i should hold the stored operand, got ${mem.mem(0x800 + 8 * i)}"
+      )
+    }
+    logDone("pipelined-tas-stream", params)
+  }
+
+  // PE0 pipelines a full credit budget of blocking locks at once, all on tags
+  // PE1 already holds; they spin in the replay queue (impossible in the old
+  // one-in-flight design) until PE1 releases the tags, then every one completes.
+  // The count is the credit budget: more than that can never be admitted while
+  // none can complete, so it is not an admittable scenario. PE1 holds all the
+  // tags at once, so its lane's slot bucket (tagStoreSize/p) must cover them --
+  // tagStoreSize=32, p=4 gives 8.
+  private def runPipelinedBlockingLocksDrain(
+      dut: LockServer,
+      params: Params
+  ): Unit = {
+    logStart("pipelined-blocking-locks-drain", params)
+    scalaAssert(
+      params.tagStoreSize / params.p >= dut.inflightDepth,
+      "test needs a per-lane slot bucket of at least inflightDepth"
+    )
+    waitForInit(dut, params)
+
+    val tags = 0 until dut.inflightDepth
+    val held = runRequests(
+      dut,
+      params,
+      tags.map(t => Request(pe = 1, isLock = true, tag = 0x40 + t))
+    )
+    scalaAssert(
+      held.values.flatten.forall(_._2.success),
+      s"setup locks should succeed: $held"
+    )
+
+    // Pipeline the blocking locks from PE0 without waiting for responses.
+    val pending = mutable.Queue.empty[Request] ++ tags.map(t =>
+      Request(
+        pe = 0,
+        isLock = true,
+        tag = 0x40 + t,
+        isBlocking = true,
+        meta = t
+      )
+    )
+    val got = mutable.ArrayBuffer.empty[Response]
+    setRespReady(dut)
+    var cycles = 0
+    while (pending.nonEmpty && cycles < 120) {
+      driveReqs(dut, Seq(pending.head))
+      val accepted = dut.io.req(0).ready.peek().litToBoolean
+      got ++= collectResponses(dut)
+      dut.clock.step()
+      cycles += 1
+      if (accepted) pending.dequeue()
+    }
+    driveNoReq(dut)
+    scalaAssert(pending.isEmpty, "blocking locks were not all accepted")
+    for (_ <- 0 until 24) {
+      got ++= collectResponses(dut)
+      dut.clock.step()
+    }
+    scalaAssert(
+      got.isEmpty,
+      s"blocking locks must not respond while their tags are held: $got"
+    )
+
+    // PE1 releases everything; PE0's spinning locks must all complete.
+    val releases = mutable.Queue.empty[Request] ++ tags.map(t =>
+      Request(pe = 1, isLock = false, tag = 0x40 + t)
+    )
+    val pe1got = mutable.ArrayBuffer.empty[Response]
+    var drain = 0
+    while ((got.size < tags.size || pe1got.size < tags.size) && drain < 800) {
+      if (releases.nonEmpty) driveReqs(dut, Seq(releases.head))
+      else driveNoReq(dut)
+      val accepted =
+        releases.nonEmpty && dut.io.req(1).ready.peek().litToBoolean
+      for (r <- collectResponses(dut)) {
+        if (r.pe == 0) got += r else pe1got += r
+      }
+      dut.clock.step()
+      drain += 1
+      if (accepted) releases.dequeue()
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      pe1got.size == tags.size && pe1got.forall(_.success),
+      s"all releases should succeed: $pe1got"
+    )
+    scalaAssert(
+      got.size == tags.size && got.forall(_.success),
+      s"every blocking lock should succeed after release: $got"
+    )
+    scalaAssert(
+      got.map(_.meta).sorted.toSeq == tags.toSeq,
+      s"metadata mismatch: ${got.map(_.meta).sorted}"
+    )
+    logDone("pipelined-blocking-locks-drain", params)
+  }
+
+  // A credit is released only when a response leaves io.resp. Holding the
+  // response channel not-ready stops credits from freeing, so once inflightDepth
+  // requests are outstanding admission must stall and the backpressure must
+  // reach req.ready. Draining the responses then lets the rest flow. total is
+  // chosen above the accept prefix (inflightDepth + the small input FIFO) so
+  // some requests are left stranded, and below the per-lane slot bucket
+  // (tagStoreSize/p) so every held lock can ultimately commit.
+  private def runResponseBackpressureBlocksAccept(
+      dut: LockServer,
+      params: Params
+  ): Unit = {
+    logStart("response-backpressure-blocks-accept", params)
+    val depth = dut.inflightDepth
+    val total = depth + 5
+    scalaAssert(
+      params.tagStoreSize / params.p >= total,
+      "test needs a per-lane slot bucket of at least total"
+    )
+    waitForInit(dut, params)
+
+    val pending = mutable.Queue.empty[Request] ++ (0 until total).map(i =>
+      Request(pe = 0, isLock = true, tag = 0x600 + i, meta = i)
+    )
+
+    // Phase 1: response channel held not-ready everywhere. Credits never free.
+    for (i <- 0 until dut.n) dut.io.resp(i).ready.poke(false.B)
+    var accepted = 0
+    var lastAcceptCycle = 0
+    var cyc = 0
+    while (cyc < 200) {
+      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head)) else driveNoReq(dut)
+      val rdy = pending.nonEmpty && dut.io.req(0).ready.peek().litToBoolean
+      dut.clock.step()
+      cyc += 1
+      if (rdy) { pending.dequeue(); accepted += 1; lastAcceptCycle = cyc }
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      pending.nonEmpty,
+      s"backpressure should have stopped acceptance, but all $total were accepted"
+    )
+    scalaAssert(
+      !dut.io.req(0).ready.peek().litToBoolean,
+      "req.ready should be low while the response queue is backed up"
+    )
+    scalaAssert(
+      accepted <= depth + 4,
+      s"accepted $accepted with credits frozen; expected at most inflightDepth + input FIFO"
+    )
+    scalaAssert(
+      cyc - lastAcceptCycle >= 100,
+      s"acceptance never quiesced: last accept at $lastAcceptCycle of $cyc cycles"
+    )
+
+    // Phase 2: drain. Responses flow, credits free, the rest is accepted, and
+    // every request completes exactly once.
+    setRespReady(dut)
+    val got = mutable.ArrayBuffer.empty[Response]
+    var drain = 0
+    while (got.size < total && drain < 2000) {
+      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head)) else driveNoReq(dut)
+      val rdy = pending.nonEmpty && dut.io.req(0).ready.peek().litToBoolean
+      got ++= collectResponses(dut)
+      dut.clock.step()
+      drain += 1
+      if (rdy) pending.dequeue()
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      got.size == total,
+      s"expected $total responses after draining, got ${got.size}"
+    )
+    scalaAssert(
+      got.forall(_.success),
+      s"all distinct-tag locks should succeed: ${got.filter(!_.success)}"
+    )
+    scalaAssert(
+      got.map(_.meta).sorted.toSeq == (0 until total).toSeq,
+      s"metadata mismatch after drain: ${got.map(_.meta).sorted}"
+    )
+    logDone("response-backpressure-blocks-accept", params)
+  }
+
+  // Regression for the arbiter-hold deadlock: with the tag store full, a
+  // slotless lock parks in the arbiter and holds its bucket, so nothing that
+  // bucket feeds can be selected -- including the AMU return that would free a
+  // slot. The urgent lane-local return path must bypass the held bucket.
+  //
+  // Setup (n=8, p=4, tagStoreSize=16; tracker bucket l = slots 4l..4l+3,
+  // offered lowest-free-first to lane l; PE q maps to lane q % 4):
+  //  - PE4 locks 3 tags (lane 0 -> slots 0..2); PEs 1/5, 2/6, 3/7 lock 4 tags
+  //    per lane (slots 4..15). 15 slots used, only slot 3 (lane 0) free.
+  //  - PE0 pipelines a testAndSet (takes slot 3, forwarded to AMU 0; store now
+  //    full) immediately followed by a plain lock (no slot anywhere -> parks in
+  //    the arbiter and holds PE0's bucket).
+  //  - The AMU return must still get through, release the testAndSet's tag,
+  //    and hand slot 3 to the parked lock. Without the bypass this wedges.
+  private def runStoreFullAmuReturnUnblocksParkedLock(
+      dut: LockServer,
+      params: Params
+  ): Unit = {
+    logStart("store-full-amu-return-unblocks-parked-lock", params)
+    dut.clock.setTimeout(0)
+    waitForInit(dut, params)
+
+    scalaAssert(
+      params.n == 8 && params.p == 4 && params.tagStoreSize == 16,
+      "test assumes the n=8 p=4 tagStoreSize=16 lane/slot geometry"
+    )
+    val fill = Seq(
+      Request(pe = 4, isLock = true, tag = 100),
+      Request(pe = 4, isLock = true, tag = 101),
+      Request(pe = 4, isLock = true, tag = 102),
+      Request(pe = 1, isLock = true, tag = 110),
+      Request(pe = 1, isLock = true, tag = 111),
+      Request(pe = 5, isLock = true, tag = 112),
+      Request(pe = 5, isLock = true, tag = 113),
+      Request(pe = 2, isLock = true, tag = 120),
+      Request(pe = 2, isLock = true, tag = 121),
+      Request(pe = 6, isLock = true, tag = 122),
+      Request(pe = 6, isLock = true, tag = 123),
+      Request(pe = 3, isLock = true, tag = 130),
+      Request(pe = 3, isLock = true, tag = 131),
+      Request(pe = 7, isLock = true, tag = 132),
+      Request(pe = 7, isLock = true, tag = 133)
+    )
+    val fillOut = runRequests(dut, params, fill)
+    val fillPairs = fillOut.values.flatten.toSeq
+    scalaAssert(
+      fillPairs.size == 15 && fillPairs.forall(_._2.success),
+      s"all 15 fill locks should succeed: ${fillPairs.filter(!_._2.success)}"
+    )
+
+    val mem = new GMemModel(dut, latency = 12)
+    mem.mem(0x200) = 7777
+    val tas = Request(
+      pe = 0,
+      isLock = true,
+      tag = 0x200,
+      data = 999,
+      opcodeOverride = Some(2), // LockSetUnlockAndReturnCurrent
+      meta = 1
+    )
+    val parkedLock = Request(pe = 0, isLock = true, tag = 0x201, meta = 2)
+    val pending = mutable.Queue(tas, parkedLock)
+    val got = mutable.ArrayBuffer.empty[Response]
+    setRespReady(dut)
+    var cycles = 0
+    while (got.size < 2 && cycles < 2000) {
+      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head))
+      else driveNoReq(dut)
+      mem.beforeStep()
+      val accepted =
+        pending.nonEmpty && dut.io.req(0).ready.peek().litToBoolean
+      got ++= collectResponses(dut)
+      dut.clock.step()
+      mem.afterStep()
+      cycles += 1
+      if (accepted) pending.dequeue()
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      got.size == 2,
+      s"expected testAndSet + parked lock to both complete, got $got after $cycles cycles (wedged?)"
+    )
+    val tasResp = got.find(_.meta == 1).get
+    val lockResp = got.find(_.meta == 2).get
+    scalaAssert(
+      tasResp.success && tasResp.data == 7777,
+      s"testAndSet should return previous value 7777, got $tasResp"
+    )
+    scalaAssert(
+      mem.mem(0x200) == 999,
+      s"testAndSet should store its operand, got ${mem.mem(0x200)}"
+    )
+    scalaAssert(
+      lockResp.success,
+      s"parked lock should acquire the freed slot, got $lockResp"
+    )
+    logDone("store-full-amu-return-unblocks-parked-lock", params)
+  }
+
+  // Two back-to-back add-N atomics on the same address, returning the previous
+  // value and adding `addend` each time. addend=1 is the add-one special case.
+  private def runAddNReturnCurrent(
+      dut: LockServer,
+      params: Params,
+      addr: Int,
+      start: BigInt,
+      addend: BigInt
+  ): Unit = {
+    logStart(s"add-n-return-current addend=$addend", params)
     waitForInit(dut, params)
 
     val mem = new GMemModel(dut)
-    mem.mem(0x300) = 9
+    mem.mem(addr) = start
     val first = runRequests(
       dut,
       params,
-      Seq(lockAddOneReq(pe = 0, addr = 0x300)),
+      Seq(lockAddNReq(pe = 0, addr = addr, addend = addend)),
       mem = Some(mem)
     )
     val firstResp = first(0).head._2
     scalaAssert(
-      firstResp.success && firstResp.data == 9,
-      s"first add-one should return previous value 9, got $firstResp"
+      firstResp.success && firstResp.data == start,
+      s"first add-N should return previous value $start, got $firstResp"
     )
     scalaAssert(
-      mem.mem(0x300) == 10,
-      s"first add-one should increment memory to 10, got ${mem.mem(0x300)}"
+      mem.mem(addr) == start + addend,
+      s"first add-N should add $addend to memory (${start + addend}), got ${mem.mem(addr)}"
     )
 
     val retryResponses = mutable.ArrayBuffer.empty[Response]
@@ -825,7 +1249,7 @@ class LockServerTests
       val out = runRequests(
         dut,
         params,
-        Seq(lockAddOneReq(pe = 0, addr = 0x300)),
+        Seq(lockAddNReq(pe = 0, addr = addr, addend = addend)),
         mem = Some(mem)
       )
       val resp = out(0).head._2
@@ -836,17 +1260,17 @@ class LockServerTests
 
     scalaAssert(
       secondSucceeded,
-      s"second add-one should eventually succeed after retries, got $retryResponses"
+      s"second add-N should eventually succeed after retries, got $retryResponses"
     )
     scalaAssert(
-      retryResponses.last.data == 10,
-      s"successful second add-one should return previous value 10, got $retryResponses"
+      retryResponses.last.data == start + addend,
+      s"successful second add-N should return previous value ${start + addend}, got $retryResponses"
     )
     scalaAssert(
-      mem.mem(0x300) == 11,
-      s"second add-one should increment memory to 11, got ${mem.mem(0x300)}"
+      mem.mem(addr) == start + addend + addend,
+      s"second add-N should add $addend again (${start + addend + addend}), got ${mem.mem(addr)}"
     )
-    logDone("add-one-return-current", params)
+    logDone(s"add-n-return-current addend=$addend", params)
   }
 
   private def runAddrWLowerBitsForLocks(
@@ -885,7 +1309,7 @@ class LockServerTests
     val out = runRequests(
       dut,
       params,
-      Seq(lockAddOneReq(pe = 0, addr = 0x120)),
+      Seq(lockAddNReq(pe = 0, addr = 0x120)),
       mem = Some(mem)
     )
     val resp = out(0).head._2
@@ -898,11 +1322,15 @@ class LockServerTests
       s"addrW=8 add-one should write lower address 0x20, got ${mem.mem(0x20)}"
     )
     scalaAssert(
-      mem.arAddrs.contains(BigInt(0x20)) && !mem.arAddrs.contains(BigInt(0x120)),
+      mem.arAddrs.contains(BigInt(0x20)) && !mem.arAddrs.contains(
+        BigInt(0x120)
+      ),
       s"AR address should be truncated to 0x20, got ${mem.arAddrs}"
     )
     scalaAssert(
-      mem.awAddrs.contains(BigInt(0x20)) && !mem.awAddrs.contains(BigInt(0x120)),
+      mem.awAddrs.contains(BigInt(0x20)) && !mem.awAddrs.contains(
+        BigInt(0x120)
+      ),
       s"AW address should be truncated to 0x20, got ${mem.awAddrs}"
     )
     logDone("addrW-lower-bits-hbm", params)
@@ -920,13 +1348,13 @@ class LockServerTests
     val out = runRequests(
       dut,
       params,
-      Seq(lockAddOneReq(pe = 0, addr = 0x304, atomicModeBits = 2)),
+      Seq(lockAddNReq(pe = 0, addr = 0x304, atomicModeBits = 2)),
       mem = Some(mem)
     )
     val resp = out(0).head._2
     scalaAssert(
-      resp.success && resp.data == BigInt(5),
-      s"word add-one should return the selected upper word (5) right-justified, got $resp"
+      resp.success && resp.data == BigInt(0x5),
+      s"word add-one should return the selected previous word (lane 1 = 0x5) right-justified, got $resp"
     )
     scalaAssert(
       mem.mem(0x300) == BigInt("00000006aaaaaaaa", 16),
@@ -936,7 +1364,7 @@ class LockServerTests
   }
 
   // Reproduces HLS PE.cpp phase 2: every PE hammers the SAME address with
-  // blocking LockAddOneReturnCurrent, one request outstanding per PE (the next
+  // blocking LockAddNReturnCurrent (N=1), one request outstanding per PE (the next
   // is issued only after the previous response). Exercises the AMU forward +
   // self-injected-unlock release path under full contention -- the path the
   // single-PE add-one test never touches.
@@ -973,6 +1401,7 @@ class LockServerTests
         pe = pe,
         isLock = true,
         tag = addr,
+        data = 1, // add-N with N=1
         isBlocking = true,
         opcodeOverride = Some(5)
       )
@@ -1031,252 +1460,6 @@ class LockServerTests
     logDone(s"concurrent-blocking-add-one active=$activePes", params)
   }
 
-  // Faithful reproduction of BFS edgemap_process (hls-processing-elements/mfpga/
-  // BFS/BFS.cpp): each helper PE drives a SINGLE in-order request stream that
-  // INTERLEAVES two op kinds against one shared LockServer:
-  //   - non-blocking byte SET_AND_RETURN on a visited[] address (op 2, byte
-  //     mode). Multiple PEs hit the SAME visited tag -> real tag contention; the
-  //     winner is forwarded to its AMU and reads previous byte 0, the losers get
-  //     an immediate success=0 with no memory write.
-  //   - blocking ADD_ONE on the ONE shared nextFChar counter (op 5, dword mode),
-  //     maximally contended across all PEs.
-  // This is the exact mix the simplified add-one-only repro never exercises. The
-  // helper relies on STRICT in-order responses across that mix, so runRequests'
-  // per-PE in-order matching mirrors the PE's single inflight FIFO. A dropped or
-  // reordered response shows up as runRequests' "no response within N cycles"
-  // (i.e. the BFS hang), and the memory checks catch any lost/duplicated atomic.
-  private def runMixedVisitAndAppend(
-      dut: LockServer,
-      params: Params,
-      neighborsPerPe: Int,
-      sharedVisitedTags: Int
-  ): Unit = {
-    logStart(
-      s"mixed-visit-append neighborsPerPe=$neighborsPerPe shared=$sharedVisitedTags",
-      params
-    )
-    dut.clock.setTimeout(0)
-    waitForInit(dut, params)
-
-    val nextFCharAddr = 0x40000
-    val visitedBase = 0x10000
-    val counterStart = BigInt(1000)
-    val mem = new GMemModel(dut, latency = 8)
-    mem.mem(nextFCharAddr) = counterStart
-
-    // Build each PE's interleaved script. SET targets are drawn from a small
-    // shared pool so different PEs collide on the same visited byte, then every
-    // SET is chased by a blocking ADD_ONE -- the worst-case ordering pressure.
-    val perPeReqs = (0 until params.n).map { pe =>
-      (0 until neighborsPerPe).flatMap { k =>
-        val visitedTag = visitedBase + ((pe + k) % sharedVisitedTags) * 8
-        Seq(
-          Request(
-            pe = pe,
-            isLock = true,
-            tag = visitedTag,
-            data = 1,
-            isBlocking = false,
-            opcodeOverride = Some(2), // LockSetUnlockAndReturnCurrent
-            atomicModeBits = 1 // byte
-          ),
-          Request(
-            pe = pe,
-            isLock = true,
-            tag = nextFCharAddr,
-            isBlocking = true,
-            opcodeOverride = Some(5) // LockAddOneReturnCurrent
-          )
-        )
-      }
-    }
-    val allReqs = perPeReqs.flatten
-
-    // Generous bound; deadlock trips this and reports the still-pending PEs.
-    val maxCycles = 200 + allReqs.size * 400
-    val out = runRequests(dut, params, allReqs, maxCycles = maxCycles, mem = Some(mem))
-
-    // Every request got exactly one in-order response (runRequests asserts this;
-    // a BFS-style hang would already have failed above).
-    val pairs = out.values.flatten.toSeq
-    scalaAssert(
-      pairs.size == allReqs.size,
-      s"expected ${allReqs.size} responses, got ${pairs.size}"
-    )
-
-    // The shared counter must have been incremented exactly once per ADD_ONE,
-    // with no lost or double-counted atomics.
-    val addOnes = allReqs.count(_.tag == nextFCharAddr)
-    scalaAssert(
-      mem.mem(nextFCharAddr) == counterStart + addOnes,
-      s"nextFChar counter: got ${mem.mem(nextFCharAddr)}, expected ${counterStart + addOnes}"
-    )
-
-    // The returned slots from blocking ADD_ONE are the BFS next-frontier indices.
-    // They must be a contiguous, collision-free [start, start+addOnes) set -- the
-    // exact property BFS.cpp's append loop depends on for non-clobbering writes.
-    val addResp = out.values.flatten.collect {
-      case (r, resp) if r.tag == nextFCharAddr => resp.data
-    }.toSeq
-    scalaAssert(
-      addResp.toSet.size == addResp.size,
-      s"ADD_ONE returned duplicate slots (frontier clobber): ${addResp.sorted}"
-    )
-    scalaAssert(
-      addResp.toSet == (counterStart.toInt until counterStart.toInt + addOnes).map(BigInt(_)).toSet,
-      s"ADD_ONE slots not the contiguous range [$counterStart, ${counterStart + addOnes}): ${addResp.sorted}"
-    )
-
-    // Every visited byte that any PE set must read back as 1 (test-and-set landed
-    // exactly once regardless of which PE won the race).
-    for (t <- 0 until sharedVisitedTags) {
-      val tag = visitedBase + t * 8
-      val base = tag & ~0x7
-      val byteShift = (tag & 0x7) * 8
-      val b = (mem.mem(base) >> byteShift) & 0xff
-      scalaAssert(
-        b == 1,
-        s"visited byte @0x${tag.toHexString} should be 1, got $b"
-      )
-    }
-
-    // Exactly one PE may observe the 0->1 transition per visited tag (previous
-    // byte 0 AND success); everyone else either lost the race (success=0) or
-    // arrived later (previous byte 1).
-    for (t <- 0 until sharedVisitedTags) {
-      val tag = visitedBase + t * 8
-      val byteShift = (tag & 0x7) * 8
-      val firstWinners = out.values.flatten.count {
-        case (r, resp) =>
-          r.tag == tag && resp.success && ((resp.data >> byteShift) & 0xff) == 0
-      }
-      scalaAssert(
-        firstWinners == 1,
-        s"visited tag 0x${tag.toHexString}: expected exactly one 0->1 winner, got $firstWinners"
-      )
-    }
-
-    logDone(
-      s"mixed-visit-append neighborsPerPe=$neighborsPerPe shared=$sharedVisitedTags",
-      params
-    )
-  }
-
-  // Reproduces the HLS PE.cpp phase-2 hang: all 8 PEs clear the barrier at the
-  // same time and then hammer ONE address with blocking LockAddOneReturnCurrent,
-  // one request outstanding per PE. This is the deadlock case -- the single-PE
-  // and 2-PE variants pass, but full contention wedges the LockServer (no
-  // response output for `stallLimit` cycles -> the test fails with DEADLOCK...).
-  // lockTraceCsv prints acquire/release events so the last activity before the
-  // wedge is visible in the test log.
-  it should "DEADLOCK REPRO: 8 PEs concurrent blocking add-one on one address (n=8 p=4 tagStoreSize=32)" in {
-    val params = mixedParams
-    test(
-      new LockServer(
-        params.n,
-        params.p,
-        params.tagStoreSize,
-        lockTraceCsv = true
-      )
-    ) { dut =>
-      runConcurrentBlockingAddOne(dut, params, perPe = 3, activePes = params.n)
-    }
-  }
-
-  // BFS edgemap_process at the real HW lockConfig: 8 PEs interleaving
-  // non-blocking byte visited test-and-set (contended tags) with blocking
-  // ADD_ONE on the single nextFChar counter, one in-order stream per PE. This is
-  // the closest sim analogue of the workload that hangs on as-skitter.
-  it should "BFS MIX: 8 PEs interleave contended visited set + shared blocking add-one (n=8 p=4 tagStoreSize=64)" in {
-    val params = bfsHwParams
-    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-      runMixedVisitAndAppend(
-        dut,
-        params,
-        neighborsPerPe = 3,
-        sharedVisitedTags = 8
-      )
-    }
-  }
-
-  // Reproduces the real-helper case my other tests miss: a PE is SLOW to drain its
-  // responses (fromLock is only read in edgemap_process's P1, so resp.ready drops
-  // whenever the helper is staging/sending/writing memory). Each PE streams
-  // back-to-back FORWARDED ops (byte SET to its own distinct tags -> every one goes
-  // to the AMU). When a forwarded op's AMU return sets respValid(q) AND unmasks the
-  // PE, the next op can resolve before the helper drained the first -> the 1-deep
-  // per-PE response buffer overflows and a response is DROPPED (the helper then
-  // waits forever for it). The LockServer's own assert
-  // ("Response buffer overflow...") fires here; in real hardware (asserts stripped)
-  // it silently drops, which is the BFS helper hang. A correct LockServer must not
-  // need resp.ready to be continuously high.
-  private def runSlowDrainNoResponseLoss(
-      dut: LockServer,
-      params: Params,
-      opsPerPe: Int,
-      activePes: Int,
-      readyLowCycles: Int
-  ): Unit = {
-    logStart(s"slow-drain active=$activePes readyLow=$readyLowCycles", params)
-    dut.clock.setTimeout(0)
-    waitForInit(dut, params)
-    val mem = new GMemModel(dut, latency = 6)
-
-    val pes = 0 until activePes
-    val nextSeq = Array.fill(params.n)(0)         // next op index per PE (drives tag)
-    val sent = Array.fill(params.n)(0)            // requests accepted into the server
-    val got = Array.fill(params.n)(0)             // responses consumed
-    def pendingDone = pes.forall(pe => sent(pe) == opsPerPe && got(pe) == opsPerPe)
-
-    var cycles = 0
-    var lastProgress = 0
-    val stallLimit = 3000
-    while (!pendingDone && (cycles - lastProgress) < stallLimit && cycles < 200000) {
-      // Drive a forwarded byte-SET to a distinct per-PE tag whenever this PE still
-      // has ops to send (one outstanding at a time is enough; the server masks).
-      val driving = pes.collect {
-        case pe if sent(pe) < opsPerPe =>
-          Request(pe = pe, isLock = true, tag = 0x10000 + pe * 0x1000 + nextSeq(pe),
-            data = 1, isBlocking = false, opcodeOverride = Some(2), atomicModeBits = 1)
-      }.toSeq
-      driveReqs(dut, driving)
-      mem.beforeStep()
-
-      // resp.ready LOW for readyLowCycles out of every (readyLowCycles+1): the PE
-      // drains only occasionally -- the whole point of the test.
-      val drainNow = (cycles % (readyLowCycles + 1)) == readyLowCycles
-      for (i <- 0 until dut.n) dut.io.resp(i).ready.poke((drainNow).B)
-
-      val accepted = driving.filter(r => dut.io.req(r.pe).ready.peek().litToBoolean)
-      if (drainNow) {
-        for (resp <- collectResponses(dut)) {
-          got(resp.pe) += 1; lastProgress = cycles
-        }
-      }
-
-      dut.clock.step()
-      mem.afterStep()
-      cycles += 1
-      for (r <- accepted) { sent(r.pe) += 1; nextSeq(r.pe) += 1; lastProgress = cycles }
-    }
-    driveNoReq(dut)
-    for (i <- 0 until dut.n) dut.io.resp(i).ready.poke(true.B)
-
-    scalaAssert(
-      pendingDone,
-      s"LOST RESPONSE / stall after $cycles cycles: sent=${sent.mkString(",")} got=${got.mkString(",")}"
-    )
-    logDone(s"slow-drain active=$activePes readyLow=$readyLowCycles", params)
-  }
-
-  it should "RESP-OVERFLOW REPRO: no response lost when PEs drain slowly (n=8 p=4 tagStoreSize=64)" in {
-    val params = bfsHwParams
-    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-      runSlowDrainNoResponseLoss(dut, params, opsPerPe = 6, activePes = params.n,
-        readyLowCycles = 20)
-    }
-  }
-
   it should "use only lower addrW bits for lock tags" in {
     val params = smallParams
     test(new LockServer(params.n, params.p, params.tagStoreSize, addrW = 8)) {
@@ -1295,8 +1478,36 @@ class LockServerTests
 
   it should "decode packet atomicMode bits through to HBM atomics" in {
     val params = smallParams
-    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+    testDutVerilator(params) { dut =>
       runAtomicModeWordFromPacket(dut, params)
+    }
+  }
+
+  it should "support single-select mode when n equals p" in {
+    val params = Params(n = 4, p = 4, tagStoreSize = 8)
+    test(
+      new LockServer(
+        params.n,
+        params.p,
+        params.tagStoreSize,
+        singleSelect = true
+      )
+    ) { dut =>
+      runDistinctTagsNoContention(dut, params)
+    }
+  }
+
+  it should "support single-select mode when n is only divisible by p" in {
+    val params = Params(n = 6, p = 2, tagStoreSize = 8)
+    test(
+      new LockServer(
+        params.n,
+        params.p,
+        params.tagStoreSize,
+        singleSelect = true
+      )
+    ) { dut =>
+      runDistinctTagsNoContention(dut, params)
     }
   }
 
@@ -1304,25 +1515,21 @@ class LockServerTests
     val tag = s"n=${params.n} p=${params.p} tagStoreSize=${params.tagStoreSize}"
 
     it should s"lock, unlock, then relock the same tag from one PE ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-        runLockUnlockRelock(dut, params)
-      }
+      testDutVerilator(params) { dut => runLockUnlockRelock(dut, params) }
     }
 
     it should s"grant every distinct-tag lock with no contention ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+      testDutVerilator(params) { dut =>
         runDistinctTagsNoContention(dut, params)
       }
     }
 
     it should s"let exactly one PE win when all PEs lock the same tag the same cycle ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-        runSameTagSingleCycle(dut, params)
-      }
+      testDutVerilator(params) { dut => runSameTagSingleCycle(dut, params) }
     }
 
     it should s"grant locks/unlocks for distinct tags across rounds ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+      testDutVerilator(params) { dut =>
         runMixedDistinctNoConflict(dut, params)
       }
     }
@@ -1332,54 +1539,92 @@ class LockServerTests
     val tag = s"n=${params.n} p=${params.p} tagStoreSize=${params.tagStoreSize}"
 
     it should s"only grant one lock when all PEs hammer the same tag for many cycles ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+      testDutVerilator(params) { dut =>
         runSameTagRepeated(dut, params, repeats = 4)
       }
     }
 
     it should s"release contention after an unlock so the next race can be won ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+      testDutVerilator(params) { dut =>
         runUnlockReleasesContention(dut, params)
       }
     }
 
     it should s"accept unlock for an already-released tag ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-        runUnlockOfUnlocked(dut, params)
-      }
+      testDutVerilator(params) { dut => runUnlockOfUnlocked(dut, params) }
     }
 
     it should s"block locks but pass unlocks once the store is full, and unblock after release ($tag)" in {
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-        runFillStoreBlocksLocks(dut, params)
-      }
+      testDutVerilator(params) { dut => runFillStoreBlocksLocks(dut, params) }
     }
   }
 
   it should "eventually grant a free lock when the tag store has room (n=8 p=4 tagStoreSize=16)" in {
     val params = mediumParams
-    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+    testDutVerilator(params) { dut =>
       runFreeLockEventuallyUsesAvailableRoom(dut, params)
     }
   }
 
-  it should "return the current memory value and increment it for add-one atomics (n=8 p=4 tagStoreSize=16)" in {
+  it should "return the current memory value and increment it for add-N atomics with N=1 (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runAddNReturnCurrent(dut, params, addr = 0x300, start = 9, addend = 1)
+    }
+  }
+
+  it should "return the current memory value and add N for add-N atomics with N != 1 (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runAddNReturnCurrent(dut, params, addr = 0x300, start = 9, addend = 7)
+    }
+  }
+
+  it should "pipeline a burst of distinct-tag locks from one PE (n=8 p=4 tagStoreSize=32)" in {
+    val params = mixedParams
+    testDutVerilator(params) { dut =>
+      runPipelinedLockBurst(dut, params)
+    }
+  }
+
+  it should "stream pipelined testAndSet atomics from one PE (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runPipelinedTestAndSetStream(dut, params)
+    }
+  }
+
+  it should "drain pipelined blocking locks once their tags are released (n=8 p=4 tagStoreSize=32)" in {
+    val params = mixedParams
+    testDutVerilator(params) { dut =>
+      runPipelinedBlockingLocksDrain(dut, params)
+    }
+  }
+
+  it should "stop accepting requests when the response queue is backed up (n=8 p=4 tagStoreSize=64)" in {
+    val params = Params(n = 8, p = 4, tagStoreSize = 64)
+    testDutVerilator(params) { dut =>
+      runResponseBackpressureBlocksAccept(dut, params)
+    }
+  }
+
+  it should "deliver an AMU return past a parked slotless lock when the store is full (n=8 p=4 tagStoreSize=16)" in {
     val params = mediumParams
     test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-      runAddOneReturnCurrent(dut, params)
+      runStoreFullAmuReturnUnblocksParkedLock(dut, params)
     }
   }
 
   it should "retry a blocking lock while the tag is held, then grant it after unlock (n=8 p=4 tagStoreSize=16)" in {
     val params = mediumParams
-    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+    testDutVerilator(params) { dut =>
       runBlockingLockWaitsForRelease(dut, params)
     }
   }
 
   it should "ignore the blocking bit on unlock requests (n=8 p=4 tagStoreSize=16)" in {
     val params = mediumParams
-    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+    testDutVerilator(params) { dut =>
       runBlockingBitIgnoredForUnlock(dut, params)
     }
   }
@@ -1387,9 +1632,24 @@ class LockServerTests
   for (freePe <- 4 until 8) {
     it should s"eventually select PE$freePe in the same input-arbiter bucket (n=32 p=4 tagStoreSize=16)" in {
       val params = arbiterFairnessParams
-      test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
-        runSameBucketPeEventuallySelected(dut, params, freePe)
-      }
+      test(new LockServer(params.n, params.p, params.tagStoreSize))
+        .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
+          runSameBucketPeEventuallySelected(dut, params, freePe)
+        }
+    }
+  }
+
+  // Reproduces the HLS PE.cpp phase-2 pressure case: all 8 PEs clear the barrier
+  // at the same time and then hammer ONE address with blocking
+  // LockAddNReturnCurrent (N=1), one request outstanding per PE. This used to
+  // wedge when an AMU return was trapped behind a replayed lock waiting for a
+  // free tag-store slot. Keep this last because it is the slowest regression.
+  it should "avoid AMU-return deadlock under 8-PE blocking add-one contention (n=8 p=4 tagStoreSize=32)" in {
+    val params = mixedParams
+    testDutVerilator(
+      params
+    ) { dut =>
+      runConcurrentBlockingAddOne(dut, params, perPe = 3, activePes = params.n)
     }
   }
 }

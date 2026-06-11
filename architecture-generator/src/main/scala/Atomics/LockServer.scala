@@ -17,15 +17,29 @@ import chext.amba.axi4.full.ConnectOp._
 //   bit  132     = blocking lock request
 //   bits 134:133 = atomic mode (00 preserves the old 64-bit behavior)
 //   bit  135     = reserved flag
+//   bits 143:136 = sender metadata, echoed back in the response so a PE with
+//                  several requests in flight can correlate completions
 // Response packet skeleton:
-//   bit 0 = current success status
-// Remaining request/response bits are reserved for future HBM-backed atomics.
+//   bit  0       = current success status
+//   bits 127:64  = previous memory value (HBM-backed atomic ops only)
+//   bits 143:136 = metadata echoed from the request
+//
+// Requests from one PE may complete out of issue order (a retried request
+// finishes after a younger one that did not retry). PEs that need ordering
+// must wait for the response before issuing a dependent request; in
+// particular, never issue an operation on a tag while an operation on the
+// same tag from the same PE is still unresolved.
 
 object Operation extends ChiselEnum {
+  // UnlockAndRespond is internal-only (not reachable from decode): when a lane's
+  // AMU finishes a forwarded op, the returned request is re-injected with this
+  // opcode. It releases the held tag like an unlock and delivers the AMU's
+  // result to the PE when it resolves, so the PE only sees the response once
+  // the tag is actually free.
   val Unlock, Lock, LockSetUnlockAndReturnCurrent,
       LockSetIfGreaterUnlockAndReturnCurrent,
-      LockSetIfSignedLessUnlockAndReturnCurrent, LockAddOneReturnCurrent,
-      UnlockNoResponse = Value
+      LockSetIfSignedLessUnlockAndReturnCurrent, LockAddNReturnCurrent,
+      UnlockNoResponse, UnlockAndRespond = Value
 
   def decode(bits: UInt): Operation.Type = {
     MuxLookup(bits, Unlock)(
@@ -35,7 +49,7 @@ object Operation extends ChiselEnum {
         "b0010".U -> LockSetUnlockAndReturnCurrent,
         "b0011".U -> LockSetIfGreaterUnlockAndReturnCurrent,
         "b0100".U -> LockSetIfSignedLessUnlockAndReturnCurrent,
-        "b0101".U -> LockAddOneReturnCurrent,
+        "b0101".U -> LockAddNReturnCurrent,
         "b0111".U -> UnlockNoResponse
       )
     )
@@ -46,12 +60,13 @@ object Operation extends ChiselEnum {
   //   myReq.operation.isLock
   implicit class OperationOps(val op: Operation.Type) {
     def isLock: Bool =
-      op === Lock || op === LockSetUnlockAndReturnCurrent || op === LockSetIfGreaterUnlockAndReturnCurrent || op === LockSetIfSignedLessUnlockAndReturnCurrent || op === LockAddOneReturnCurrent
+      op === Lock || op === LockSetUnlockAndReturnCurrent || op === LockSetIfGreaterUnlockAndReturnCurrent || op === LockSetIfSignedLessUnlockAndReturnCurrent || op === LockAddNReturnCurrent
 
-    def isUnlock: Bool = op === Unlock || op === UnlockNoResponse
+    def isUnlock: Bool =
+      op === Unlock || op === UnlockNoResponse || op === UnlockAndRespond
 
     def shouldForwardToMemoryUnit: Bool =
-      op === LockSetUnlockAndReturnCurrent || op === LockSetIfGreaterUnlockAndReturnCurrent || op === LockSetIfSignedLessUnlockAndReturnCurrent || op === LockAddOneReturnCurrent
+      op === LockSetUnlockAndReturnCurrent || op === LockSetIfGreaterUnlockAndReturnCurrent || op === LockSetIfSignedLessUnlockAndReturnCurrent || op === LockAddNReturnCurrent
   }
 }
 
@@ -79,6 +94,8 @@ class RequestType(n: Int, addrW: Int = 64) extends Bundle {
   val requestingPE = UInt(log2Ceil(n).W)
   val isBlocking = Bool()
   val atomicMode = AtomicMode()
+  // Sender-defined correlation id, echoed back in the response.
+  val meta = UInt(8.W)
 }
 
 class WriteIndexEntry(tagStoreSize: Int) extends Bundle {
@@ -87,8 +104,8 @@ class WriteIndexEntry(tagStoreSize: Int) extends Bundle {
 }
 
 object LockServer {
-  val ReqWidth = 136
-  val RespWidth = 136
+  val ReqWidth = 144
+  val RespWidth = 144
 }
 
 class LockServer(
@@ -96,18 +113,26 @@ class LockServer(
     val p: Int = 32,
     val tagStoreSize: Int = 128,
     val addrW: Int = 64,
-    val lockTraceCsv: Boolean = false
+    val lockTraceCsv: Boolean = false,
+    val singleSelect: Boolean = false,
+    // Per-PE in-flight credit budget: how many requests a PE may have unresolved
+    // inside the server (pipeline + replay queue + AMU + response queue). Bounds
+    // every per-PE structure, so all of them are provably overflow-free.
+    val inflightDepth: Int = 5
 ) extends Module {
   import LockServer._
   require(addrW > 0 && addrW <= 64, "addrW must be in the range [1, 64]")
+  require(inflightDepth >= 1, "inflightDepth must be at least 1")
 
   // One atomic memory unit per pipeline lane (p). Each AMU is an AXI master to
   // HBM; they share the single HBM port through chext's N->1 AXI mux. The mux
   // appends log2Ceil(p) bits to the AXI id, so the HBM-facing config is wider.
-  // AXI id = AMU table slot index (log2Ceil(n/p)); the mux appends the lane index.
+  // AXI id = AMU table slot index; the mux appends the lane index.
+  // Each lane serves n/p PEs with up to inflightDepth forwards outstanding each.
+  val amuTableSize = ((n + p - 1) / p) * inflightDepth
   val amuAxiCfg =
     axi4.Config(
-      wId = log2Ceil(n / p),
+      wId = math.max(1, log2Ceil(amuTableSize)),
       wAddr = addrW,
       wData = 64,
       read = true,
@@ -124,15 +149,22 @@ class LockServer(
 
   val gmemMux = Module(new axi4.full.components.Mux(gmemMuxCfg))
   val atomicMemoryUnits =
-    Seq.tabulate(p)(i =>
-      Module(new AtomicMemoryUnit(n, p, i, addrW, amuAxiCfg))
+    Seq.tabulate(p)(_ =>
+      Module(new AtomicMemoryUnit(n, amuTableSize, addrW, amuAxiCfg))
     )
-  // Worst case a single lane's FIFO must hold every request routed to it.
-  val amuFifoDepth = (n + p - 1) / p
+  // Worst case a single lane's FIFO must hold every request routed to it:
+  // n/p PEs times inflightDepth forwards each.
+  val amuFifoDepth = amuTableSize
   val amuFifos =
     Seq.fill(p)(
       Module(new Queue(new RequestType(n, addrW), entries = amuFifoDepth))
     )
+  // AMU returns are urgent unlock+response operations: if they sit behind a
+  // replayed lock that is waiting for a free tag slot, the return that would
+  // free the slot can be head-of-line blocked. Keep them in lane-local queues
+  // and inject them before ordinary arbiter traffic.
+  val amuReturnQueues =
+    Seq.fill(p)(Module(new Queue(new RequestType(n, addrW), entries = 2)))
 
   for (i <- 0 until p) {
     // FIFO output -> AMU input. (FIFO inputs and AMU outputs left unwired.)
@@ -166,27 +198,39 @@ class LockServer(
 
   val inputQueues =
     Seq.fill(n)(Module(new Queue(new RequestType(n, addrW), entries = 2)))
-  // In-flight scoreboard, indexed by queue (PE). A queue is masked from the arbiter
-  // from the cycle its head is selected until that request resolves at cycle 3.
-  // Without it, the 2-cycle arbiter re-samples a still-unpopped head and double-
-  // processes it. Set/clear are disjoint per queue (a masked queue can't be
-  // re-selected), so there is no set-vs-clear race.
-  val inputQueuesViewed = RegInit(VecInit(Seq.fill(n)(false.B)))
-  // Per-PE override: set when an AMU returns a forwarded request, cleared when the
-  // arbiter re-accepts that PE. While set, the arbiter sees the queue head as an
-  // UnlockNoResponse, so the re-injected request flows through the unlock stages
-  // (releasing the held tag) without producing a second PE response.
-  val unrOverride = RegInit(VecInit(Seq.fill(n)(false.B)))
-  // Ports [0, p) carry cycle-3 lane responses; ports [p, 2p) carry AMU responses.
-  // Each PE has at most one in-flight request, so each response port only needs a
-  // one-entry holding register rather than a general multi-port queue.
-  val responsePortValid = Wire(Vec(2 * p, Bool()))
-  val responsePortPe = Wire(Vec(2 * p, UInt(log2Ceil(n).W)))
-  val responsePortData = Wire(Vec(2 * p, UInt(RespWidth.W)))
-  for (i <- 0 until 2 * p) {
-    responsePortValid(i) := false.B
-    responsePortPe(i) := 0.U
-    responsePortData(i) := 0.U
+
+  // Per-PE pipelining state. A request is consumed (popped) the cycle the
+  // arbiter selects it; if it cannot complete at cycle 3 it is re-enqueued into
+  // its PE's replay queue and tried again. The credit counter `inflight` tracks
+  // requests from admission until their response leaves io.resp (or until
+  // cycle 3 for ops with no response); admission stops at inflightDepth, which
+  // bounds every per-PE structure:
+  //  - replay queue: each credited request occupies at most one slot at a time
+  //    (it is either in the pipe, in the replay queue, at the AMU, or in the
+  //    urgent AMU return queue, or in the response queue), so depth
+  //    inflightDepth can never overflow.
+  //  - response queue: at most one response per credit, released on deq.
+  // Known deadlock (deferred to PE authors by contract): a PE that fills all
+  // its credits with blocking locks whose release depends on its own later
+  // unlock wedges itself -- the unlock can never be admitted.
+  val replayQueues =
+    Seq.fill(n)(
+      Module(new Queue(new RequestType(n, addrW), entries = inflightDepth))
+    )
+  val respQueues =
+    Seq.fill(n)(Module(new Queue(UInt(RespWidth.W), entries = inflightDepth)))
+  val inflight =
+    RegInit(VecInit(Seq.fill(n)(0.U(log2Ceil(inflightDepth + 1).W))))
+
+  // Static PE -> lane mapping (mirrors the arbiter's bucketing): a PE lives in
+  // exactly one bucket, and buckets `l` and `p + l` both resolve on lane `l`.
+  // Everything a PE produces or receives therefore flows through one lane --
+  // its retries, its AMU forwards, and its responses -- so all per-PE fanout
+  // below is lane-local (p independent 1-to-(n/p) fanouts, never p-to-n).
+  val bucketCount = if (singleSelect) p else 2 * p
+  def laneOfPe(pe: Int): Int = {
+    val bucket = pe / (n / bucketCount)
+    if (bucket < p) bucket else bucket - p
   }
 
   for (i <- 0 until n) {
@@ -203,28 +247,46 @@ class LockServer(
     enq.bits.requestingPE := i.U
     enq.bits.isValid := true.B
     enq.bits.atomicMode := AtomicMode.decode(req.bits.tdata(134, 133))
+    enq.bits.meta := req.bits.tdata(143, 136)
   }
 
   val arbiter = Module(
-    new InputArbiter(n = n, p = p, tagStoreSize = tagStoreSize, addrW = addrW)
+    new InputArbiter(
+      n = n,
+      p = p,
+      tagStoreSize = tagStoreSize,
+      addrW = addrW,
+      singleSelect = singleSelect
+    )
   )
   arbiter.io.availableSlots := availableTagTracker.io.selected_slots
   availableTagTracker.io.consumed := arbiter.io.consumedSlots
 
+  // Arbiter feed: the replay queue drains strictly before the main input queue
+  // (a replayed request already holds a credit; fresh requests need a free
+  // credit to be admitted). The arbiter captures the request bits into its own
+  // registers on the sameCycleSelectedMask cycle, so popping at selection is
+  // safe -- a held/stalled selection replays from the arbiter's copy.
   for (i <- 0 until n) {
-    val deq = inputQueues(i).io.deq
-    arbiter.io.requests(i).valid := deq.valid && !inputQueuesViewed(i)
-    arbiter.io.requests(i).bits := deq.bits
-    when(unrOverride(i)) {
-      arbiter.io.requests(i).bits.operation := Operation.UnlockNoResponse
-    }
+    val replay = replayQueues(i).io.deq
+    val main = inputQueues(i).io.deq
+    val useReplay = replay.valid
+    arbiter.io.requests(i).valid :=
+      useReplay || (main.valid && inflight(i) < inflightDepth.U)
+    arbiter.io.requests(i).bits := Mux(useReplay, replay.bits, main.bits)
+    replay.ready := arbiter.io.sameCycleSelectedMask(i) && useReplay
+    main.ready := arbiter.io.sameCycleSelectedMask(i) && !useReplay
   }
 
-  // Take the results of the arbiter and latch them.
-  // Override isValid from the arbiter's grant so empty slots don't poison comparisons.
+  // Take the results of the arbiter and latch them. Lane-local AMU returns have
+  // priority; while one is present, the arbiter holds any ordinary selection for
+  // that lane so no input/replay request is consumed and dropped.
   val arbiterOut = Wire(Vec(p, new RequestType(n, addrW)))
   for (i <- 0 until p) {
-    arbiterOut(i) := arbiter.io.selectedRequests(i)
+    val urgentReturn = amuReturnQueues(i).io.deq
+    arbiter.io.laneBlocked(i) := urgentReturn.valid
+    urgentReturn.ready := true.B
+    arbiterOut(i) := Mux(urgentReturn.valid, urgentReturn.bits, arbiter.io.selectedRequests(i))
   }
 
   val emptyWriteIndex = 0.U.asTypeOf(new WriteIndexEntry(tagStoreSize))
@@ -423,157 +485,144 @@ class LockServer(
     cycle3indices(i).index(availableTagTracker.entrySize - 1, 0)
   )
 
-  // Resolve selected requests and present completed responses to the one-entry
-  // per-PE response buffers below.
-  val laneReal = Wire(Vec(p, Bool())) // lane carries a real request
-  val lanePop = Wire(Vec(p, Bool())) // request is done (pop its queue)
-  val lanePe = Wire(Vec(p, UInt(log2Ceil(n).W))) // source queue of the request
+  // Resolve selected requests. Each real lane request takes exactly one of
+  // four exits:
+  //  - retry: re-enqueue into its PE's replay queue (no response yet)
+  //  - forward: hand to this lane's AMU (the response comes later, when the
+  //    AMU's return flows back through as an UnlockAndRespond)
+  //  - silent: complete with no response (external UnlockNoResponse)
+  //  - respond: complete with a response into its PE's response queue
+  val laneRespond = Wire(Vec(p, Bool()))
+  val laneRetry = Wire(Vec(p, Bool()))
+  val laneSilent = Wire(Vec(p, Bool()))
+  val laneRespData = Wire(Vec(p, UInt(RespWidth.W)))
   for (i <- 0 until p) {
-    val pe = cycle3requests(i).requestingPE
-    val isReal = cycle3requests(i).isValid
+    val req3 = cycle3requests(i)
+    val isReal = req3.isValid
+    val op = req3.operation
     // Unlock always succeeds; lock succeeds iff no conflict was detected.
-    val success =
-      cycle3requests(i).operation.isUnlock || !cycle3failures(i)
+    val success = op.isUnlock || !cycle3failures(i)
     // Retry without a response when a lock has no store slot, or when a blocking
     // lock finds the tag occupied/contended.
-    val blockingConflict =
-      cycle3requests(i).operation.isLock && cycle3requests(i).isBlocking &&
-        cycle3failures(i)
-    val try_again =
-      (cycle3requests(i).operation.isLock && !cycle3failures(
-        i
-      ) && !cycle3indices(i).valid) || blockingConflict
+    val blockingConflict = op.isLock && req3.isBlocking && cycle3failures(i)
+    val lockNoSlot = op.isLock && !cycle3failures(i) && !cycle3indices(i).valid
+    // An unlock that tag-matches an in-flight committing lock but misses the
+    // store would otherwise "succeed" while releasing nothing: the lock only
+    // writes the store at its own cycle 3, after this unlock's cycle-1 compare.
+    // Send it around again so it finds the committed entry. (A lock and an
+    // unlock for the same tag selected the same cycle still race; same-PE that
+    // close is impossible, and cross-PE it is an inherently racy program --
+    // unchanged from the unpipelined design.)
+    val unlockMissedWriter = op.isUnlock && cycle2ComparisonCompacted(i) &&
+      !storageComparisonReduced(i)
+    // The three retry causes and forwardSuccess are pairwise disjoint:
+    // blockingConflict needs a failure, lockNoSlot needs a missing slot, and
+    // unlockMissedWriter is not a lock; commitsWrite needs the opposite of all.
+    val try_again = lockNoSlot || blockingConflict || unlockMissedWriter
 
     // A forwardable lock that committed is handed to its AMU instead of being
-    // answered now: keep the tag held, stay masked, don't pop, send no response.
+    // answered now: keep the tag held, send no response.
     val forwardSuccess =
-      commitsWrite(i) && cycle3requests(i).operation.shouldForwardToMemoryUnit
-    // The self-injected unlock that releases a forwarded op produces no response
-    // (the PE already got its answer when the AMU returned).
-    val isNoRespUnlock =
-      cycle3requests(i).operation === Operation.UnlockNoResponse
+      commitsWrite(i) && op.shouldForwardToMemoryUnit
 
     // Forwarded ops go into this lane's AMU FIFO (lane i -> AMU i). The FIFO is
     // sized for the worst case, so it must always have room on a commit.
     amuFifos(i).io.enq.valid := forwardSuccess
-    amuFifos(i).io.enq.bits := cycle3requests(i)
+    amuFifos(i).io.enq.bits := req3
     assert(
       !forwardSuccess || amuFifos(i).io.enq.ready,
       "AMU FIFO overflow: a forwardable lock committed but its FIFO was full"
     )
 
-    responsePortPe(i) := pe
-    responsePortData(i) := success.asUInt
-    // Empty lanes, retries, forwarded ops, and the release unlock send nothing.
-    responsePortValid(i) := isReal && !try_again && !forwardSuccess &&
-      !isNoRespUnlock
-
-    laneReal(
-      i
-    ) := isReal && !forwardSuccess // forwards stay masked until the AMU returns
-    lanePop(i) := isReal && !try_again && !forwardSuccess
-    lanePe(i) := pe
+    laneRetry(i) := isReal && try_again
+    laneSilent(i) := isReal && !try_again && !forwardSuccess &&
+      op === Operation.UnlockNoResponse
+    laneRespond(i) := isReal && !try_again && !forwardSuccess &&
+      op =/= Operation.UnlockNoResponse
+    // Response layout: bit 0 = success, bits 127:64 = previous memory value
+    // (AMU-backed ops only), bits 143:136 = echoed request metadata.
+    laneRespData(i) := Cat(
+      req3.meta,
+      0.U(8.W),
+      Mux(op === Operation.UnlockAndRespond, req3.data, 0.U(64.W)),
+      0.U(63.W),
+      success
+    )
   }
 
-  // AMU responses use the upper response ports [p, 2p).
-  // Format: status=1 in bits[63:0], returned value in bits[127:64], bits[135:128]
-  // left as a placeholder. AMU i targets the PE carried in its returned request.
+  // Registered boundary between the cycle-3 resolution logic and the per-PE
+  // queue fanout: the conflict logic stays local to its stage, and only these
+  // registered signals cross into the per-PE region.
+  val laneRespondReg = RegNext(laneRespond, VecInit(Seq.fill(p)(false.B)))
+  val laneRetryReg = RegNext(laneRetry, VecInit(Seq.fill(p)(false.B)))
+  val laneSilentReg = RegNext(laneSilent, VecInit(Seq.fill(p)(false.B)))
+  val laneRespDataReg =
+    RegNext(laneRespData, VecInit(Seq.fill(p)(0.U(RespWidth.W))))
+  val laneReqReg = Seq.tabulate(p)(i =>
+    RegNext(cycle3requests(i), 0.U.asTypeOf(new RequestType(n, addrW)))
+  )
+
+  // AMU returns re-enter through the lane-local urgent return queue as
+  // UnlockAndRespond ops that release the held tag and deliver the result at
+  // their own cycle 3.
+  val amuReturn = Seq.tabulate(p) { i =>
+    val ret = Wire(new RequestType(n, addrW))
+    ret := atomicMemoryUnits(i).io.resp.bits
+    ret.operation := Operation.UnlockAndRespond
+    ret.isValid := true.B
+    ret
+  }
   for (i <- 0 until p) {
     val r = atomicMemoryUnits(i).io.resp
-    responsePortValid(p + i) := r.valid
-    responsePortPe(p + i) := r.bits.requestingPE
-    responsePortData(p + i) := Cat(0.U(8.W), r.bits.data, 1.U(64.W))
+    amuReturnQueues(i).io.enq.valid := r.valid
+    amuReturnQueues(i).io.enq.bits := amuReturn(i)
+    r.ready := amuReturnQueues(i).io.enq.ready
   }
 
-  // Pipeline producer ports before the PE response crossbar. This keeps the
-  // conflict/AMU completion logic local to its producer cycle and gives Vivado a
-  // registered boundary before the 2*p-to-n fanout.
-  val responsePortValidReg = RegNext(
-    responsePortValid,
-    VecInit(Seq.fill(2 * p)(false.B))
-  )
-  val responsePortPeReg = RegNext(
-    responsePortPe,
-    VecInit(Seq.fill(2 * p)(0.U(log2Ceil(n).W)))
-  )
-  val responsePortDataReg = RegNext(
-    responsePortData,
-    VecInit(Seq.fill(2 * p)(0.U(RespWidth.W)))
-  )
-
-  // Per-PE: did an AMU return a forwarded request for this PE this cycle? At most
-  // one AMU can (each PE has a single in-flight forward), so this is collision-free.
-  val amuRespondedFor = Wire(Vec(n, Bool()))
+  // Per-PE queue feeds. All signals here come from the PE's own lane, so this
+  // is p independent 1-to-(n/p) fanouts rather than a p-to-n crossbar, and a
+  // PE's replay/response queues each see at most one enqueue per cycle by
+  // construction. AMU returns bypass these replay queues through the lane-local
+  // urgent return path above.
   for (q <- 0 until n) {
-    amuRespondedFor(q) := (0 until p)
-      .map { i =>
-        val r = atomicMemoryUnits(i).io.resp
-        r.valid && (r.bits.requestingPE === q.U)
-      }
-      .reduce(_ || _)
-  }
+    val l = laneOfPe(q)
+    val peHere = laneReqReg(l).requestingPE === q.U
+    val retryHere = laneRetryReg(l) && peHere
+    val respondHere = laneRespondReg(l) && peHere
+    val silentHere = laneSilentReg(l) && peHere
 
-  val respValid = RegInit(VecInit(Seq.fill(n)(false.B)))
-  val respData = Reg(Vec(n, UInt(RespWidth.W)))
-
-  for (q <- 0 until n) {
-    val hits = VecInit(
-      (0 until 2 * p).map(i =>
-        responsePortValidReg(i) && (responsePortPeReg(i) === q.U)
-      )
-    )
-    val hasHit = hits.asUInt.orR
-    val canAccept = !respValid(q) || io.resp(q).ready
-
+    replayQueues(q).io.enq.valid := retryHere
+    replayQueues(q).io.enq.bits := laneReqReg(l)
     assert(
-      PopCount(hits) <= 1.U,
-      "Response crossbar collision: multiple producers targeted the same PE"
+      !retryHere || replayQueues(q).io.enq.ready,
+      "Replay queue overflow: more replayed requests than credits"
     )
+
+    respQueues(q).io.enq.valid := respondHere
+    respQueues(q).io.enq.bits := laneRespDataReg(l)
     assert(
-      !hasHit || canAccept,
-      "Response buffer overflow: PE did not consume its previous response"
+      !respondHere || respQueues(q).io.enq.ready,
+      "Response queue overflow: more responses than credits"
     )
 
-    when(hasHit) {
-      respValid(q) := true.B
-      respData(q) := Mux1H(hits, responsePortDataReg)
-    }.elsewhen(io.resp(q).ready) {
-      respValid(q) := false.B
-    }
-  }
-
-  // Queue management, all keyed by requestingPE (not lane index):
-  //  - pop a queue iff a resolving lane came from it,
-  //  - scoreboard: set when the arbiter selects a head, clear when it resolves
-  //    (pop or retry) so retries can be re-selected. Set and clear are mutually
-  //    exclusive per queue: a masked head is never re-offered to the arbiter.
-  //  - an AMU response unmasks the PE and arms its UNR override so the re-selected
-  //    request flows through as the releasing unlock.
-  for (q <- 0 until n) {
-    val resolvedHere =
-      (0 until p).map(i => laneReal(i) && (lanePe(i) === q.U)).reduce(_ || _)
-    val poppedHere =
-      (0 until p).map(i => lanePop(i) && (lanePe(i) === q.U)).reduce(_ || _)
-
-    inputQueues(q).io.deq.ready := poppedHere
-
-    // sameCycleSelectedMask and amuRespondedFor cannot both fire for the same PE:
-    // the PE stays masked from the forward until the AMU response unmasks it.
-    when(arbiter.io.sameCycleSelectedMask(q)) {
-      inputQueuesViewed(q) := true.B
-      unrOverride(q) := false.B
-    }.elsewhen(amuRespondedFor(q)) {
-      inputQueuesViewed(q) := false.B
-      unrOverride(q) := true.B
-    }.elsewhen(resolvedHere) {
-      inputQueuesViewed(q) := false.B
-    }
+    // Credit accounting: reserve on admission from the main input queue,
+    // release when the response leaves io.resp (or at resolution for silent
+    // completions, which produce no response).
+    val inc = inputQueues(q).io.deq.fire
+    val decResp = respQueues(q).io.deq.fire
+    val decSilent = silentHere
+    assert(
+      inflight(q) +& inc.asUInt >= decResp.asUInt +& decSilent.asUInt,
+      "In-flight credit underflow"
+    )
+    inflight(q) := inflight(q) +& inc.asUInt - decResp.asUInt - decSilent.asUInt
   }
 
   for (i <- 0 until n) {
-    io.resp(i).valid := respValid(i)
-    io.resp(i).bits.tdata := respData(i)
+    io.resp(i).valid := respQueues(i).io.deq.valid
+    io.resp(i).bits.tdata := respQueues(i).io.deq.bits
     io.resp(i).bits.tlast := true.B
+    respQueues(i).io.deq.ready := io.resp(i).ready
   }
 
   // writingRequests is the in-flight conflict source for the cycle-1/cycle-2 tag

@@ -4,7 +4,6 @@ import chisel3._
 import chiseltest._
 import Atomics.Helpers.InputArbiter
 import Atomics.{AtomicMode, Operation}
-import org.scalatest.ParallelTestExecution
 import org.scalatest.flatspec.AnyFlatSpec
 import scala.Predef.{assert => scalaAssert, _}
 import scala.collection.mutable
@@ -12,12 +11,12 @@ import scala.collection.mutable
 class InputArbiterTests
     extends AnyFlatSpec
     with ChiselScalatestTester
-    with ParallelTestExecution {
+    with org.scalatest.ParallelTestExecution {
   behavior of "InputArbiter"
 
-  private case class Params(n: Int, p: Int) {
-    require(n % (2 * p) == 0)
-    val bucketCount: Int = 2 * p
+  private case class Params(n: Int, p: Int, singleSelect: Boolean = false) {
+    val bucketCount: Int = if (singleSelect) p else 2 * p
+    require(n % bucketCount == 0)
     val bucketSize: Int = n / bucketCount
   }
 
@@ -28,7 +27,10 @@ class InputArbiterTests
     Params(16, 4),
     Params(32, 4),
     Params(16, 8),
-    Params(32, 8)
+    Params(32, 8),
+    Params(4, 4, singleSelect = true),
+    Params(12, 4, singleSelect = true),
+    Params(24, 8, singleSelect = true)
   )
 
   // reqs maps a port index -> (isLock, tag). requestingPE is always poked to the
@@ -45,6 +47,7 @@ class InputArbiterTests
       dut.io.requests(i).bits.isBlocking.poke(false.B)
       dut.io.requests(i).bits.requestingPE.poke(i.U)
       dut.io.requests(i).bits.atomicMode.poke(AtomicMode.DoubleWord)
+      dut.io.requests(i).bits.meta.poke(0.U)
     }
   }
 
@@ -52,6 +55,7 @@ class InputArbiterTests
     for (lane <- 0 until dut.p) {
       dut.io.availableSlots(lane).valid.poke(valid.B)
       dut.io.availableSlots(lane).index.poke(lane.U)
+      dut.io.laneBlocked(lane).poke(false.B)
     }
   }
 
@@ -184,7 +188,11 @@ class InputArbiterTests
       dut.io.requests(i).bits.isValid.poke(false.B)
       dut.io.requests(i).bits.operation.poke(Operation.Lock)
       dut.io.requests(i).bits.tag.poke((i + 1).U)
+      dut.io.requests(i).bits.data.poke(0.U)
+      dut.io.requests(i).bits.isBlocking.poke(false.B)
       dut.io.requests(i).bits.requestingPE.poke(i.U)
+      dut.io.requests(i).bits.atomicMode.poke(AtomicMode.DoubleWord)
+      dut.io.requests(i).bits.meta.poke(0.U)
     }
     driveSlots(dut, valid = true)
     for (_ <- 0 until 8) {
@@ -218,7 +226,8 @@ class InputArbiterTests
     for (_ <- 0 until 30) {
       val masked = (0 until dut.n).filter(i => dut.io.sameCycleSelectedMask(i).peek().litToBoolean)
       val hot = masked.nonEmpty
-      scalaAssert(!(prevHot && hot), s"mask hot two cycles in a row: $masked")
+      if (!params.singleSelect)
+        scalaAssert(!(prevHot && hot), s"mask hot two cycles in a row: $masked")
       if (hot) {
         anyHot = true
         val buckets = masked.map(i => bucketOf(i, params.bucketSize))
@@ -265,35 +274,35 @@ class InputArbiterTests
   }
 
   for (pr <- params) {
-    val tag = s"n=${pr.n} p=${pr.p}"
+    val tag = s"n=${pr.n} p=${pr.p} singleSelect=${pr.singleSelect}"
 
     it should s"select only real inputs, from distinct buckets, with matching bits ($tag)" in {
-      test(new InputArbiter(pr.n, pr.p)) { dut =>
+      test(new InputArbiter(pr.n, pr.p, singleSelect = pr.singleSelect)) { dut =>
         runValidityAndDistinct(dut, pr, seed = 7 + pr.n * 31 + pr.p)
       }
     }
 
     it should s"eventually select every bucket's candidate ($tag)" in {
-      test(new InputArbiter(pr.n, pr.p)) { dut => runCoverageOnePerBucket(dut, pr) }
+      test(new InputArbiter(pr.n, pr.p, singleSelect = pr.singleSelect)) { dut => runCoverageOnePerBucket(dut, pr) }
     }
 
     it should s"select nothing when no input is valid ($tag)" in {
-      test(new InputArbiter(pr.n, pr.p)) { dut => runEmpty(dut, pr) }
+      test(new InputArbiter(pr.n, pr.p, singleSelect = pr.singleSelect)) { dut => runEmpty(dut, pr) }
     }
 
     it should s"require both valid and isValid to select a request ($tag)" in {
-      test(new InputArbiter(pr.n, pr.p)) { dut => runGating(dut, pr) }
+      test(new InputArbiter(pr.n, pr.p, singleSelect = pr.singleSelect)) { dut => runGating(dut, pr) }
     }
 
     it should s"drive a well-formed sameCycleSelectedMask ($tag)" in {
-      test(new InputArbiter(pr.n, pr.p)) { dut =>
+      test(new InputArbiter(pr.n, pr.p, singleSelect = pr.singleSelect)) { dut =>
         runMaskInvariants(dut, pr, seed = 99 + pr.n + pr.p * 13)
       }
     }
 
     if (pr.bucketSize >= 2) {
       it should s"prioritise unlocks over locks within a bucket ($tag)" in {
-        test(new InputArbiter(pr.n, pr.p)) { dut => runUnlockPriority(dut, pr) }
+        test(new InputArbiter(pr.n, pr.p, singleSelect = pr.singleSelect)) { dut => runUnlockPriority(dut, pr) }
       }
     }
   }

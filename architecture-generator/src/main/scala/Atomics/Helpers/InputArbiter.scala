@@ -20,7 +20,8 @@ class InputArbiter(
     val n: Int = 128,
     val p: Int = 4,
     val tagStoreSize: Int = 128,
-    val addrW: Int = 64
+    val addrW: Int = 64,
+    val singleSelect: Boolean = false
 ) extends Module {
   require(addrW > 0, "addrW must be positive")
 
@@ -29,6 +30,7 @@ class InputArbiter(
     val sameCycleSelectedMask = Output(Vec(n, Bool()))
 
     val availableSlots = Input(Vec(p, new WriteIndexEntry(tagStoreSize)))
+    val laneBlocked = Input(Vec(p, Bool()))
     val consumedSlots = Output(Vec(p, Bool()))
     val selectedWriteIndices = Output(Vec(p, new WriteIndexEntry(tagStoreSize)))
     val selectedRequests = Output(Vec(p, new RequestType(n, addrW)))
@@ -38,14 +40,18 @@ class InputArbiter(
   // the (unused) ready outputs so the Decoupled interface is fully driven.
   io.requests.foreach(_.ready := false.B)
 
-  val bucketCount = 2 * p
+  val bucketCount = if (singleSelect) p else 2 * p
   val bucketSize = n / bucketCount
   val bucketOffsetWidth = math.max(1, log2Ceil(bucketSize))
 
-  require(n % bucketCount == 0)
+  require(
+    n % bucketCount == 0,
+    s"n ($n) must be divisible by ${if (singleSelect) "p" else "2*p"} ($bucketCount)"
+  )
 
-  val selectCycle = RegInit(true.B)
-  selectCycle := !selectCycle
+  val selectCycleReg = RegInit(true.B)
+  selectCycleReg := !selectCycleReg
+  val acceptsSelectionThisCycle = if (singleSelect) true.B else selectCycleReg
 
   val bucketStart = RegInit(
     VecInit(Seq.fill(bucketCount)(0.U(bucketOffsetWidth.W)))
@@ -155,6 +161,7 @@ class InputArbiter(
       Operation.safe(Mux1H(requestHits, selectedHeads.map(_.operation.asUInt)))._1
     selectedRequest.atomicMode :=
       AtomicMode.safe(Mux1H(requestHits, selectedHeads.map(_.atomicMode.asUInt)))._1
+    selectedRequest.meta := Mux1H(requestHits, selectedHeads.map(_.meta))
     selectedRequest.isValid := selected.orR
     selectedRequest
   }
@@ -173,62 +180,62 @@ class InputArbiter(
 
   for (i <- 0 until p) {
     selected_top_p_1(i) := selectedOHFromBucket(i)
-    selected_top_p_2(i) := selectedOHFromBucket(p + i)
-    selected_top_p(i) := Mux(
-      selectCycle,
-      selected_top_p_2(i),
-      selected_top_p_1(i)
-    )
+    selected_top_p_2(i) :=
+      (if (singleSelect) 0.U(n.W) else selectedOHFromBucket(p + i))
+    selected_top_p(i) :=
+      (if (singleSelect) selected_top_p_1(i)
+       else Mux(selectCycleReg, selected_top_p_2(i), selected_top_p_1(i)))
 
     val rawSelectedRequest = Wire(new RequestType(n, addrW))
     val selectedRequest1 = selected_top_2p_request_reg(i)
-    val selectedRequest2 = selected_top_2p_request_reg(p + i)
-    rawSelectedRequest.tag := Mux(
-      selectCycle,
-      selectedRequest2.tag,
-      selectedRequest1.tag
-    )
-    rawSelectedRequest.data := Mux(
-      selectCycle,
-      selectedRequest2.data,
-      selectedRequest1.data
-    )
-    rawSelectedRequest.isBlocking := Mux(
-      selectCycle,
-      selectedRequest2.isBlocking,
-      selectedRequest1.isBlocking
-    )
-    rawSelectedRequest.requestingPE := Mux(
-      selectCycle,
-      selectedRequest2.requestingPE,
-      selectedRequest1.requestingPE
-    )
+    val selectedRequest2 =
+      if (singleSelect) 0.U.asTypeOf(new RequestType(n, addrW))
+      else selected_top_2p_request_reg(p + i)
+    rawSelectedRequest.tag :=
+      (if (singleSelect) selectedRequest1.tag
+       else Mux(selectCycleReg, selectedRequest2.tag, selectedRequest1.tag))
+    rawSelectedRequest.data :=
+      (if (singleSelect) selectedRequest1.data
+       else Mux(selectCycleReg, selectedRequest2.data, selectedRequest1.data))
+    rawSelectedRequest.isBlocking :=
+      (if (singleSelect) selectedRequest1.isBlocking
+       else Mux(selectCycleReg, selectedRequest2.isBlocking, selectedRequest1.isBlocking))
+    rawSelectedRequest.requestingPE :=
+      (if (singleSelect) selectedRequest1.requestingPE
+       else Mux(selectCycleReg, selectedRequest2.requestingPE, selectedRequest1.requestingPE))
     rawSelectedRequest.operation :=
-      Operation
-        .safe(
-          Mux(
-            selectCycle,
-            selectedRequest2.operation.asUInt,
-            selectedRequest1.operation.asUInt
-          )
-        )
-        ._1
+      (if (singleSelect) selectedRequest1.operation
+       else
+         Operation
+           .safe(
+             Mux(
+               selectCycleReg,
+               selectedRequest2.operation.asUInt,
+               selectedRequest1.operation.asUInt
+             )
+           )
+           ._1)
     rawSelectedRequest.atomicMode :=
-      AtomicMode
-        .safe(
-          Mux(
-            selectCycle,
-            selectedRequest2.atomicMode.asUInt,
-            selectedRequest1.atomicMode.asUInt
-          )
-        )
-        ._1
+      (if (singleSelect) selectedRequest1.atomicMode
+       else
+         AtomicMode
+           .safe(
+             Mux(
+               selectCycleReg,
+               selectedRequest2.atomicMode.asUInt,
+               selectedRequest1.atomicMode.asUInt
+             )
+           )
+           ._1)
+    rawSelectedRequest.meta :=
+      (if (singleSelect) selectedRequest1.meta
+       else Mux(selectCycleReg, selectedRequest2.meta, selectedRequest1.meta))
     rawSelectedRequest.isValid := selected_top_p(i).orR
 
     val needsSlot =
       rawSelectedRequest.isValid && rawSelectedRequest.operation.isLock
     val hasSlot = io.availableSlots(i).valid
-    laneStalled(i) := needsSlot && !hasSlot
+    laneStalled(i) := io.laneBlocked(i) || (needsSlot && !hasSlot)
 
     io.selectedRequests(i) := 0.U.asTypeOf(new RequestType(n, addrW))
     when(!laneStalled(i) && rawSelectedRequest.isValid) {
@@ -239,28 +246,32 @@ class InputArbiter(
     io.selectedWriteIndices(i) := 0.U.asTypeOf(
       new WriteIndexEntry(tagStoreSize)
     )
-    io.selectedWriteIndices(i).valid := needsSlot && hasSlot
+    io.selectedWriteIndices(i).valid := !laneStalled(i) && needsSlot && hasSlot
     io.selectedWriteIndices(i).index := Mux(
       hasSlot,
       io.availableSlots(i).index,
       0.U
     )
-    io.consumedSlots(i) := needsSlot && hasSlot
+    io.consumedSlots(i) := !laneStalled(i) && needsSlot && hasSlot
 
-    when(selectCycle) {
-      bucketWillHold(p + i) := laneStalled(i)
-    }.otherwise {
+    if (singleSelect) {
       bucketWillHold(i) := laneStalled(i)
+    } else {
+      when(selectCycleReg) {
+        bucketWillHold(p + i) := laneStalled(i)
+      }.otherwise {
+        bucketWillHold(i) := laneStalled(i)
+      }
     }
   }
 
   for (bucket <- 0 until bucketCount) {
     val acceptsNewSelection =
-      selectCycle && !bucketWillHold(bucket) && selected_top_2p_buckets(
+      acceptsSelectionThisCycle && !bucketWillHold(bucket) && selected_top_2p_buckets(
         bucket
       ).orR
 
-    when(selectCycle && !bucketWillHold(bucket)) {
+    when(acceptsSelectionThisCycle && !bucketWillHold(bucket)) {
       selected_top_2p_reg(bucket) := selected_top_2p_buckets(bucket)
       selected_top_2p_request_reg(bucket) := selected_top_2p_requests(bucket)
     }
