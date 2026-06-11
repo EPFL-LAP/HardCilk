@@ -5,9 +5,9 @@ import chisel3.util._
 import chext.amba.axi4
 
 object AtomicMemoryUnit {
-  def defaultAxiCfg(addrW: Int): axi4.Config =
+  def defaultAxiCfg(addrW: Int, tableSize: Int): axi4.Config =
     axi4.Config(
-      wId = 1,
+      wId = math.max(1, log2Ceil(tableSize)),
       wAddr = addrW,
       wData = 64,
       read = true,
@@ -18,39 +18,38 @@ object AtomicMemoryUnit {
 // One atomic memory unit, fed by a single LockServer pipeline lane. It performs a
 // read-modify-write to gmem for each forwarded request and returns the previous
 // memory value. Many requests are in flight at once (AXI multiple-outstanding),
-// tracked in a per-slot table where each entry runs its own small FSM.
+// tracked in a `tableSize`-entry table where each entry runs its own small FSM.
+// Slots are allocated from whatever is free (every outstanding request holds a
+// unique tag, so there are no same-address ordering hazards between slots).
 //
 //   tag      = byte address to read/modify/write
 //   data     = operand (value to store, or compare-and-store operand)
-//   readValue= the previous memory contents (full 64-bit beat); the response
-//              returns the *selected* sub-word right-justified into the low bits
-//              (byte/word mode), so the PE never has to re-extract its lane
+//   readValue= the previous memory contents, returned to the PE
 //
 // The AXI id IS the table slot index, so read/write responses address the table
 // directly. The mux appends this AMU's port (lane) index on top, making ids
 // globally unique across AMUs.
+//
+// io.resp is Decoupled: a completed entry holds its slot until LockServer
+// accepts the return (it may briefly stall it behind a same-PE retry).
 class AtomicMemoryUnit(
     val n: Int,
-    val p: Int,
-    val laneIndex: Int,
+    val tableSize: Int,
     val addrW: Int,
     val axiCfg: axi4.Config
 ) extends Module {
-  def this(n: Int, p: Int, laneIndex: Int) =
-    this(n, p, laneIndex, 64, AtomicMemoryUnit.defaultAxiCfg(64))
+  def this(n: Int, tableSize: Int) =
+    this(n, tableSize, 64, AtomicMemoryUnit.defaultAxiCfg(64, tableSize))
 
-  def this(n: Int, p: Int, laneIndex: Int, addrW: Int) =
-    this(n, p, laneIndex, addrW, AtomicMemoryUnit.defaultAxiCfg(addrW))
+  def this(n: Int, tableSize: Int, addrW: Int) =
+    this(n, tableSize, addrW, AtomicMemoryUnit.defaultAxiCfg(addrW, tableSize))
 
+  require(tableSize >= 1, "tableSize must be at least 1")
+  val tableIdxW = log2Ceil(tableSize)
+  val axiIdW = math.max(1, tableIdxW)
   require(
-    n % (2 * p) == 0,
-    "n must be divisible by 2*p (matches arbiter bucketing)"
-  )
-  val tableSize = n / p
-  val idxW = log2Ceil(tableSize)
-  require(
-    axiCfg.wId == idxW,
-    s"axiCfg.wId (${axiCfg.wId}) must equal log2Ceil(n/p) ($idxW)"
+    axiCfg.wId == axiIdW,
+    s"axiCfg.wId (${axiCfg.wId}) must equal max(1, log2Ceil(tableSize)) ($axiIdW)"
   )
   require(axiCfg.wData == 64, "AMU expects single 64-bit data beats")
   require(
@@ -60,25 +59,14 @@ class AtomicMemoryUnit(
 
   val io = IO(new Bundle {
     val req = Flipped(Decoupled(new RequestType(n, addrW)))
-    val resp = Valid(new RequestType(n, addrW))
+    val resp = Decoupled(new RequestType(n, addrW))
     val gmem = axi4.full.Master(axiCfg)
   })
 
-  // ---- Compile-time PE -> local slot LUT ----
-  // Lane `laneIndex` is fed only from arbiter buckets `laneIndex` and
-  // `p+laneIndex` (InputArbiter), i.e. PEs [base, base+bs) and [base+n/2,
-  // base+n/2+bs) with base = laneIndex*bs. That fixed set maps to [0, n/p). Only
-  // those PEs ever reach this AMU; other keys are don't-care. Constant-folds to a
-  // bit-select when n is a power of two.
-  private val bs = n / (2 * p)
-  private def localOf(pe: Int): Int = {
-    val r1 = laneIndex * bs
-    val r2 = laneIndex * bs + n / 2
-    if (pe >= r1 && pe < r1 + bs) pe - r1
-    else if (pe >= r2 && pe < r2 + bs) bs + (pe - r2)
-    else 0
-  }
-  val peToLocal = VecInit(Seq.tabulate(n)(pe => localOf(pe).U(idxW.W)))
+  private def toAxiId(slot: UInt): UInt =
+    if (tableSize == 1) 0.U(axiIdW.W) else slot
+  private def toTableIndex(id: UInt): UInt =
+    if (tableSize == 1) 0.U(0.W) else id(tableIdxW - 1, 0)
 
   // ---- Table ----
   object State extends ChiselEnum {
@@ -150,7 +138,7 @@ class AtomicMemoryUnit(
 
   io.gmem.ar.valid := false.B
   io.gmem.ar.bits := DontCare
-  io.gmem.r.ready := true.B // a waiting entry always exists for a returning read
+  io.gmem.r.ready := false.B
   io.gmem.aw.valid := false.B
   io.gmem.aw.bits := DontCare
   io.gmem.w.valid := false.B
@@ -158,87 +146,128 @@ class AtomicMemoryUnit(
   io.gmem.b.ready := true.B // a waiting entry always exists for a returning write
 
   // ---- Pop FIFO + issue read (AR) ----
-  // One pop per cycle; the popped slot must be free (the PE was masked end-to-end).
-  val popSlot = peToLocal(io.req.bits.requestingPE)
-  io.gmem.ar.valid := io.req.valid
-  io.req.ready := io.gmem.ar.ready
-  io.gmem.ar.bits.addr := io.req.bits.tag.pad(axiCfg.wAddr)
-  io.gmem.ar.bits.id := popSlot
-  io.gmem.ar.bits.size := axiSize(io.req.bits.atomicMode)
-  io.gmem.ar.bits.len := 0.U // single beat
-  io.gmem.ar.bits.burst := axi4.BurstType.INCR
-  when(io.req.valid && io.gmem.ar.ready) {
-    assert(
-      table(popSlot).state === State.Invalid,
-      "AMU table slot reused while still busy"
-    )
-    table(popSlot).state := State.WaitRead
-    table(popSlot).req := io.req.bits
-  }
+  // One pop per cycle into the first free table slot. The AR channel is issued
+  // from a local holding register so AXI mux arbitration/ready cannot feed
+  // combinationally back into table allocation or the upstream FIFO.
+  val freeMask = VecInit(table.map(_.state === State.Invalid)).asUInt
+  val canAlloc = freeMask.orR
+  val allocSlot = PriorityEncoder(freeMask)
+  val arReqValid = RegInit(false.B)
+  val arReq = Reg(new RequestType(n, addrW))
+  val arSlot = Reg(UInt(tableIdxW.W))
 
-  // ---- Read data (R): record value, decide whether to write ----
-  when(io.gmem.r.valid) {
-    val rslot = io.gmem.r.bits.id
-    val current = io.gmem.r.bits.data
-    val operand = table(rslot).req.data
-    val op = table(rslot).req.operation
-    val writeNeeded = WireDefault(false.B)
-    val mode = table(rslot).req.atomicMode
-    val currentSelected = selectedValue(current, mode, table(rslot).req.tag)
-    val operandSelected = operand & valueMask(mode)
-
-    switch(op) {
-      is(Operation.LockSetUnlockAndReturnCurrent) { writeNeeded := true.B }
-      is(Operation.LockSetIfGreaterUnlockAndReturnCurrent) {
-        writeNeeded := operandSelected > currentSelected
-      }
-      is(Operation.LockSetIfSignedLessUnlockAndReturnCurrent) {
-        writeNeeded := signExtendSelected(operandSelected, mode) < signExtendSelected(
-          currentSelected,
-          mode
-        )
-      }
-      is(Operation.LockAddOneReturnCurrent) {
-        writeNeeded := true.B
+  io.req.ready := !arReqValid && canAlloc
+  when(io.req.fire) {
+    arReqValid := true.B
+    arReq := io.req.bits
+    arSlot := allocSlot
+    for (slot <- 0 until tableSize) {
+      when(allocSlot === slot.U) {
+        table(slot).state := State.WaitRead
+        table(slot).req := io.req.bits
       }
     }
-    table(rslot).readValue := current
-    table(rslot).state := Mux(writeNeeded, State.WantWrite, State.RespPending)
+  }.elsewhen(io.gmem.ar.fire) {
+    arReqValid := false.B
+  }
+
+  io.gmem.ar.valid := arReqValid
+  io.gmem.ar.bits.addr := arReq.tag.pad(axiCfg.wAddr)
+  io.gmem.ar.bits.id := toAxiId(arSlot)
+  io.gmem.ar.bits.size := axiSize(arReq.atomicMode)
+  io.gmem.ar.bits.len := 0.U // single beat
+  io.gmem.ar.bits.burst := axi4.BurstType.INCR
+
+  // ---- Read data (R): record value, decide whether to write ----
+  // Buffer the AXI R channel before the read/modify decision. Without this
+  // register cut, routed timing has to carry HBM mux read-data bits directly
+  // into every table-entry state update and compare path.
+  val rBufValid = RegInit(false.B)
+  val rBufBits = Reg(chiselTypeOf(io.gmem.r.bits))
+  val processR = rBufValid
+  io.gmem.r.ready := true.B
+  when(io.gmem.r.fire) {
+    rBufValid := true.B
+    rBufBits := io.gmem.r.bits
+  }.elsewhen(processR) {
+    rBufValid := false.B
+  }
+
+  when(processR) {
+    val rslot = toTableIndex(rBufBits.id)
+    val current = rBufBits.data
+    for (slot <- 0 until tableSize) {
+      when(rslot === slot.U) {
+        val entry = table(slot)
+        val operand = entry.req.data
+        val op = entry.req.operation
+        val writeNeeded = WireDefault(false.B)
+        val mode = entry.req.atomicMode
+        val currentSelected = selectedValue(current, mode, entry.req.tag)
+        val operandSelected = operand & valueMask(mode)
+
+        switch(op) {
+          is(Operation.LockSetUnlockAndReturnCurrent) {
+            writeNeeded := true.B
+          }
+          is(Operation.LockSetIfGreaterUnlockAndReturnCurrent) {
+            writeNeeded := operandSelected > currentSelected
+          }
+          is(Operation.LockSetIfSignedLessUnlockAndReturnCurrent) {
+            writeNeeded := signExtendSelected(operandSelected, mode) < signExtendSelected(
+              currentSelected,
+              mode
+            )
+          }
+          is(Operation.LockAddNReturnCurrent) {
+            writeNeeded := true.B
+          }
+        }
+        table(slot).readValue := current
+        table(slot).state := Mux(writeNeeded, State.WantWrite, State.RespPending)
+      }
+    }
   }
 
   // ---- Issue write (AW + W): one in-flight write at a time ----
   val wantWriteMask = VecInit(table.map(_.state === State.WantWrite)).asUInt
   val writeActive = RegInit(false.B)
-  val writeSlot = RegInit(0.U(idxW.W))
+  val writeSlot = RegInit(0.U(tableIdxW.W))
+  val writeReq = Reg(new RequestType(n, addrW))
+  val writeReadValue = Reg(UInt(64.W))
   val awDone = RegInit(false.B)
   val wDone = RegInit(false.B)
 
   when(!writeActive && wantWriteMask.orR) {
+    val nextWriteSlot = PriorityEncoder(wantWriteMask)
     writeActive := true.B
-    writeSlot := PriorityEncoder(wantWriteMask)
+    writeSlot := nextWriteSlot
+    writeReq := table(nextWriteSlot).req
+    writeReadValue := table(nextWriteSlot).readValue
     awDone := false.B
     wDone := false.B
   }
 
   when(writeActive) {
-    val we = table(writeSlot)
-    val mode = we.req.atomicMode
-    val offsetBytes = byteOffset(mode, we.req.tag)
+    val mode = writeReq.atomicMode
+    val offsetBytes = byteOffset(mode, writeReq.tag)
     val offsetBits = bitOffset(offsetBytes)
     val selectedMask = valueMask(mode)
-    val currentSelected = selectedValue(we.readValue, mode, we.req.tag)
-    val writeValue = WireDefault(we.req.data & selectedMask)
-    switch(we.req.operation) {
-      is(Operation.LockAddOneReturnCurrent) {
-        writeValue := (currentSelected + 1.U)(63, 0)
+    val currentSelected = selectedValue(writeReadValue, mode, writeReq.tag)
+    val writeValue = WireDefault(writeReq.data & selectedMask)
+    switch(writeReq.operation) {
+      is(Operation.LockAddNReturnCurrent) {
+        // Add the per-request operand N (masked to the atomic width) to the
+        // current value. N=1 reproduces the old add-one behavior.
+        writeValue := (currentSelected + (writeReq.data & selectedMask))(63, 0)
       }
     }
     val shiftedData = (writeValue & selectedMask) << offsetBits
     val shiftedStrobe = (strobeMask(mode) << offsetBytes)(fullStrobe.getWidth - 1, 0)
 
     io.gmem.aw.valid := !awDone
-    io.gmem.aw.bits.addr := we.req.tag.pad(axiCfg.wAddr)
-    io.gmem.aw.bits.id := writeSlot
+    io.gmem.aw.bits.addr := writeReq.tag.pad(axiCfg.wAddr)
+    io.gmem.aw.bits.id := toAxiId(writeSlot)
     io.gmem.aw.bits.size := axiSize(mode)
     io.gmem.aw.bits.len := 0.U
     io.gmem.aw.bits.burst := axi4.BurstType.INCR
@@ -252,7 +281,11 @@ class AtomicMemoryUnit(
     when(awFire) { awDone := true.B }
     when(wFire) { wDone := true.B }
     when((awDone || awFire) && (wDone || wFire)) {
-      table(writeSlot).state := State.WaitBResp
+      for (slot <- 0 until tableSize) {
+        when(writeSlot === slot.U) {
+          table(slot).state := State.WaitBResp
+        }
+      }
       writeActive := false.B
       awDone := false.B
       wDone := false.B
@@ -260,25 +293,36 @@ class AtomicMemoryUnit(
   }
 
   // ---- Write response (B): the write committed ----
+  val bslot = toTableIndex(io.gmem.b.bits.id)
   when(io.gmem.b.valid) {
-    table(io.gmem.b.bits.id).state := State.RespPending
+    for (slot <- 0 until tableSize) {
+      when(bslot === slot.U) {
+        table(slot).state := State.RespPending
+      }
+    }
   }
 
   // ---- Respond to LockServer: one completed entry per cycle ----
+  // The slot is freed only when the return is accepted, so backpressure from
+  // LockServer simply holds the entry in RespPending.
   val respMask = VecInit(table.map(_.state === State.RespPending)).asUInt
-  when(respMask.orR) {
-    val respSlot = PriorityEncoder(respMask)
-    io.resp.valid := true.B
-    io.resp.bits := table(respSlot).req
-    // Return the addressed sub-word right-justified into the low bits rather than
-    // the raw beat. readValue stays the raw beat for the internal write/AddOne
-    // path above; only the PE-facing response is selected, so a byte-mode SET
-    // hands back its single byte in bits [7:0] (no consumer-side shift needed).
-    io.resp.bits.data := selectedValue(
-      table(respSlot).readValue,
-      table(respSlot).req.atomicMode,
-      table(respSlot).req.tag
-    )
-    table(respSlot).state := State.Invalid
+  val respSlot = PriorityEncoder(respMask)
+  io.resp.valid := respMask.orR
+  io.resp.bits := table(respSlot).req
+  // Return the addressed sub-word right-justified into the low bits rather than
+  // the raw beat. readValue stays the raw beat for the internal write/AddN path
+  // above; only the PE-facing response is selected, so a byte-mode SET hands
+  // back its single byte in bits [7:0] (no consumer-side shift needed).
+  io.resp.bits.data := selectedValue(
+    table(respSlot).readValue,
+    table(respSlot).req.atomicMode,
+    table(respSlot).req.tag
+  )
+  when(io.resp.fire) {
+    for (slot <- 0 until tableSize) {
+      when(respSlot === slot.U) {
+        table(slot).state := State.Invalid
+      }
+    }
   }
 }

@@ -45,7 +45,8 @@ static const Addr VISITED_SLOT_BYTES = 1;
 // Mirror of hls-processing-elements/mfpga/BFS/util.h (128 bytes). The PE writes
 // its continuation closure here field-by-field via store_continuation(); the
 // host seeds the root copy and later polls the `done` field of this struct.
-struct BFS_args {
+struct BFS_args
+{
   uint32_t counter;         // 0   join counter / done sentinel
   uint32_t source;          // 4
   uint32_t vertex_count;    // 8
@@ -54,14 +55,14 @@ struct BFS_args {
   uint32_t frontier_length; // 20
   uint32_t active;          // 24  ping-pong selector
   uint32_t done;            // 28  set to 1 by the PE on termination
-  Addr graph;           // 32  CSR: array of {neighbors_ptr, degree} (16B each)
-  Addr distance;        // 40  int32[vertex_count]
-  Addr visited;         // 48  uint64[vertex_count]  (8-byte stride!)
-  Addr frontier0;       // 56  uint32[vertex_count]
-  Addr frontier1;       // 64  uint32[vertex_count]
-  Addr nextFChar;       // 72  uint64 atomic counter (next-frontier length)
-  Addr cont;            // 80  continuation closure base (== &this on device)
-  uint8_t _padding[40]; // 88..127
+  Addr graph;               // 32  CSR: array of {neighbors_ptr, degree} (16B each)
+  Addr distance;            // 40  int32[vertex_count]
+  Addr visited;             // 48  uint64[vertex_count]  (8-byte stride!)
+  Addr frontier0;           // 56  uint32[vertex_count]
+  Addr frontier1;           // 64  uint32[vertex_count]
+  Addr nextFChar;           // 72  uint64 atomic counter (next-frontier length)
+  Addr cont;                // 80  continuation closure base (== &this on device)
+  uint8_t _padding[40];     // 88..127
 };
 static_assert(sizeof(BFS_args) == 128,
               "BFS_args must match util.h (128 bytes)");
@@ -74,7 +75,8 @@ static const Addr BFS_DONE_OFFSET = offsetof(BFS_args, done);
 // unused.
 inline bool bfsDoneConditionStub(int32_t /*val*/) { return false; }
 
-class BFSDriver : public hardCilkDriver {
+class BFSDriver : public hardCilkDriver
+{
 public:
   std::string graph_file_;
   int source_;
@@ -90,7 +92,8 @@ public:
         fast_mode_(fast_mode) {}
 
   static int run_cpu_test_bench(const std::string &graph_file, int source = 0,
-                                int max_depth_arg = 0) {
+                                int max_depth_arg = 0)
+  {
     std::string synthetic_name;
     int effective_source = source;
 
@@ -100,7 +103,8 @@ public:
     auto t_loaded = std::chrono::high_resolution_clock::now();
 
     const int n = G.getNumVertices();
-    if (n <= 0) {
+    if (n <= 0)
+    {
       std::cerr << "[BFS-CPU] empty graph, aborting\n";
       return 1;
     }
@@ -126,7 +130,8 @@ public:
     return 0;
   }
 
-  int run_test_bench() override {
+  int run_test_bench() override
+  {
     auto t_benchmark = std::chrono::high_resolution_clock::now();
 
     // ── Load or synthesize the graph ────────────────────────────────────────
@@ -136,7 +141,8 @@ public:
                                  effective_source);
     auto t_graph_loaded = std::chrono::high_resolution_clock::now();
     const int n = G.getNumVertices();
-    if (n <= 0) {
+    if (n <= 0)
+    {
       std::cerr << "[BFS] empty graph, aborting\n";
       return 1;
     }
@@ -163,7 +169,8 @@ public:
 
     // graph[u] = { neighbors_ptr, degree } — 16 bytes, indexed by (u << 4).
     std::vector<uint64_t> graphEntries(2ull * n);
-    for (int u = 0; u < n; u++) {
+    for (int u = 0; u < n; u++)
+    {
       uint64_t off = (uint64_t)G.forward_offsets[u] * sizeof(uint32_t);
       graphEntries[2 * u + 0] = neighbors_base + off;     // neighbors_ptr
       graphEntries[2 * u + 1] = (uint64_t)G.getDegree(u); // degree
@@ -266,7 +273,8 @@ public:
     // ── Watchdog-bounded management loop ────────────────────────────────────
     int rc = managementLoopBFS(cont_base, visited_base, n);
     auto t_kernel_done = t_kernel_done_;
-    if (rc != 0) {
+    if (rc != 0)
+    {
       std::cerr
           << "[BFS] management loop did not reach done (watchdog/error)\n";
       // fall through and still dump what we have for diagnostics
@@ -296,8 +304,10 @@ public:
     std::cout << "[BFS-GBBS] end-to-end time: " << gbbs_elapsed_s << "s\n";
 
     int mismatches = 0;
-    for (int v = 0; v < n; v++) {
-      if (dist_fpga[v] != dist_ref[v]) {
+    for (int v = 0; v < n; v++)
+    {
+      if (dist_fpga[v] != dist_ref[v])
+      {
         if (mismatches < 20)
           std::cerr << "[BFS] MISMATCH v=" << v << " fpga=" << dist_fpga[v]
                     << " gbbs=" << dist_ref[v] << "\n";
@@ -308,7 +318,8 @@ public:
     print_bfs_summary(dist_fpga.data(), n, "FPGA");
     print_bfs_summary(dist_ref.data(), n, "GBBS");
 
-    if (mismatches == 0 && rc == 0) {
+    if (mismatches == 0 && rc == 0)
+    {
       std::cout << "[BFS] PASS — FPGA distances match official GBBS BFS.\n";
       return 0;
     }
@@ -322,12 +333,14 @@ private:
   // at the FPGA's completion rather than after the progress dump.
   std::chrono::high_resolution_clock::time_point t_kernel_done_;
 
-  class NullStreambuf : public std::streambuf {
+  class NullStreambuf : public std::streambuf
+  {
   protected:
     int_type overflow(int_type ch) override { return traits_type::not_eof(ch); }
   };
 
-  class ScopedCoutSilencer {
+  class ScopedCoutSilencer
+  {
   public:
     ScopedCoutSilencer() : previous_(std::cout.rdbuf(&null_)) {}
     ~ScopedCoutSilencer() { std::cout.rdbuf(previous_); }
@@ -339,11 +352,14 @@ private:
 
   static Graph loadBenchmarkGraph(const std::string &graph_file, int source,
                                   std::string &synthetic_name,
-                                  int &effective_source) {
-    if (isSyntheticStarGraph(graph_file)) {
+                                  int &effective_source)
+  {
+    if (isSyntheticStarGraph(graph_file))
+    {
       synthetic_name = "synthetic:star2m";
       effective_source = 0;
-      if (source != effective_source) {
+      if (source != effective_source)
+      {
         std::cout << "[BFS] synthetic star graph uses fixed source="
                   << effective_source
                   << " (ignoring requested source=" << source << ")\n";
@@ -351,16 +367,19 @@ private:
       return Graph::twoMillionTwoLevelStar();
     }
 
-    if (isSyntheticRingGraph(graph_file)) {
+    if (isSyntheticRingGraph(graph_file))
+    {
       synthetic_name = "synthetic:ring2m";
       effective_source = source;
       return Graph::twoMillionRing();
     }
 
-    if (isSyntheticStar4mGraph(graph_file)) {
+    if (isSyntheticStar4mGraph(graph_file))
+    {
       synthetic_name = "synthetic:star4m";
       effective_source = 0;
-      if (source != effective_source) {
+      if (source != effective_source)
+      {
         std::cout << "[BFS] synthetic star4m graph uses fixed source="
                   << effective_source
                   << " (ignoring requested source=" << source << ")\n";
@@ -368,10 +387,12 @@ private:
       return Graph::fourMillionStar();
     }
 
-    if (isSyntheticWikiMixedGraph(graph_file)) {
+    if (isSyntheticWikiMixedGraph(graph_file))
+    {
       synthetic_name = "synthetic:wikimix";
       effective_source = 0;
-      if (source != effective_source) {
+      if (source != effective_source)
+      {
         std::cout << "[BFS] synthetic wikimix graph uses fixed source="
                   << effective_source
                   << " (ignoring requested source=" << source << ")\n";
@@ -379,10 +400,12 @@ private:
       return Graph::wikiMixed();
     }
 
-    if (isSyntheticWikiMixedTargetGraph(graph_file)) {
+    if (isSyntheticWikiMixedTargetGraph(graph_file))
+    {
       synthetic_name = "synthetic:wm_target";
       effective_source = 0;
-      if (source != effective_source) {
+      if (source != effective_source)
+      {
         std::cout << "[BFS] synthetic wm_target graph uses fixed source="
                   << effective_source
                   << " (ignoring requested source=" << source << ")\n";
@@ -392,10 +415,12 @@ private:
       return Graph::wikiMixedTarget(pairs, next_count);
     }
 
-    if (isSyntheticWikiMixedTargetBurstGraph(graph_file)) {
+    if (isSyntheticWikiMixedTargetBurstGraph(graph_file))
+    {
       synthetic_name = "synthetic:wm_target_burst";
       effective_source = 0;
-      if (source != effective_source) {
+      if (source != effective_source)
+      {
         std::cout << "[BFS] synthetic wm_target_burst graph uses fixed source="
                   << effective_source
                   << " (ignoring requested source=" << source << ")\n";
@@ -408,10 +433,12 @@ private:
                                          visited_edges_per_frontier);
     }
 
-    if (isSyntheticWikiMixedTargetPrefixGraph(graph_file)) {
+    if (isSyntheticWikiMixedTargetPrefixGraph(graph_file))
+    {
       synthetic_name = "synthetic:wm_target_prefix";
       effective_source = 0;
-      if (source != effective_source) {
+      if (source != effective_source)
+      {
         std::cout << "[BFS] synthetic wm_target_prefix graph uses fixed source="
                   << effective_source
                   << " (ignoring requested source=" << source << ")\n";
@@ -429,27 +456,32 @@ private:
     return Graph(graph_file, false);
   }
 
-  static bool isSyntheticStarGraph(const std::string &graph_file) {
+  static bool isSyntheticStarGraph(const std::string &graph_file)
+  {
     return graph_file == "synthetic:star2m" || graph_file == "star2m" ||
            graph_file == "--star2m";
   }
 
-  static bool isSyntheticRingGraph(const std::string &graph_file) {
+  static bool isSyntheticRingGraph(const std::string &graph_file)
+  {
     return graph_file == "synthetic:ring2m" || graph_file == "ring2m" ||
            graph_file == "--ring2m";
   }
 
-  static bool isSyntheticStar4mGraph(const std::string &graph_file) {
+  static bool isSyntheticStar4mGraph(const std::string &graph_file)
+  {
     return graph_file == "synthetic:star4m" || graph_file == "star4m" ||
            graph_file == "--star4m";
   }
 
-  static bool isSyntheticWikiMixedGraph(const std::string &graph_file) {
+  static bool isSyntheticWikiMixedGraph(const std::string &graph_file)
+  {
     return graph_file == "synthetic:wikimix" || graph_file == "wikimix" ||
            graph_file == "--wikimix";
   }
 
-  static bool isSyntheticWikiMixedTargetGraph(const std::string &graph_file) {
+  static bool isSyntheticWikiMixedTargetGraph(const std::string &graph_file)
+  {
     return graph_file == "synthetic:wm_target" || graph_file == "wm_target" ||
            graph_file == "--wm_target" ||
            graph_file.rfind("synthetic:wm_target:", 0) == 0 ||
@@ -457,7 +489,8 @@ private:
   }
 
   static bool
-  isSyntheticWikiMixedTargetBurstGraph(const std::string &graph_file) {
+  isSyntheticWikiMixedTargetBurstGraph(const std::string &graph_file)
+  {
     return graph_file == "synthetic:wm_target_burst" ||
            graph_file == "wm_target_burst" ||
            graph_file == "--wm_target_burst" ||
@@ -466,7 +499,8 @@ private:
   }
 
   static bool
-  isSyntheticWikiMixedTargetPrefixGraph(const std::string &graph_file) {
+  isSyntheticWikiMixedTargetPrefixGraph(const std::string &graph_file)
+  {
     return graph_file == "synthetic:wm_target_prefix" ||
            graph_file == "wm_target_prefix" ||
            graph_file == "--wm_target_prefix" ||
@@ -475,7 +509,8 @@ private:
   }
 
   static int syntheticWikiMixedTargetShape(const std::string &graph_file,
-                                           int &next_count) {
+                                           int &next_count)
+  {
     next_count = 0;
     const std::string prefix =
         graph_file.rfind("synthetic:wm_target:", 0) == 0
@@ -496,7 +531,8 @@ private:
   static int
   syntheticWikiMixedTargetBurstShape(const std::string &graph_file,
                                      int &degree_per_frontier,
-                                     int &visited_edges_per_frontier) {
+                                     int &visited_edges_per_frontier)
+  {
     degree_per_frontier = 112;
     visited_edges_per_frontier = 0;
     const std::string prefix =
@@ -510,7 +546,8 @@ private:
     size_t split = params.find(':');
     std::string frontier_str =
         split == std::string::npos ? params : params.substr(0, split);
-    if (split != std::string::npos) {
+    if (split != std::string::npos)
+    {
       std::string rest = params.substr(split + 1);
       size_t split2 = rest.find(':');
       std::string degree_str =
@@ -529,7 +566,8 @@ private:
 
   static int syntheticWikiMixedTargetPrefixShape(const std::string &graph_file,
                                                  int &frontier_count,
-                                                 int &next_count) {
+                                                 int &next_count)
+  {
     frontier_count = 7529;
     next_count = 840007;
     const std::string prefix =
@@ -545,7 +583,8 @@ private:
     size_t split = params.find(':');
     std::string first_str =
         split == std::string::npos ? params : params.substr(0, split);
-    if (split != std::string::npos) {
+    if (split != std::string::npos)
+    {
       std::string rest = params.substr(split + 1);
       size_t split2 = rest.find(':');
       std::string frontier_str =
@@ -562,26 +601,31 @@ private:
     return first_level_count < 1 ? 1 : first_level_count;
   }
 
-  struct OfficialGBBSTiming {
+  struct OfficialGBBSTiming
+  {
     double graph_build_s = 0.0;
     double bfs_s = 0.0;
     double distance_conversion_s = 0.0;
     double total_s = 0.0;
   };
 
-  struct OfficialGBBSResult {
+  struct OfficialGBBSResult
+  {
     std::vector<int> distances;
     OfficialGBBSTiming timing;
   };
 
-  static auto buildOfficialGBBSGraph(const Graph &G) {
+  static auto buildOfficialGBBSGraph(const Graph &G)
+  {
     using GbbsEdge = std::tuple<gbbs::uintE, gbbs::uintE, gbbs::empty>;
 
     auto edges = gbbs::sequence<GbbsEdge>::uninitialized(
         static_cast<size_t>(G.num_edges));
     size_t out = 0;
-    for (int u = 0; u < G.num_vertices; u++) {
-      for (int j = G.forward_offsets[u]; j < G.forward_offsets[u + 1]; j++) {
+    for (int u = 0; u < G.num_vertices; u++)
+    {
+      for (int j = G.forward_offsets[u]; j < G.forward_offsets[u + 1]; j++)
+      {
         const int v = G.forward_neighbors[j];
         if (v < 0 || v >= G.num_vertices)
           continue;
@@ -589,9 +633,11 @@ private:
                                 static_cast<gbbs::uintE>(v), gbbs::empty{}};
       }
     }
-    if (out != edges.size()) {
+    if (out != edges.size())
+    {
       auto trimmed = gbbs::sequence<GbbsEdge>::from_function(
-          out, [&](size_t i) { return edges[i]; });
+          out, [&](size_t i)
+          { return edges[i]; });
       edges = std::move(trimmed);
     }
     return gbbs::asymmetric_graph<gbbs::asymmetric_vertex,
@@ -602,41 +648,49 @@ private:
 
   static std::vector<int>
   parentsToDistances(const gbbs::sequence<gbbs::uintE> &parents, int source,
-                     int max_depth) {
+                     int max_depth)
+  {
     const int n = static_cast<int>(parents.size());
     std::vector<int> dist(n, -1);
     std::vector<uint8_t> state(n, 0);
 
-    auto compute_distance = [&](int start) {
+    auto compute_distance = [&](int start)
+    {
       int v = start;
       std::vector<int> path;
-      while (true) {
-        if (v < 0 || v >= n) {
+      while (true)
+      {
+        if (v < 0 || v >= n)
+        {
           for (int u : path)
             state[u] = 2;
           return -1;
         }
         if (dist[v] >= 0 || state[v] == 2)
           break;
-        if (state[v] == 1) {
+        if (state[v] == 1)
+        {
           for (int u : path)
             state[u] = 2;
           return -1;
         }
         const gbbs::uintE parent = parents[v];
-        if (parent == UINT_E_MAX) {
+        if (parent == UINT_E_MAX)
+        {
           for (int u : path)
             state[u] = 2;
           return -1;
         }
         state[v] = 1;
         path.push_back(v);
-        if (v == source) {
+        if (v == source)
+        {
           dist[v] = 0;
           break;
         }
         if (parent >
-            static_cast<gbbs::uintE>(std::numeric_limits<int>::max())) {
+            static_cast<gbbs::uintE>(std::numeric_limits<int>::max()))
+        {
           for (int u : path)
             state[u] = 2;
           return -1;
@@ -645,13 +699,16 @@ private:
       }
 
       int next_dist = dist[v];
-      if (next_dist < 0) {
+      if (next_dist < 0)
+      {
         for (int u : path)
           state[u] = 2;
         return -1;
       }
-      for (auto it = path.rbegin(); it != path.rend(); ++it) {
-        if (*it == v) {
+      for (auto it = path.rbegin(); it != path.rend(); ++it)
+      {
+        if (*it == v)
+        {
           state[*it] = 2;
           continue;
         }
@@ -663,7 +720,8 @@ private:
 
     if (source >= 0 && source < n)
       dist[source] = 0;
-    for (int v = 0; v < n; v++) {
+    for (int v = 0; v < n; v++)
+    {
       int d = compute_distance(v);
       if (d > max_depth)
         dist[v] = -1;
@@ -672,15 +730,18 @@ private:
   }
 
   static std::vector<int> runOfficialGBBSBFS(const Graph &G, int source,
-                                             int max_depth) {
+                                             int max_depth)
+  {
     return runTimedOfficialGBBSBFS(G, source, max_depth).distances;
   }
 
   static OfficialGBBSResult runTimedOfficialGBBSBFS(const Graph &G, int source,
-                                                    int max_depth) {
+                                                    int max_depth)
+  {
     OfficialGBBSResult result;
     const auto t0 = std::chrono::high_resolution_clock::now();
-    if (source < 0 || source >= G.num_vertices) {
+    if (source < 0 || source >= G.num_vertices)
+    {
       result.distances = std::vector<int>(G.num_vertices, -1);
       const auto t_done = std::chrono::high_resolution_clock::now();
       result.timing.total_s =
@@ -711,22 +772,26 @@ private:
     return result;
   }
 
-  void tuneSchedulerQueueCapacities(int vertex_count) {
+  void tuneSchedulerQueueCapacities(int vertex_count)
+  {
     const uint64_t bfs_queue_entries = 64;
     const uint64_t helper_queue_entries =
         std::max<uint64_t>(64, static_cast<uint64_t>(vertex_count));
 
-    for (auto &task : descriptor.taskDescriptors) {
+    for (auto &task : descriptor.taskDescriptors)
+    {
       uint64_t target =
           task.name == "BFS" ? bfs_queue_entries : helper_queue_entries;
-      for (auto &config : task.sidesConfigs) {
+      for (auto &config : task.sidesConfigs)
+      {
         if (config.sideType != "scheduler")
           continue;
         if (config.capacityVirtualQueue <= 0)
           continue;
         uint64_t old_capacity =
             static_cast<uint64_t>(config.capacityVirtualQueue);
-        if (target < old_capacity) {
+        if (target < old_capacity)
+        {
           config.capacityVirtualQueue = static_cast<int>(target);
           std::cout << "[BFS] scheduler queue cap for " << task.name << ": "
                     << old_capacity << " -> " << target << " entries\n";
@@ -738,7 +803,8 @@ private:
   // Drive paused-server management while polling the continuation's `done`
   // flag, bounded by a wall-clock watchdog. Returns 0 on done, -1 on watchdog
   // timeout.
-  size_t countVisited(Addr visited_base, int vertex_count) {
+  size_t countVisited(Addr visited_base, int vertex_count)
+  {
     std::vector<uint8_t> visited(vertex_count);
     memory_->copyFromDevice(reinterpret_cast<uint8_t *>(visited.data()),
                             visited_base,
@@ -751,7 +817,8 @@ private:
     return count;
   }
 
-  BFS_args readContinuation(Addr cont_base) {
+  BFS_args readContinuation(Addr cont_base)
+  {
     BFS_args cont{};
     memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&cont), cont_base,
                             sizeof(cont));
@@ -759,7 +826,8 @@ private:
   }
 
   void printProgress(Addr cont_base, Addr visited_base, int vertex_count,
-                     std::chrono::high_resolution_clock::time_point start) {
+                     std::chrono::high_resolution_clock::time_point start)
+  {
     size_t visited = countVisited(visited_base, vertex_count);
     BFS_args cont = readContinuation(cont_base);
     double percent = vertex_count == 0
@@ -782,7 +850,8 @@ private:
     //   +108 appends  +112 first_success  +116 first_current  +120
     //   first_neighbor
     const uint8_t *pad = reinterpret_cast<const uint8_t *>(&cont) + 88;
-    auto dbg = [&](int byteOff) {
+    auto dbg = [&](int byteOff)
+    {
       uint32_t v;
       std::memcpy(&v, pad + (byteOff - 88), sizeof(v));
       return v;
@@ -817,9 +886,12 @@ private:
   // same-address join-counter decrements were lost/collapsed before
   // re-injection. rpause!=0 would mean the host owes the server a resize -- it
   // never should here, but print it so we can rule it out.
-  void dumpSchedulerState() {
-    for (auto &task : descriptor.taskDescriptors) {
-      for (auto base : task.mgmtBaseAddresses.schedulerServersBaseAddresses) {
+  void dumpSchedulerState()
+  {
+    for (auto &task : descriptor.taskDescriptors)
+    {
+      for (auto base : task.mgmtBaseAddresses.schedulerServersBaseAddresses)
+      {
         uint64_t rpause =
             memory_->readReg64(base + scheduler_server_rpause_shift);
         uint64_t maxLen =
@@ -838,20 +910,23 @@ private:
     }
   }
 
-  int managementLoopBFS(Addr cont_base, Addr visited_base, int vertex_count) {
+  int managementLoopBFS(Addr cont_base, Addr visited_base, int vertex_count)
+  {
     const auto start = std::chrono::high_resolution_clock::now();
     const auto deadline = std::chrono::high_resolution_clock::now() +
                           std::chrono::duration<double>(watchdog_s_);
     auto next_progress = start;
     uint32_t done = 0;
     uint64_t iters = 0;
-    while (true) {
+    while (true)
+    {
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 
       memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&done),
                               cont_base + BFS_DONE_OFFSET, sizeof(done));
-      if (done != 0) {
+      if (done != 0)
+      {
         t_kernel_done_ = std::chrono::high_resolution_clock::now();
         if (!fast_mode_)
           printProgress(cont_base, visited_base, vertex_count, start);
@@ -864,12 +939,14 @@ private:
       }
 
       auto now = std::chrono::high_resolution_clock::now();
-      if (!fast_mode_ && now >= next_progress) {
+      if (!fast_mode_ && now >= next_progress)
+      {
         printProgress(cont_base, visited_base, vertex_count, start);
         next_progress = now + std::chrono::microseconds(10);
       }
 
-      if (now > deadline) {
+      if (now > deadline)
+      {
         t_kernel_done_ = now;
         std::cerr
             << "[BFS] WATCHDOG: " << watchdog_s_

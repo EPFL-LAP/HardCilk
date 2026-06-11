@@ -7,13 +7,13 @@ import org.scalatest.flatspec.AnyFlatSpec
 import scala.Predef.{assert => scalaAssert, _}
 import scala.collection.mutable
 
-class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
+class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester with org.scalatest.ParallelTestExecution {
   behavior of "AtomicMemoryUnit"
 
-  // n=8, p=4, lane 0 -> serves PEs {0, 4} (arbiter buckets 0 and p+0). tableSize=2.
+  // n=8 sizes the requestingPE field; the slot table is 2 entries, allocated
+  // from a free list (no PE-to-slot binding).
   private val n = 8
-  private val p = 4
-  private val lane = 0
+  private val tableSize = 2
 
   private case class AReq(
       pe: Int,
@@ -175,6 +175,7 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
     val pending = mutable.Queue.empty[AReq] ++ reqs
     val responses = mutable.ArrayBuffer.empty[(Int, BigInt)]
     var cycles = 0
+    dut.io.resp.ready.poke(true.B)
     while ((pending.nonEmpty || responses.size < reqs.size) && cycles < maxCycles) {
       if (pending.nonEmpty) pokeReq(dut, pending.front) else driveNoReq(dut)
       mem.beforeStep()
@@ -194,7 +195,7 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
     responses.toSeq
   }
 
-  private def mkDut = new AtomicMemoryUnit(n, p, lane)
+  private def mkDut = new AtomicMemoryUnit(n, tableSize)
 
   it should "set-unlock: return previous value and write the operand" in {
     test(mkDut) { dut =>
@@ -249,18 +250,33 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "add-one: return previous value and increment memory" in {
+  it should "add-N with N=1: return previous value and increment memory" in {
     test(mkDut) { dut =>
       val mem = new MemModel(dut)
       mem.mem(0x48) = 41
       val first = run(dut, mem, Seq(
-        AReq(pe = 0, addr = 0x48, operand = 0, op = Operation.LockAddOneReturnCurrent)))
+        AReq(pe = 0, addr = 0x48, operand = 1, op = Operation.LockAddNReturnCurrent)))
       val second = run(dut, mem, Seq(
-        AReq(pe = 0, addr = 0x48, operand = 123, op = Operation.LockAddOneReturnCurrent)))
+        AReq(pe = 0, addr = 0x48, operand = 1, op = Operation.LockAddNReturnCurrent)))
       scalaAssert(first ++ second == Seq((0, BigInt(41)), (0, BigInt(42))),
-        s"each add-one should return the previous value, got ${first ++ second}")
+        s"each add-one (N=1) should return the previous value, got ${first ++ second}")
       scalaAssert(mem.mem(0x48) == 43,
         s"memory should be incremented twice to 43, got ${mem.mem(0x48)}")
+    }
+  }
+
+  it should "add-N with N != 1: return previous value and add N to memory" in {
+    test(mkDut) { dut =>
+      val mem = new MemModel(dut)
+      mem.mem(0x50) = 100
+      val first = run(dut, mem, Seq(
+        AReq(pe = 0, addr = 0x50, operand = 5, op = Operation.LockAddNReturnCurrent)))
+      val second = run(dut, mem, Seq(
+        AReq(pe = 0, addr = 0x50, operand = 17, op = Operation.LockAddNReturnCurrent)))
+      scalaAssert(first ++ second == Seq((0, BigInt(100)), (0, BigInt(105))),
+        s"each add-N should return the previous value, got ${first ++ second}")
+      scalaAssert(mem.mem(0x50) == 122,
+        s"memory should be 100 + 5 + 17 = 122, got ${mem.mem(0x50)}")
     }
   }
 
@@ -278,7 +294,7 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
           mode = AtomicMode.Byte
         )))
       scalaAssert(byteOut == Seq((0, BigInt(0x55))),
-        s"byte op should return the selected byte (lane 3 = 0x55) right-justified, got $byteOut")
+        s"byte op should return the selected previous byte (lane 3 = 0x55) right-justified, got $byteOut")
       scalaAssert(mem.mem(0x40) == BigInt("11223344aa667788", 16),
         s"byte op should only replace byte lane 3, got ${mem.mem(0x40).toString(16)}")
 
@@ -286,12 +302,12 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
         AReq(
           pe = 0,
           addr = 0x44,
-          operand = 0,
-          op = Operation.LockAddOneReturnCurrent,
+          operand = 1,
+          op = Operation.LockAddNReturnCurrent,
           mode = AtomicMode.Word
         )))
       scalaAssert(mem.mem(0x40) == BigInt("11223345aa667788", 16),
-        s"word add should only increment the upper 32-bit word, got ${mem.mem(0x40).toString(16)}")
+        s"word add (N=1) should only increment the upper 32-bit word, got ${mem.mem(0x40).toString(16)}")
       scalaAssert(mem.arSizes.takeRight(2) == Seq(BigInt(0), BigInt(2)),
         s"AR sizes should be byte then word, got ${mem.arSizes}")
       scalaAssert(mem.awSizes.takeRight(2) == Seq(BigInt(0), BigInt(2)),
@@ -337,6 +353,7 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester {
       val mem = new MemModel(dut, latency = 8)
       mem.mem(0x10) = 1
       // Accept exactly one request.
+      dut.io.resp.ready.poke(true.B)
       driveNoReq(dut)
       pokeReq(dut, AReq(0, 0x10, 2, Operation.LockSetUnlockAndReturnCurrent))
       var accepted = false

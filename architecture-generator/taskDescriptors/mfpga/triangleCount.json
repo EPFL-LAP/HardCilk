@@ -13,19 +13,17 @@
       "vertex_map"
     ]
   },
-  "spawnNextList": {
-    
-  },
+  "spawnNextList": {},
   "targetFrequency": 300,
   "taskDescriptors": [
     {
-      "spawnServersCount" : 0,
+      "spawnServersCount": 0,
       "dynamicMemAlloc": false,
       "isCont": true,
       "isRoot": true,
       "name": "triangle",
       "numProcessingElements": 1,
-      "peHDLPath": "../hls-kernel-output/triangleCount/triangle",
+      "peHDLPath": "/beta/bradley/HardCilk/hls-kernel-output/triangleCount/triangle",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -47,16 +45,16 @@
       "widthTask": 256,
       "hasAXI": true,
       "taskId": 0,
-      "generateArgOutWriteBuffer": false      
+      "generateArgOutWriteBuffer": false
     },
     {
-      "spawnServersCount" : 1,
+      "spawnServersCount": 1,
       "dynamicMemAlloc": false,
       "isCont": false,
       "isRoot": false,
       "name": "vertex_map",
       "numProcessingElements": 8,
-      "peHDLPath": "../hls-kernel-output/triangleCount/vertex_map",
+      "peHDLPath": "/beta/bradley/HardCilk/hls-kernel-output/triangleCount/vertex_map",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -83,8 +81,8 @@
   "widthContCounter": 32,
   "isVitisProject": true,
   "keepAXI4Interfaces": true,
-  "mFPGASynth": true,
-  "mFPGASimulation": true,
+  "mFPGASynth": false,
+  "mFPGASimulation": false,
   "maximumAXIPorts": 30,
   "hasAXIDMAInput": false,
   "transformAXI": false,

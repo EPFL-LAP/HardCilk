@@ -3,7 +3,6 @@ package Atomics.tests
 import chisel3._
 import chiseltest._
 import Atomics.Helpers.AvailableSlotTracker
-import org.scalatest.ParallelTestExecution
 import org.scalatest.flatspec.AnyFlatSpec
 import scala.Predef.{assert => scalaAssert, _}
 import scala.collection.mutable
@@ -11,7 +10,7 @@ import scala.collection.mutable
 class AvailableSlotTrackerTests
     extends AnyFlatSpec
     with ChiselScalatestTester
-    with ParallelTestExecution {
+    with org.scalatest.ParallelTestExecution {
   behavior of "AvailableSlotTracker"
 
   private case class Params(p: Int, tagStoreSize: Int) {
