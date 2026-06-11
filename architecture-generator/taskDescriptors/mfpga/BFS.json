@@ -72,7 +72,8 @@
       "generateSpawnNextWriteBuffer": false,
       "generateArgOutWriteBuffer": false,
       "taskId": 1,
-      "participatesInLock": true
+      "participatesInLock": true,
+      "lockPorts": 2
     }
   ],
   "widthAddress": 64,
@@ -88,7 +89,7 @@
   "transformPattern": [],
   "widthAXIAddress": 34,
   "lockConfig": {
-    "N": 8,
+    "N": 16,
     "P": 4,
     "tagStoreSize": 64
   }

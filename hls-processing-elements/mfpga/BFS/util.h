@@ -7,15 +7,29 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MEM_OUT(mem_port, addr, type, value)                                   \
+#define MEM_OUT_VOLATILE(mem_port, addr, type, value) \
+  *((volatile type *)((uint8_t *)(mem_port) + (addr))) = (value)
+
+#define MEM_IN_VOLATILE(mem_port, addr, type) \
+  *((volatile type *)((uint8_t *)(mem_port) + (addr)))
+
+#define MEM_ARR_OUT_VOLATILE(mem_port, addr, idx, type, value) \
+  *((volatile type *)((uint8_t *)(mem_port) + (addr) + (idx) * sizeof(type))) = (value)
+
+#define MEM_ARR_IN_VOLATILE(mem_port, addr, idx, type) \
+  *((volatile type *)((uint8_t *)(mem_port) + (addr) + (idx) * sizeof(type)))
+
+#define MEM_OUT(mem_port, addr, type, value) \
   *((type(*))((uint8_t *)(mem_port) + (addr))) = (value)
-#define MEM_IN(mem_port, addr, type)                                           \
+#define MEM_IN(mem_port, addr, type) \
   *((type(*))((uint8_t *)(mem_port) + (addr)))
 
-#define MEM_ARR_OUT(mem_port, addr, idx, type, value)                          \
+#define MEM_ARR_OUT(mem_port, addr, idx, type, value) \
   *((type(*))((uint8_t *)(mem_port) + (addr) + (idx) * sizeof(type))) = (value)
-#define MEM_ARR_IN(mem_port, addr, idx, type)                                  \
+#define MEM_ARR_IN(mem_port, addr, idx, type) \
   *((type(*))((uint8_t *)(mem_port) + (addr) + (idx) * sizeof(type)))
+
+#define TASK_FIELD_ADDR(task, field) (uint64_t)&(((BFS_args *)task.cont)->field)
 
 using addr_t = uint64_t;
 using Addr = uint64_t;
@@ -27,7 +41,8 @@ using lock_resp = ap_axiu<136, 0, 0, 0>;
 
 // Opcodes accepted by the LockServer (lockchisel.Operation). The operation
 // field of a request lives at tdata[131:128].
-enum LockOperation : uint8_t {
+enum LockOperation : uint8_t
+{
   LOCK_OP_UNLOCK = 0b0000,
   LOCK_OP_LOCK = 0b0001,
   LOCK_OP_SET_AND_RETURN_CURRENT = 0b0010,
@@ -37,13 +52,17 @@ enum LockOperation : uint8_t {
   LOCK_OP_UNLOCK_NO_RESPONSE = 0b0111,
 };
 
-enum BfsVisitFlags : uint32_t { BFS_VISIT_VERTEX_ALREADY_MARKED = 1 };
+enum BfsVisitFlags : uint32_t
+{
+  BFS_VISIT_VERTEX_ALREADY_MARKED = 1
+};
 
 // Atomic granularity selector (lockchisel.AtomicMode), carried in
 // tdata[134:133] of a lock request. The AMU read-modify-writes only the
 // selected sub-field of the 64-bit beat (byte-strobed), so Visited can be a
 // plain byte array.
-enum AtomicMode : uint8_t {
+enum AtomicMode : uint8_t
+{
   ATOMIC_MODE_DOUBLEWORD = 0b00, // 8 bytes (legacy 64-bit behaviour)
   ATOMIC_MODE_BYTE = 0b01,       // 1 byte
   ATOMIC_MODE_WORD = 0b10,       // 4 bytes
@@ -54,7 +73,15 @@ enum AtomicMode : uint8_t {
 // on the wire (truncated to the HBM address width).
 static const addr_t VISITED_SLOT_BYTES = 1;
 
-struct BFS_args {
+// BFS_new: number of frontier vertices the orchestration kernel packs into one
+// edge-map helper task (one chunk). Shared so the kernel and the testbench's
+// chunked C model agree. BFS_new.cpp re-#defines this to the same value.
+#ifndef VERTICES_PER_TASK
+#define VERTICES_PER_TASK 64
+#endif
+
+struct BFS_args
+{
   uint32_t counter;
   uint32_t source;
   uint32_t vertex_count;
@@ -73,7 +100,8 @@ struct BFS_args {
   uint8_t _padding[40];
 };
 
-struct sparse_edgemap_helper_args {
+struct sparse_edgemap_helper_args
+{
   addr_t graph;             // 0
   addr_t distance;          // 8
   addr_t visited;           // 16
@@ -81,16 +109,17 @@ struct sparse_edgemap_helper_args {
   addr_t next_frontier;     // 32
   addr_t nextFChar;         // 40
   addr_t cont;              // 48
-  uint32_t index;           // 56
-  uint32_t currentDistance; // 60
-  uint32_t vertex_count;    // 64
-  uint32_t max_depth;       // 68
+  uint32_t index;            // 56
+  uint32_t currentDistance;  // 60
+  uint32_t vertex_count;     // 64  total vertices in the graph (bounds checks)
+  uint32_t max_depth;        // 68
+  uint32_t task_vertex_count; // 72  BFS_new: # frontier vertices in THIS chunk
   // The scheduler's PE-facing AXIS width and backing-queue entry size are both
   // driven by the descriptor's widthTask, which must be a power of two. The real
-  // payload is 72 bytes; pad to 128 bytes (1024 bits) so it matches
-  // widthTask=1024 in BFS.json. Without this the trailing fields (vertex_count,
+  // payload is 76 bytes; pad to 128 bytes (1024 bits) so it matches
+  // widthTask=1024 in BFS.json. Without this the trailing fields (task_vertex_count,
   // max_depth) are truncated off the task stream.
-  uint8_t _pad[56];         // 72..127
+  uint8_t _pad[52]; // 76..127
 };
 static_assert(sizeof(sparse_edgemap_helper_args) == 128,
               "sparse_edgemap_helper_args must be 1024 bits (widthTask=1024)");
@@ -104,7 +133,8 @@ static_assert(sizeof(sparse_edgemap_helper_args) == 128,
 //   tdata[135]     = reserved (0)
 static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
                                      LockOperation op, bool blocking,
-                                     AtomicMode atomic_mode) {
+                                     AtomicMode atomic_mode)
+{
 #pragma HLS INLINE
   lock_req req;
   req.data = 0;
@@ -122,24 +152,25 @@ static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
 
 // Decode a lock response beat. The AMU response path packs Cat(0, data, 1), so:
 //   tdata[63:0]    = status (1 == read-modify-write completed)
-//   tdata[127:64]  = previous memory contents (the full 64-bit beat that was
-//   read)
-static inline bool lock_resp_success(const lock_resp &resp) {
+//   tdata[127:64]  = previous memory contents, with the addressed sub-word
+//                    right-justified into the low bits (byte/word atomics return
+//                    just their lane in [7:0]/[31:0]; doubleword is the full beat)
+static inline bool lock_resp_success(const lock_resp &resp)
+{
 #pragma HLS INLINE
   return resp.data(63, 0) != 0;
 }
 
-static inline ap_uint<64> lock_resp_current(const lock_resp &resp) {
+static inline ap_uint<64> lock_resp_current(const lock_resp &resp)
+{
 #pragma HLS INLINE
   return resp.data(127, 64);
 }
 
-// The AMU returns the whole 64-bit beat; extract the single byte the request
-// addressed (byte-mode atomics).
-static inline uint8_t lock_resp_current_byte(const lock_resp &resp,
-                                             addr_t address) {
+// The AMU right-justifies the addressed byte into the low bits of the returned
+// value, so the previous Visited byte is simply tdata[71:64]. No shift needed.
+static inline uint8_t lock_resp_current_byte(const lock_resp &resp)
+{
 #pragma HLS INLINE
-  ap_uint<64> word = lock_resp_current(resp);
-  uint32_t shift = ((uint32_t)(address & 0x7)) * 8;
-  return (uint8_t)((word >> shift) & 0xFF);
+  return (uint8_t)(lock_resp_current(resp) & 0xFF);
 }

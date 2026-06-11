@@ -925,8 +925,8 @@ class LockServerTests
     )
     val resp = out(0).head._2
     scalaAssert(
-      resp.success && resp.data == BigInt("00000005aaaaaaaa", 16),
-      s"word add-one should return previous full beat, got $resp"
+      resp.success && resp.data == BigInt(5),
+      s"word add-one should return the selected upper word (5) right-justified, got $resp"
     )
     scalaAssert(
       mem.mem(0x300) == BigInt("00000006aaaaaaaa", 16),

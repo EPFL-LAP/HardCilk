@@ -21,8 +21,6 @@ import scala.collection.mutable.ArrayBuffer
 import chext.elastic.ConnectOp._
 import chext.amba.axi4.lite.components.{Upscale, UpscaleConfig}
 
-
-
 import HardCilkBuilder.PortToExport
 import Util.WriteBuffer
 
@@ -35,15 +33,16 @@ class HardCilk(
     isSimulation: Boolean,
     argumentNotifierCutCount: Int,
     override val addressTransformFlag: Boolean = false // Made public for trait
-) extends Module with HasHBMInterconnect with HardCilkHasMfpgaSupport { // <-- MIXIN THE TRAIT HERE
-
+) extends Module
+    with HasHBMInterconnect
+    with HardCilkHasMfpgaSupport { // <-- MIXIN THE TRAIT HERE
 
   override def desiredName: String =
     if (fullSysGenDescriptor.name.isEmpty) "fullSysGen"
     else fullSysGenDescriptor.name
 
   val paused = IO(Output(Bool())).suggestName("paused")
-  val done   = IO(Output(Bool())).suggestName("done")
+  val done = IO(Output(Bool())).suggestName("done")
 
   // These are now concrete implementations for the trait's abstract members
   val axiOuts = scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
@@ -58,26 +57,33 @@ class HardCilk(
 
   // These are also concrete implementations for the trait
   val cfgAxi4HBM = axi4.Config(
-    wId = 5, wAddr = fullSysGenDescriptor.widthAXIAddress, wData = 256,
-    wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0
+    wId = 5,
+    wAddr = fullSysGenDescriptor.widthAXIAddress,
+    wData = 256,
+    wUserAR = 0,
+    wUserR = 0,
+    wUserAW = 0,
+    wUserW = 0,
+    wUserB = 0
   )
   val cfgXDMA = axi4.Config(wId = 4, wAddr = 64, wData = 512)
 
-  val builder = new HardCilkBuilder(fullSysGenDescriptor, debug, argumentNotifierCutCount)
+  val builder =
+    new HardCilkBuilder(fullSysGenDescriptor, debug, argumentNotifierCutCount)
 
   val blueprint = builder.defineBlueprint()
 
-  val peMap = blueprint.peFactories.map {
-    case (name, factory) => name -> factory()
+  val peMap = blueprint.peFactories.map { case (name, factory) =>
+    name -> factory()
   }
-  val schedulerMap = blueprint.schedulerFactories.map {
-    case (name, factory) => name -> Module(factory())
+  val schedulerMap = blueprint.schedulerFactories.map { case (name, factory) =>
+    name -> Module(factory())
   }
-  val allocatorMap = blueprint.allocatorFactories.map {
-    case (name, factory) => name -> Module(factory())
+  val allocatorMap = blueprint.allocatorFactories.map { case (name, factory) =>
+    name -> Module(factory())
   }
-  val notifierMap = blueprint.argNotifierFactories.map {
-    case (name, factory) => name -> Module(factory())
+  val notifierMap = blueprint.argNotifierFactories.map { case (name, factory) =>
+    name -> Module(factory())
   }
   val memAllocatorMap = blueprint.memAllocatorFactories.map {
     case (name, factory) => name -> Module(factory())
@@ -94,37 +100,60 @@ class HardCilk(
     case (name, factory) => name -> Module(factory())
   }
 
-
   val demux = instantiateManagementDemux()
-  connectManagement(demux, schedulerMap, allocatorMap, memAllocatorMap, notifierMap, remoteStreamToMemMap)
+  connectManagement(
+    demux,
+    schedulerMap,
+    allocatorMap,
+    memAllocatorMap,
+    notifierMap,
+    remoteStreamToMemMap
+  )
   connectPEs(peMap)
 
   val portsToExport = builder.connectSubsystems(
-    schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap, spawnNextWBMap, sendArgumentWBMap
+    schedulerMap,
+    allocatorMap,
+    notifierMap,
+    memAllocatorMap,
+    peMap,
+    spawnNextWBMap,
+    sendArgumentWBMap
   )
 
-
-
   exportMissingPEPorts(
-    portsToExport, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, peMap, spawnNextWBMap, sendArgumentWBMap
+    portsToExport,
+    schedulerMap,
+    allocatorMap,
+    notifierMap,
+    memAllocatorMap,
+    peMap,
+    spawnNextWBMap,
+    sendArgumentWBMap
   )
 
   connectGlobalSignals(schedulerMap, allocatorMap, memAllocatorMap, notifierMap)
 
   // This call now invokes the method from the HasHBMInterconnect trait
-  buildAndConnectHBM(peMap, schedulerMap, allocatorMap, notifierMap, memAllocatorMap, spawnNextWBMap, sendArgumentWBMap, remoteStreamToMemMap)
+  buildAndConnectHBM(
+    peMap,
+    schedulerMap,
+    allocatorMap,
+    notifierMap,
+    memAllocatorMap,
+    spawnNextWBMap,
+    sendArgumentWBMap,
+    remoteStreamToMemMap
+  )
 
   fullSysGenDescriptor.lockConfig.foreach { lc => connectLockServer(lc, peMap) }
 
-  if(fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth){
+  if (fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth) {
     buildMfpgaConnections()
   }
 
   exportPEControl(peMap)
   generateHdlInfo()
-
-
-
 
   // --- Private Helper Methods for Initialization ---
 
@@ -140,7 +169,9 @@ class HardCilk(
   ): Unit = {
 
     if (portsToExport.nonEmpty) {
-      println(s"[CleanHardCilk] Exporting ${portsToExport.length} ports for missing PEs...")
+      println(
+        s"[CleanHardCilk] Exporting ${portsToExport.length} ports for missing PEs..."
+      )
     }
 
     for (port <- portsToExport) {
@@ -148,27 +179,40 @@ class HardCilk(
       val pePortDesc = port.pePortDescriptor
 
       val subsystemPort = getPhysicalPort(
-        subPortDesc, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs
+        subPortDesc,
+        scheds,
+        allocs,
+        notifiers,
+        memAllocs,
+        pes,
+        spawnNextWBs,
+        sendArgumentWBs
       )
 
-      /**
-       * First, handle if directly the port is exported
-      */
+      /** First, handle if directly the port is exported
+        */
 
       val newIO = IO(chiselTypeOf(subsystemPort))
-      val ioName = f"BindTo_PE_${pePortDesc.parentName}_${pePortDesc.parentIndex}_${pePortDesc.portType}"
+      val ioName =
+        f"BindTo_PE_${pePortDesc.parentName}_${pePortDesc.parentIndex}_${pePortDesc.portType}"
       newIO.suggestName(ioName)
       println(s"  ... exporting ${ioName}")
 
       if (port.isSource) {
         newIO <> subsystemPort
         exportedPeHdlinfoPorts += hdlinfo.Port(
-          ioName, hdlinfo.PortDirection.input, hdlinfo.PortKind.data, associatedClock = "clock"
+          ioName,
+          hdlinfo.PortDirection.input,
+          hdlinfo.PortKind.data,
+          associatedClock = "clock"
         )
       } else {
         subsystemPort <> newIO
         exportedPeHdlinfoPorts += hdlinfo.Port(
-          ioName, hdlinfo.PortDirection.output, hdlinfo.PortKind.data, associatedClock = "clock"
+          ioName,
+          hdlinfo.PortDirection.output,
+          hdlinfo.PortKind.data,
+          associatedClock = "clock"
         )
       }
     }
@@ -194,7 +238,8 @@ class HardCilk(
     )
 
     val s_axil_mgmt = if (fullSysGenDescriptor.isVitisProject) {
-      IO(axi4.Slave(axiCfgCtrl.copy(wData = 32))).suggestName("s_axil_mgmt_hardcilk")
+      IO(axi4.Slave(axiCfgCtrl.copy(wData = 32)))
+        .suggestName("s_axil_mgmt_hardcilk")
     } else {
       IO(axi4.Slave(axiCfgCtrl)).suggestName("s_axil_mgmt_hardcilk")
     }
@@ -204,20 +249,37 @@ class HardCilk(
       val s_axil_mgmt_upscale = Module(
         new Upscale(new UpscaleConfig(axiCfgCtrl.copy(wData = 32), 64))
       )
-      axi4.lite.SlaveBuffer(s_axil_mgmt.asLite, axi4.BufferConfig.all(8)) :=> s_axil_mgmt_upscale.s_axi
+      axi4.lite.SlaveBuffer(
+        s_axil_mgmt.asLite,
+        axi4.BufferConfig.all(8)
+      ) :=> s_axil_mgmt_upscale.s_axi
 
       val offset = 0x10
-      new chext.elastic.Transform(s_axil_mgmt_upscale.m_axi.ar, demux.s_axil.ar) {
+      new chext.elastic.Transform(
+        s_axil_mgmt_upscale.m_axi.ar,
+        demux.s_axil.ar
+      ) {
         protected override def onTransform: Unit = {
           out := in
-          out.addr := in.addr - Mux(in.addr > 0.U, offset.U, 0.U) // This was done to have addr 0 (mapped for HLS registers to not hang the axi transaction)
+          out.addr := in.addr - Mux(
+            in.addr > 0.U,
+            offset.U,
+            0.U
+          ) // This was done to have addr 0 (mapped for HLS registers to not hang the axi transaction)
         }
       }
       demux.s_axil.r :=> s_axil_mgmt_upscale.m_axi.r
-      new chext.elastic.Transform(s_axil_mgmt_upscale.m_axi.aw, demux.s_axil.aw) {
+      new chext.elastic.Transform(
+        s_axil_mgmt_upscale.m_axi.aw,
+        demux.s_axil.aw
+      ) {
         protected override def onTransform: Unit = {
           out := in
-          out.addr := in.addr - Mux(in.addr > 0.U, offset.U, 0.U) // This was done to have addr 0 (mapped for HLS registers to not hang the axi transaction)
+          out.addr := in.addr - Mux(
+            in.addr > 0.U,
+            offset.U,
+            0.U
+          ) // This was done to have addr 0 (mapped for HLS registers to not hang the axi transaction)
         }
       }
       s_axil_mgmt_upscale.m_axi.w :=> demux.s_axil.w
@@ -231,7 +293,8 @@ class HardCilk(
         "s_axil_mgmt_hardcilk",
         hdlinfo.InterfaceRole.slave,
         hdlinfo.InterfaceKind("axi4"),
-        "clock", "reset",
+        "clock",
+        "reset",
         Map("config" -> hdlinfo.TypedObject(axiCfgCtrl))
       )
     )
@@ -284,7 +347,9 @@ class HardCilk(
     }
 
     // if mfpga support connect the info ports
-    if(fullSysGenDescriptor.mFPGASynth || fullSysGenDescriptor.mFPGASimulation){
+    if (
+      fullSysGenDescriptor.mFPGASynth || fullSysGenDescriptor.mFPGASimulation
+    ) {
       // each scheduler has an extra port
       fullSysGenDescriptor.taskDescriptors.foreach { task =>
         val taskSched = schedulerMap(task.name)
@@ -293,16 +358,17 @@ class HardCilk(
       }
       // each remote stream has a port
       fullSysGenDescriptor.taskDescriptors.foreach { task =>
-        if(remoteStreamToMemMap.contains(task.name)){
+        if (remoteStreamToMemMap.contains(task.name)) {
           demux.m_axil(j) :=> remoteStreamToMemMap(task.name).io.axi_mgmt
           j += 1
         }
       }
       // each argument notifier has a sequence of extra ports
       fullSysGenDescriptor.taskDescriptors.foreach { task =>
-        if(notifierMap.contains(task.name)){
-          val s_axi_seq = notifierMap(task.name).s_axis_mfgpa_argument_notifier.get
-          for(i <- 0 until task.getNumServers("argumentNotifier")){
+        if (notifierMap.contains(task.name)) {
+          val s_axi_seq =
+            notifierMap(task.name).s_axis_mfgpa_argument_notifier.get
+          for (i <- 0 until task.getNumServers("argumentNotifier")) {
             demux.m_axil(j) :=> s_axi_seq(i)
             j += 1
           }
@@ -311,7 +377,9 @@ class HardCilk(
     }
   }
 
-  private def connectPEs(peMap: Map[String, Seq[VitisWriteBufferModule]]): Unit = {
+  private def connectPEs(
+      peMap: Map[String, Seq[VitisWriteBufferModule]]
+  ): Unit = {
     for {
       (taskName, peArray) <- peMap
       pe <- peArray
@@ -350,9 +418,11 @@ class HardCilk(
       done := false.B
     }
   }
-  
-    /** Instantiate one shared LockServer, wire each participating PE's
-    * toLock/fromLock to a lane, and export its HBM master as a dedicated m_axi port. */
+
+  /** Instantiate one shared LockServer, wire each participating PE's
+    * toLock/fromLock to a lane, and export its HBM master as a dedicated m_axi
+    * port.
+    */
   private def connectLockServer(
       lc: LockConfig,
       peMap: Map[String, Seq[VitisWriteBufferModule]]
@@ -361,43 +431,69 @@ class HardCilk(
     // --- A. Deterministic lane assignment ---
     // Walk taskDescriptors (stable order), not peMap, so lanes are reproducible.
     // BFS: the 16 sparse_edgemap_helper PEs become lanes 0..15.
-    val lockPEs: Seq[VitisWriteBufferModule] =
+    val lockPEs: Seq[(VitisWriteBufferModule, TaskDescriptor)] =
       fullSysGenDescriptor.taskDescriptors
         .filter(_.participatesInLock)
-        .flatMap(t => peMap(t.name))
-    require(lockPEs.length == lc.N,
-      s"lock lanes ${lockPEs.length} must equal lockConfig.N ${lc.N}")  // tripwire; validate() guarantees it
+        .flatMap(t => (peMap(t.name).map(x => (x, t))))
+    val number_of_needed_lanes = (for {
+      lp <- lockPEs
+      c <- 0 until lp._2.lockPorts
+    } yield (0)).length
+    require(
+      number_of_needed_lanes
+        == lc.N,
+      s"lock lanes ${number_of_needed_lanes} must equal lockConfig.N ${lc.N}"
+    ) // tripwire; validate() guarantees it
 
     // --- B. Instantiate and tie off every lane (unconnected lanes stay safely idle) ---
     // addrW matches the HBM port address width (widthAXIAddress, 34) so the lock
     // tags, tag store, and AMU master are all native HBM-width -- no 64->34 address
     // transition, and the tag-store comparators are 34-bit instead of 64-bit.
-    val lockServer = Module(new LockServer(
-      n = lc.N, p = lc.P, tagStoreSize = lc.tagStoreSize,
-      addrW = fullSysGenDescriptor.widthAXIAddress, lockTraceCsv = false))
+    val lockServer = Module(
+      new LockServer(
+        n = lc.N,
+        p = lc.P,
+        tagStoreSize = lc.tagStoreSize,
+        addrW = fullSysGenDescriptor.widthAXIAddress,
+        lockTraceCsv = false
+      )
+    )
     for (i <- 0 until lc.N) {
-      lockServer.io.req(i).valid  := false.B
-      lockServer.io.req(i).bits   := DontCare
+      lockServer.io.req(i).valid := false.B
+      lockServer.io.req(i).bits := DontCare
       lockServer.io.resp(i).ready := false.B
     }
 
     // --- C. Connect endpoints (last-connect semantics override the tie-off above) ---
-    for ((pe, lane) <- lockPEs.zipWithIndex) {
-      val toLock   = pe.getPort("toLock").asInstanceOf[chext.amba.axi4s.Interface]
-      val fromLock = pe.getPort("fromLock").asInstanceOf[chext.amba.axi4s.Interface]
-      val req  = lockServer.io.req(lane)
+    for (
+      (pe, hasMultiplePorts, index, lane) <-
+        (for {
+          (pe, desc) <- lockPEs
+          index <- 0 until desc.lockPorts
+        } yield (pe, desc.lockPorts > 1, index)).zipWithIndex.map {
+          case ((a, b, c), d) => (a, b, c, d)
+        }
+    ) {
+      val lockStringAddition = if (hasMultiplePorts) s"$index" else ""
+      val toLock = pe
+        .getPort(s"toLock$lockStringAddition")
+        .asInstanceOf[chext.amba.axi4s.Interface]
+      val fromLock =
+        pe.getPort(s"fromLock$lockStringAddition")
+          .asInstanceOf[chext.amba.axi4s.Interface]
+      val req = lockServer.io.req(lane)
       val resp = lockServer.io.resp(lane)
 
       // PE -> server
-      req.valid      := toLock.TVALID
-      toLock.TREADY  := req.ready
+      req.valid := toLock.TVALID
+      toLock.TREADY := req.ready
       req.bits.tdata := toLock.TDATA
-      req.bits.tlast := true.B            // single-beat; PE iface has no TLAST under onlyRV
+      req.bits.tlast := true.B // single-beat; PE iface has no TLAST under onlyRV
 
       // server -> PE
       fromLock.TVALID := resp.valid
-      resp.ready      := fromLock.TREADY
-      fromLock.TDATA  := resp.bits.tdata
+      resp.ready := fromLock.TREADY
+      fromLock.TDATA := resp.bits.tdata
     }
 
     // --- D. Export io.gmem as its own dedicated m_axi_NN ---
@@ -405,33 +501,55 @@ class HardCilk(
     // Address widths already match (no narrowing); the ProtocolConverter + Widen
     // only upsize data 64->256. No AddressTransform: this master has its own channel.
     val outputCfg = cfgAxi4HBM.copy(wId = 2)
-    val portName  = f"m_axi_${numHbmPortExports}%02d"
-    val axiOut    = IO(axi4.Master(outputCfg)).suggestName(portName)
+    val portName = f"m_axi_${numHbmPortExports}%02d"
+    val axiOut = IO(axi4.Master(outputCfg)).suggestName(portName)
 
-    val pc = Module(new axi4.full.components.ProtocolConverter(
-      new axi4.full.components.ProtocolConverterConfig(
-        axiSlaveCfg  = lockServer.io.gmem.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
-        axiMasterCfg = outputCfg)))
-    axi4.full.SlaveBuffer(AxiUserYanker(lockServer.io.gmem.asFull), axi4.BufferConfig.all(2)) :=> pc.s_axi
+    val pc = Module(
+      new axi4.full.components.ProtocolConverter(
+        new axi4.full.components.ProtocolConverterConfig(
+          axiSlaveCfg = lockServer.io.gmem.cfg
+            .copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+          axiMasterCfg = outputCfg
+        )
+      )
+    )
+    axi4.full.SlaveBuffer(
+      AxiUserYanker(lockServer.io.gmem.asFull),
+      axi4.BufferConfig.all(2)
+    ) :=> pc.s_axi
 
-    val widen = Module(new axi4.full.components.Widen(
-      new axi4.full.components.WidenConfig(outputCfg)))
+    val widen = Module(
+      new axi4.full.components.Widen(
+        new axi4.full.components.WidenConfig(outputCfg)
+      )
+    )
     axi4.full.SlaveBuffer(pc.m_axi, axi4.BufferConfig.all(2)) :=> widen.s_axi
-    axi4.full.SlaveBuffer(widen.m_axi, axi4.BufferConfig.all(2)) :=> axiOut.asFull
+    axi4.full.SlaveBuffer(
+      widen.m_axi,
+      axi4.BufferConfig.all(2)
+    ) :=> axiOut.asFull
 
-    interfaceBuffer.addOne(hdlinfo.Interface(
-      portName, hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
-      "clock", "reset", Map("config" -> hdlinfo.TypedObject(axiOut.cfg))))
+    interfaceBuffer.addOne(
+      hdlinfo.Interface(
+        portName,
+        hdlinfo.InterfaceRole.master,
+        hdlinfo.InterfaceKind("axi4"),
+        "clock",
+        "reset",
+        Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+      )
+    )
 
     axiOuts.addOne(axiOut)
     numHbmPortExports += 1
   }
 
-
   // --- buildAndConnectHBM IS NOW GONE ---
   // (It lives in the HasHBMInterconnect trait)
 
-  private def exportPEControl(peMap: Map[String, Seq[VitisWriteBufferModule]]): Unit = {
+  private def exportPEControl(
+      peMap: Map[String, Seq[VitisWriteBufferModule]]
+  ): Unit = {
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       try {
         if (task.hasAXI && peMap.contains(task.name)) {
@@ -440,7 +558,9 @@ class HardCilk(
             val pe = peArray(i)
             val peName = f"${task.name}_${i}"
             val pes_axi_control = IO(
-              chiselTypeOf(pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface])
+              chiselTypeOf(
+                pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+              )
             ).suggestName(f"${peName}_s_axi_control")
 
             interfaceBuffer.addOne(
@@ -448,17 +568,22 @@ class HardCilk(
                 f"${peName}_s_axi_control",
                 hdlinfo.InterfaceRole.slave,
                 hdlinfo.InterfaceKind("axi4"),
-                "clock", "reset",
+                "clock",
+                "reset",
                 Map("config" -> hdlinfo.TypedObject(pes_axi_control.cfg))
               )
             )
-            pes_axi_control :=> pe.getPort("s_axi_control").asInstanceOf[axi4.RawInterface]
+            pes_axi_control :=> pe
+              .getPort("s_axi_control")
+              .asInstanceOf[axi4.RawInterface]
             interfacesAxiControl.addOne(pes_axi_control)
           }
         }
-      }
-      catch {
-        case _: Exception => print(s"Module has no s_axi_control port, skip") // Module has no s_axi_control port, skip
+      } catch {
+        case _: Exception =>
+          print(
+            s"Module has no s_axi_control port, skip"
+          ) // Module has no s_axi_control port, skip
       }
     }
   }
@@ -468,7 +593,13 @@ class HardCilk(
       import hdlinfo._
       val basicPorts = Seq(
         Port("clock", PortDirection.input, PortKind.clock),
-        Port("reset", PortDirection.input, PortKind.reset, PortSensitivity.resetActiveHigh, associatedClock = "clock"),
+        Port(
+          "reset",
+          PortDirection.input,
+          PortKind.reset,
+          PortSensitivity.resetActiveHigh,
+          associatedClock = "clock"
+        ),
         Port("paused", PortDirection.output, PortKind.data),
         Port("done", PortDirection.output, PortKind.data)
       )

@@ -173,7 +173,6 @@ public:
     memory_->copyToDevice(
         graph_base, reinterpret_cast<const uint8_t *>(graphEntries.data()),
         graphEntries.size() * sizeof(uint64_t));
-    auto t_fpga_execution = std::chrono::high_resolution_clock::now();
 
     // ── Work buffers ────────────────────────────────────────────────────────
     Addr distance_base =
@@ -189,9 +188,9 @@ public:
     Addr nextFChar_base = memory_->allocateMemFPGA(sizeof(uint64_t), 512);
     Addr cont_base = memory_->allocateMemFPGA(sizeof(BFS_args), 512);
 
-    // Zero / sentinel init. The PE's init() also does this for the first round,
-    // but seeding here keeps the buffers well-defined and zeroes Visited (whose
-    // 8-byte slots the AMU test-and-sets).
+    // Required host-side init. The PE no longer has an init loop (BFS_new.cpp
+    // dropped it), so the host is solely responsible for pre-initializing
+    // distance to -1, visited to 0, and nextFChar to 0 before the first task.
     {
       std::vector<int32_t> distInit(n, -1);
       memory_->copyToDevice(distance_base,
@@ -255,10 +254,18 @@ public:
               << std::chrono::duration<double>(t_started - t_init).count()
               << "s\n";
 
+    // Kernel-only stopwatch: this brackets startSystem() -> done edge, the FPGA
+    // analog of GBBS's bfs_s (graph already resident, source already seeded). It
+    // deliberately excludes the buffer copies, the (one-time) initSystem
+    // register programming, and the distance readback -- those are the FPGA
+    // counterpart of GBBS's excluded graph-build/conversion and live only in the
+    // end-to-end number.
+    auto t_kernel_start = std::chrono::high_resolution_clock::now();
     startSystem();
 
     // ── Watchdog-bounded management loop ────────────────────────────────────
     int rc = managementLoopBFS(cont_base, visited_base, n);
+    auto t_kernel_done = t_kernel_done_;
     if (rc != 0) {
       std::cerr
           << "[BFS] management loop did not reach done (watchdog/error)\n";
@@ -277,8 +284,7 @@ public:
     const double graph_load_s =
         std::chrono::duration<double>(t_graph_loaded - t_benchmark).count();
     const double fpga_execution_s =
-        std::chrono::duration<double>(t_fpga_result_ready - t_fpga_execution)
-            .count();
+        std::chrono::duration<double>(t_kernel_done - t_kernel_start).count();
     const double fpga_elapsed_s =
         std::chrono::duration<double>(t_fpga_result_ready - t_benchmark)
             .count();
@@ -311,6 +317,11 @@ public:
   }
 
 private:
+  // Set by managementLoopBFS the instant the `done` edge is observed (before any
+  // diagnostic readback), so the kernel-only stopwatch in run_test_bench stops
+  // at the FPGA's completion rather than after the progress dump.
+  std::chrono::high_resolution_clock::time_point t_kernel_done_;
+
   class NullStreambuf : public std::streambuf {
   protected:
     int_type overflow(int_type ch) override { return traits_type::not_eof(ch); }
@@ -841,6 +852,7 @@ private:
       memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&done),
                               cont_base + BFS_DONE_OFFSET, sizeof(done));
       if (done != 0) {
+        t_kernel_done_ = std::chrono::high_resolution_clock::now();
         if (!fast_mode_)
           printProgress(cont_base, visited_base, vertex_count, start);
         std::cout << "[BFS] done flag set after " << iters
@@ -858,6 +870,7 @@ private:
       }
 
       if (now > deadline) {
+        t_kernel_done_ = now;
         std::cerr
             << "[BFS] WATCHDOG: " << watchdog_s_
             << "s elapsed without done; possible lock deadlock or stall.\n";

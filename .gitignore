@@ -145,3 +145,9 @@ xclbin-workspace
 
 # Generated test artifacts
 architecture-generator/test_run_dir/
+
+hls-processing-elements/mfpga/BFS/Test/logs
+hls-processing-elements/mfpga/BFS/Test/BFS_csynth
+hls-processing-elements/mfpga/BFS/Test/BFS_csynth_new
+hls-processing-elements/mfpga/BFS/Test/edgemap_helper_csynth
+hls-processing-elements/mfpga/BFS/Test/edgemap_helper_csynth_new

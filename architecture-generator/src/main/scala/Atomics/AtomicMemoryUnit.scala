@@ -22,7 +22,9 @@ object AtomicMemoryUnit {
 //
 //   tag      = byte address to read/modify/write
 //   data     = operand (value to store, or compare-and-store operand)
-//   readValue= the previous memory contents, returned to the PE
+//   readValue= the previous memory contents (full 64-bit beat); the response
+//              returns the *selected* sub-word right-justified into the low bits
+//              (byte/word mode), so the PE never has to re-extract its lane
 //
 // The AXI id IS the table slot index, so read/write responses address the table
 // directly. The mux appends this AMU's port (lane) index on top, making ids
@@ -268,7 +270,15 @@ class AtomicMemoryUnit(
     val respSlot = PriorityEncoder(respMask)
     io.resp.valid := true.B
     io.resp.bits := table(respSlot).req
-    io.resp.bits.data := table(respSlot).readValue
+    // Return the addressed sub-word right-justified into the low bits rather than
+    // the raw beat. readValue stays the raw beat for the internal write/AddOne
+    // path above; only the PE-facing response is selected, so a byte-mode SET
+    // hands back its single byte in bits [7:0] (no consumer-side shift needed).
+    io.resp.bits.data := selectedValue(
+      table(respSlot).readValue,
+      table(respSlot).req.atomicMode,
+      table(respSlot).req.tag
+    )
     table(respSlot).state := State.Invalid
   }
 }
