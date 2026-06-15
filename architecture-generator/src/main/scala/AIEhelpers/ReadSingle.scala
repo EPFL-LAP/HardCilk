@@ -48,7 +48,8 @@ class ReadSingle_Basic(cfg: ReadSingle_Config) extends Module {
   val rd = Module(
     new ldst.Load(
       ldst.LoadConfig(
-        axiCfg
+        axiCfg,
+        numOutstandingTasks = 64
       )
     )
   )

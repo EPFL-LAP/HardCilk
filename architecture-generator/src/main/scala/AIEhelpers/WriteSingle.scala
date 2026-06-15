@@ -46,7 +46,8 @@ class WriteSingle_Basic(cfg: WriteSingle_Config) extends Module {
   val rd = Module(
     new ldst.Store(
       ldst.StoreConfig(
-        axiCfg
+        axiCfg,
+        numOutstandingTasks = 64
       )
     )
   )

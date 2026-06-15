@@ -60,7 +60,8 @@ class ReadStream_Basic(cfg: ReadStream_Config) extends Module {
     new stream.Read(
       stream.ReadConfig(
         axiCfg,
-        resultMode = stream.ReadResultMode.DropEmpty
+        resultMode = stream.ReadResultMode.DropEmpty,
+        numOutstandingTasks = 64
       )
     )
   )
