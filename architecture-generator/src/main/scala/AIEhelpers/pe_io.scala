@@ -51,7 +51,7 @@ class PeIO(subPEs: Map[String, SubPEDescriptor], count: Int) extends Module {
 
             case ("read", "stream") =>
               val cfg = ReadStream_Config(dataWidth = req.portWidth)
-              val dut = Module(new ReadStream_Basic(cfg))
+              val dut = Module(new ReadStreamWSplitter_Basic(cfg))
 
               val sourceTask =
                 IO(axi4s.Slave(cfg.inputCfg)).suggestName(s"${instanceName}_sourceTask")

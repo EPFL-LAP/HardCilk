@@ -3,6 +3,7 @@ package aiehelpers
 import chisel3._
 
 import chext.{elasticnew => e}
+import e.ConnectOp._
 
 import chext.amba.axi4
 import axi4.Ops._
@@ -11,6 +12,9 @@ import axi4s.Casts._
 
 import chext.stream
 import chisel3.util.isPow2
+
+import chext.amba.axi4.full.components.ResponseBuffer
+import chext.amba.axi4.full.components.ResponseBufferConfig
 
 class ReadStream_Task(addressWidth: Int) extends Bundle {
   val ptr = UInt(addressWidth.W)
@@ -74,4 +78,28 @@ class ReadStream_Basic(cfg: ReadStream_Config) extends Module {
     out.keep := ((1 << (dataWidth / 8)) - 1).U
   }
   rd.m_axi :=> m_axi.asFull
+}
+
+
+
+class ReadStreamWSplitter_Basic(cfg: ReadStream_Config) extends Module {
+  import cfg._
+
+  override def desiredName: String = s"ReadStreamWSplitter_Basic_${cfg.moduleSuffix}"
+
+  val sourceTask = IO(axi4s.Slave(inputCfg))
+  val sinkResult = IO(axi4s.Master(outputCfg))
+  val m_axi = IO(axi4.Master(axiCfg))
+
+  val inner = Module(new ReadStream_Basic(cfg))
+  val respBufferCfg = ResponseBufferConfig(
+    axiCfg = axiCfg,
+    bufLengthR = 256
+  )
+  val respBuffer = Module(new ResponseBuffer(respBufferCfg))
+
+  sourceTask.asLite :=> inner.sourceTask.asLite
+  inner.sinkResult.asFull :=> sinkResult.asFull
+  inner.m_axi :=> respBuffer.s_axi
+  respBuffer.m_axi :=> m_axi.asFull
 }
