@@ -37,6 +37,7 @@ object VitisFlowGenerator {
     writeFile(s"$outputDir/scripts/package_kernel.tcl",  packageKernelTcl(descriptor, reduceAxi))
     writeFile(s"$outputDir/scripts/clear_drc_errors.tcl", clearDrcTcl(descriptor))
     writeFile(s"$outputDir/src/cfg/conn_u55c.cfg",       connCfg(descriptor, reduceAxi))
+    writeFile(s"$outputDir/src/cfg/conn_u55c_emu.cfg",   connCfgEmu(descriptor, reduceAxi))
     writeFile(s"$outputDir/src/xml/user_0.xml",          userXml(descriptor, reduceAxi))
   }
 
@@ -66,11 +67,22 @@ BUILD_REPORT_DIR := $$(CUR_DIR)/reports/_build.$$(TARGET).$$(PLATFORM_NAME)
 VPP    := v++
 VIVADO := $$(XILINX_VIVADO)/bin/vivado
 
+ifeq ($$(TARGET),hw)
 SRC_CFG := $$(CUR_DIR)/src/cfg/conn_u55c.cfg
+else
+SRC_CFG := $$(CUR_DIR)/src/cfg/conn_u55c_emu.cfg
+endif
 TMP_CFG := $$(RUN_DIR)/conn_u55c.tmp.cfg
 
 VPP_FLAGS   := -t $$(TARGET) --platform $$(XPLATFORM) --save-temps
 VPP_LDFLAGS := --optimize 2 -R 2 --config $$(TMP_CFG)
+
+# Vivado synthesis/impl job flags are only valid for hw (not hw_emu/sw_emu)
+ifeq ($$(TARGET),hw)
+VPP_VIVADO_JOBS := --vivado.synth.jobs 32 --vivado.impl.jobs 16
+else
+VPP_VIVADO_JOBS :=
+endif
 
 ifeq ($$(TARGET),hw_emu)
 VPP_FLAGS += -g
@@ -106,8 +118,7 @@ $$(XO_DIR)/${name}_0.xo: \\
 $$(XCLBIN): $$(KERNEL_OBJS) $$(TMP_CFG)
 \tmkdir -p $$(BUILD_DIR) $$(BUILD_REPORT_DIR)
 \t$$(VPP)                       \\
-\t    --vivado.synth.jobs 32    \\
-\t    --vivado.impl.jobs  16    \\
+\t    $$(VPP_VIVADO_JOBS)        \\
 \t    -l                        \\
 \t    $$(VPP_FLAGS)              \\
 \t    $$(VPP_LINKHOOKS)          \\
@@ -469,7 +480,34 @@ $spLines
 freqHz=${freqHz}:${name}_0.clock
 
 [vivado]
-prop=run.impl_1.strategy=Performance_HighUtilSLRs
+prop=run.impl_1.STEPS.PLACE_DESIGN.ARGS.DIRECTIVE=ExtraNetDelay_high
+prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.IS_ENABLED=true
+prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE=AggressiveExplore
+prop=run.impl_1.STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE=AggressiveExplore
+prop=run.impl_1.STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED=true
+prop=run.impl_1.STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE=AggressiveExplore
+
+[advanced]
+param=compiler.worstNegativeSlack=-1
+
+
+"""
+  }
+
+  // ─── conn_u55c_emu.cfg ───────────────────────────────────────────────────────
+  // Emulation config: no [clock] or [vivado] sections — v++ ignores them in
+  // hw_emu/sw_emu and they can cause errors in some Vitis versions.
+
+  private def connCfgEmu(d: FullSysGenDescriptor, reduceAxi: Int): String = {
+    val name   = d.name
+    val spLines = (0 until reduceAxi)
+      .map(i => f"sp=${name}_0.m_axi_$i%02d:HBM[0:31]")
+      .mkString("\n")
+
+    s"""[connectivity]
+nk=${name}_0:1:${name}_0
+
+$spLines
 """
   }
 
