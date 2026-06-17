@@ -83,7 +83,19 @@ class WriteBufferCounter(
   // To Memory
   private val mAddrStrbGen = Module(new axi4.full.components.AddressStrobeGenerator(wAddr, wData))
   private val pkgPayload = Wire(chiselTypeOf(s_pkg_))
-  private val numNext = Wire(Vec(nAllow, DecoupledIO(UInt(wAllow.W))))
+  // Carries (allow count, expects a B response). Zero-sized packets never
+  // reach the AXI write path, so no B response must be awaited for them.
+  private val numNext = Wire(Vec(nAllow, DecoupledIO(new Bundle2(UInt(wAllow.W), Bool()))))
+
+  // Drops zero-sized packets from the AXI write path.
+  private def filterNonZeroSize[T <: Data](in: DecoupledIO[T]): DecoupledIO[T] = {
+    val out = Wire(chiselTypeOf(in))
+    val keep = in.bits.asTypeOf(wb_t).size =/= 0.U
+    out.bits := in.bits
+    out.valid := in.valid && keep
+    in.ready := out.ready || !keep
+    out
+  }
 
   private val s_pkg_payload = s_pkg_.bits.asTypeOf(wb_t)
   when(s_pkg_.fire) {
@@ -96,9 +108,9 @@ class WriteBufferCounter(
 
   new elastic.Fork(s_pkg_) {
     protected def onFork: Unit = {
-      fork() :=> pkgPayload
+      filterNonZeroSize(fork()) :=> pkgPayload
 
-      new elastic.Transform(fork(), mAddrStrbGen.source) {
+      new elastic.Transform(filterNonZeroSize(fork()), mAddrStrbGen.source) {
         protected def onTransform: Unit = {
           out.addr := in.asTypeOf(wb_t).addr
           out.size := in.asTypeOf(wb_t).size
@@ -110,7 +122,8 @@ class WriteBufferCounter(
       numNext.zipWithIndex.foreach(x => {
         new elastic.Transform(fork(), elastic.SinkBuffer(x._1, 4)) {
           protected def onTransform: Unit = {
-            out := in.asTypeOf(wb_t).allow(x._2)
+            out._1 := in.asTypeOf(wb_t).allow(x._2)
+            out._2 := in.asTypeOf(wb_t).size =/= 0.U
           }
         }
       })
@@ -156,12 +169,14 @@ class WriteBufferCounter(
 
   for (i <- 0 until nAllow) {
     val replIn = Wire(DecoupledIO(UInt(wAllow.W)))
-    new elastic.Join(replIn) {
-      protected def onJoin: Unit = {
-        join(duplB(i))
-        out := join(numNext(i))
-      }
-    }
+
+    // Join with the B response only for packets that went to memory;
+    // dropped zero-sized packets release their allow tokens right away.
+    val expectsB = numNext(i).bits._2
+    replIn.bits := numNext(i).bits._1
+    replIn.valid := numNext(i).valid && (duplB(i).valid || !expectsB)
+    numNext(i).ready := replIn.ready && (duplB(i).valid || !expectsB)
+    duplB(i).ready := numNext(i).valid && expectsB && replIn.ready
 
     val token = Wire(DecoupledIO(Bool()))
     new elastic.Replicate(replIn, token, wAllow) {
