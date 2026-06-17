@@ -282,6 +282,14 @@ class VitisWriteBufferModule(
     newStyleSpawnNextPairs.foreach { case (contName, spawnNextIface) =>
       val depIfaces = dependsIfacesFor(contName)
 
+      val spawnedTaskWidth = fullSysGenDescriptor.taskDescriptors
+        .find(_.name == contName)
+        .map(_.widthTask)
+        .getOrElse(throw new RuntimeException(
+          s"[HLS] spawnNext port '${spawnNextIface.name}' references task '$contName' " +
+          s"but no task descriptor with that name exists in the system descriptor. " +
+          s"Known tasks: ${fullSysGenDescriptor.taskDescriptors.map(_.name).mkString(", ")}"))
+
       assert(depIfaces.nonEmpty,
         s"[HLS] New-style spawnNext port '${spawnNextIface.name}' has no corresponding " +
         s"taskGlobalOut_*_depends_${contName} port. Every named spawnNext requires at least " +
@@ -299,7 +307,7 @@ class VitisWriteBufferModule(
         new WriteBuffer(
           new WriteBufferConfig(
             wAddr = fullSysGenDescriptor.widthAddress,
-            wData = pe.getPort(spawnNextIface.name).asInstanceOf[axi4s.Interface].cfg.wData,
+            wData = spawnedTaskWidth,
             wAllow = (if (variableSpawn) 0 else 32),
             wAllowData = depIfaces.map(d =>
               pe.getPort(d.name).asInstanceOf[axi4s.Interface].cfg.wData
