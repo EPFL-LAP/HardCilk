@@ -76,6 +76,10 @@ class AtomicMemoryUnit(
     val state = State()
     val req = new RequestType(n, addrW)
     val readValue = UInt(64.W)
+    // Whether this op's read-modify-write actually stored. Always true for the
+    // unconditional ops (SET, ADD_N); for the conditional SET_IF_* ops it is
+    // true only when the predicate held. Surfaced in the response status byte.
+    val wrote = Bool()
   }
   val table = RegInit(VecInit(Seq.fill(tableSize)(0.U.asTypeOf(new Entry))))
 
@@ -127,6 +131,26 @@ class AtomicMemoryUnit(
         AtomicMode.Byte.asUInt -> byte,
         AtomicMode.Word.asUInt -> word,
         AtomicMode.DoubleWord.asUInt -> value.asSInt
+      )
+    )
+  }
+
+  // Map an IEEE-754 bit pattern to an unsigned key whose unsigned ordering
+  // matches numeric float ordering. IEEE floats are sign-magnitude, so a raw
+  // integer compare misorders negatives; the standard monotonic fix is:
+  // non-negative -> flip the sign bit, negative -> flip all bits. Width follows
+  // the atomic mode (Word = 32b single, DoubleWord = 64b double); Byte has no
+  // float meaning and is passed through unchanged.
+  private def floatOrderKey(value: UInt, mode: AtomicMode.Type): UInt = {
+    def remap(w: Int): UInt = {
+      val v = value(w - 1, 0)
+      val signBit = (BigInt(1) << (w - 1)).U(w.W)
+      Mux(v(w - 1), ~v, v | signBit)
+    }
+    MuxLookup(mode.asUInt, value)(
+      Seq(
+        AtomicMode.Word.asUInt -> remap(32),
+        AtomicMode.DoubleWord.asUInt -> remap(64)
       )
     )
   }
@@ -193,37 +217,75 @@ class AtomicMemoryUnit(
     rBufValid := false.B
   }
 
+  // The read/modify decision is pipelined into two stages. The path
+  // "gather the addressed entry out of the (spread) tableSize-deep table ->
+  // sub-word shift -> ordered compare -> scatter to the entry's state" is
+  // route-bound (the table read dominates), so it is split with a register:
+  //   stage 1: select table(rslot).req + the read data, and register them;
+  //   stage 2: compute writeNeeded from the registered entry and apply it.
+  // This costs one extra cycle before the entry leaves WaitRead, but throughput
+  // is unchanged -- one read still retires per cycle, and a slot never has two
+  // reads outstanding (one AR/R per slot), so the two stages never touch the
+  // same slot in the same cycle. Functionally identical otherwise.
+  val rd1Valid = RegInit(false.B)
+  val rd1Slot = Reg(UInt(tableIdxW.W))
+  val rd1Req = Reg(new RequestType(n, addrW))
+  val rd1Current = Reg(UInt(64.W))
+
+  rd1Valid := false.B
   when(processR) {
     val rslot = toTableIndex(rBufBits.id)
-    val current = rBufBits.data
-    for (slot <- 0 until tableSize) {
-      when(rslot === slot.U) {
-        val entry = table(slot)
-        val operand = entry.req.data
-        val op = entry.req.operation
-        val writeNeeded = WireDefault(false.B)
-        val mode = entry.req.atomicMode
-        val currentSelected = selectedValue(current, mode, entry.req.tag)
-        val operandSelected = operand & valueMask(mode)
+    rd1Valid := true.B
+    rd1Slot := rslot
+    rd1Req := table(rslot).req
+    rd1Current := rBufBits.data
+  }
 
-        switch(op) {
-          is(Operation.LockSetUnlockAndReturnCurrent) {
-            writeNeeded := true.B
-          }
-          is(Operation.LockSetIfGreaterUnlockAndReturnCurrent) {
-            writeNeeded := operandSelected > currentSelected
-          }
-          is(Operation.LockSetIfSignedLessUnlockAndReturnCurrent) {
-            writeNeeded := signExtendSelected(operandSelected, mode) < signExtendSelected(
-              currentSelected,
-              mode
-            )
-          }
-          is(Operation.LockAddNReturnCurrent) {
-            writeNeeded := true.B
-          }
-        }
+  when(rd1Valid) {
+    val current = rd1Current
+    val operand = rd1Req.data
+    val op = rd1Req.operation
+    val mode = rd1Req.atomicMode
+    val writeNeeded = WireDefault(false.B)
+    val currentSelected = selectedValue(current, mode, rd1Req.tag)
+    val operandSelected = operand & valueMask(mode)
+    // Map each side to an order-preserving UNSIGNED key, then do a SINGLE
+    // unsigned compare per direction. The earlier form computed an int compare
+    // AND a float compare and muxed the boolean -- two 64-bit carry chains per
+    // conditional op (four total), which both spread the AMU (congestion) and
+    // deepened the read-decision path. Keying first folds int/float into one
+    // comparator each:
+    //   greater (int unsigned / float): key = floatCmp ? floatOrderKey : value
+    //   less    (int signed   / float): key = floatCmp ? floatOrderKey
+    //                                          : signExtend(value) ^ MSB
+    // using the identities  a <s b  <=>  (a ^ msb) <u (b ^ msb)  and that
+    // floatOrderKey turns IEEE float order into unsigned order. Bit-identical to
+    // the per-op int/float compares.
+    val floatCmp = rd1Req.floatCompare
+    val signFlip = (BigInt(1) << 63).U(64.W)
+    def greaterKey(v: UInt): UInt = Mux(floatCmp, floatOrderKey(v, mode), v)
+    def lessKey(v: UInt): UInt =
+      Mux(floatCmp, floatOrderKey(v, mode), signExtendSelected(v, mode).asUInt ^ signFlip)
+
+    switch(op) {
+      is(Operation.LockSetUnlockAndReturnCurrent) {
+        writeNeeded := true.B
+      }
+      is(Operation.LockSetIfGreaterUnlockAndReturnCurrent) {
+        writeNeeded := greaterKey(operandSelected) > greaterKey(currentSelected)
+      }
+      is(Operation.LockSetIfSignedLessUnlockAndReturnCurrent) {
+        writeNeeded := lessKey(operandSelected) < lessKey(currentSelected)
+      }
+      is(Operation.LockAddNReturnCurrent) {
+        writeNeeded := true.B
+      }
+    }
+
+    for (slot <- 0 until tableSize) {
+      when(rd1Slot === slot.U) {
         table(slot).readValue := current
+        table(slot).wrote := writeNeeded
         table(slot).state := Mux(writeNeeded, State.WantWrite, State.RespPending)
       }
     }
@@ -253,16 +315,24 @@ class AtomicMemoryUnit(
     val offsetBytes = byteOffset(mode, writeReq.tag)
     val offsetBits = bitOffset(offsetBytes)
     val selectedMask = valueMask(mode)
-    val currentSelected = selectedValue(writeReadValue, mode, writeReq.tag)
-    val writeValue = WireDefault(writeReq.data & selectedMask)
+    // Position the masked operand into its byte lane once, then add it straight
+    // into the raw read value for AddN. This removes the redundant
+    // down-shift (selectedValue) + re-up-shift that previously sat in series
+    // with the barrel shift and the long route to the shared gmem mux. For the
+    // strobed lanes, readValue + (operand << off) equals (currentSelected +
+    // operand) positioned in place: no carry enters the sub-word from below
+    // (the operand is zero there), carry within propagates correctly, and any
+    // carry beyond the sub-word lands in unstrobed bytes -- dropped exactly as
+    // the old `& selectedMask` did. Non-AddN ops write the positioned operand,
+    // identical to before.
+    val positionedOperand = ((writeReq.data & selectedMask) << offsetBits)(63, 0)
+    val shiftedData = WireDefault(positionedOperand)
     switch(writeReq.operation) {
       is(Operation.LockAddNReturnCurrent) {
-        // Add the per-request operand N (masked to the atomic width) to the
-        // current value. N=1 reproduces the old add-one behavior.
-        writeValue := (currentSelected + (writeReq.data & selectedMask))(63, 0)
+        // N=1 reproduces the old add-one behavior.
+        shiftedData := (writeReadValue + positionedOperand)(63, 0)
       }
     }
-    val shiftedData = (writeValue & selectedMask) << offsetBits
     val shiftedStrobe = (strobeMask(mode) << offsetBytes)(fullStrobe.getWidth - 1, 0)
 
     io.gmem.aw.valid := !awDone
@@ -272,7 +342,7 @@ class AtomicMemoryUnit(
     io.gmem.aw.bits.len := 0.U
     io.gmem.aw.bits.burst := axi4.BurstType.INCR
     io.gmem.w.valid := !wDone
-    io.gmem.w.bits.data := shiftedData(63, 0)
+    io.gmem.w.bits.data := shiftedData
     io.gmem.w.bits.strb := shiftedStrobe
     io.gmem.w.bits.last := true.B
 
@@ -318,6 +388,10 @@ class AtomicMemoryUnit(
     table(respSlot).req.atomicMode,
     table(respSlot).req.tag
   )
+  // Carry the store-happened bit back to LockServer so it can place it in the
+  // response status byte (bit 1). For the conditional SET_IF_* ops this is 0
+  // when the predicate failed and nothing was written.
+  io.resp.bits.writeOccurred := table(respSlot).wrote
   when(io.resp.fire) {
     for (slot <- 0 until tableSize) {
       when(respSlot === slot.U) {

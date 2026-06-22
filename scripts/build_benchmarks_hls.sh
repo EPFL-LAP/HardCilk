@@ -16,7 +16,10 @@
 #   -f  Clock frequency in MHz          (default: 250)
 #   -b  Comma-separated list of benchmarks to build, or "all"
 #           (default: all)
-#           Valid names: BFS, graphRandomWalk, pageRank, triangleCount
+#           Valid names: BFS, WP-BF, BellmanFord, ApproxDenseSub,
+#                        MaximalIndependentSet, GraphColoring,
+#                        graphRandomWalk, pageRank, triangleCount,
+#                        triangleCountDecoupled
 #   -D  Debug mode: pass through to build_kernels.sh to keep all
 #           intermediate build state (default: off — delete intermediates)
 #   -h  Show this help
@@ -29,15 +32,38 @@
 #   ├── BFS/
 #   │   ├── BFS/
 #   │   └── sparse_edgemap_helper/
+#   ├── WP-BF/
+#   │   ├── WidestPath/
+#   │   └── sparse_edgemap_helper/
+#   ├── BellmanFord/
+#   │   ├── BellmanFord/
+#   │   └── sparse_edgemap_helper/
+#   ├── ApproxDenseSub/
+#   │   ├── ApproxDenseSub/
+#   │   └── vertex_subset_helper/
+#   ├── MaximalIndependentSet/
+#   │   ├── MaximalIndependentSet/
+#   │   ├── NGS/
+#   │   └── mis_loop_helper/
+#   ├── GraphColoring/
+#   │   ├── GraphColoring/
+#   │   ├── color_init_helper/
+#   │   └── color_loop_helper/
 #   ├── graphRandomWalk/
 #   │   ├── walker/          ← synthesised Verilog
 #   │   └── walk_gen/
 #   ├── pageRank/
 #   │   ├── page_rank_map/
 #   │   └── vertex_map/
-#   └── triangleCount/
+#   ├── triangleCount/
 #       ├── triangle/
 #       └── vertex_map/
+#   └── triangleCountDecoupled/
+#       ├── whileLoopMain/
+#       ├── whileLoopMain_reentry0/
+#       ├── whileLoopMain_reentry0_cont0/
+#       ├── memReader/
+#       └── watcher/          ← telemetry kernel
 # =============================================================================
 
 set -euo pipefail
@@ -56,7 +82,7 @@ die()     { error "$*"; exit 1; }
 WORKSPACE="../"
 DEFAULT_PE_ROOT="${WORKSPACE}/hls-processing-elements"
 DEFAULT_OUT_ROOT="${WORKSPACE}/hls-kernel-output"
-DEFAULT_FREQ=250
+DEFAULT_FREQ=300
 PART="xcu55c-fsvh2892-2L-e"   # Alveo U55C
 
 PE_ROOT="$DEFAULT_PE_ROOT"
@@ -69,13 +95,19 @@ DEBUG=false                # passed through to build_kernels.sh; off by default
 # Associative array:  benchmark_subdir  →  "kernel1 kernel2 ..."
 declare -A BENCHMARK_KERNELS=(
     [BFS]="BFS sparse_edgemap_helper"
+    [WP-BF]="WidestPath sparse_edgemap_helper"
+    [BellmanFord]="BellmanFord sparse_edgemap_helper"
+    [ApproxDenseSub]="ApproxDenseSub vertex_subset_helper"
+    [MaximalIndependentSet]="MaximalIndependentSet NGS mis_loop_helper"
+    [GraphColoring]="GraphColoring color_init_helper color_loop_helper"
     [graphRandomWalk]="walker walk_gen"
     [pageRank]="page_rank_map vertex_map"
     [triangleCount]="triangle vertex_map"
+    [triangleCountDecoupled]="whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader watcher"
 )
 
 # Ordered list so the build sequence is deterministic
-BENCHMARK_ORDER=(BFS graphRandomWalk pageRank triangleCount)
+BENCHMARK_ORDER=(BFS WP-BF BellmanFord ApproxDenseSub MaximalIndependentSet GraphColoring graphRandomWalk pageRank triangleCount triangleCountDecoupled)
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {

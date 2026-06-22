@@ -1,0 +1,21 @@
+if(HC_ENABLE_XRT_TARGETS)
+    add_executable(GraphColoring_xrt
+        "src/xrt_main.cpp"
+    )
+    target_link_libraries(GraphColoring_xrt PUBLIC hardcilk::xrt_driver uuid)
+    target_include_directories(GraphColoring_xrt
+        PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../common/include
+        /beta/bradley/gbbs
+        /beta/bradley/gbbs/bazel-gbbs/external/+git_repository+parlaylib
+    )
+    target_compile_definitions(GraphColoring_xrt
+        PUBLIC
+        HOMEGROWN
+        LONG
+        AMORTIZEDPD
+        USEMALLOC
+        PARLAY_USE_STD_ALLOC
+    )
+endif()

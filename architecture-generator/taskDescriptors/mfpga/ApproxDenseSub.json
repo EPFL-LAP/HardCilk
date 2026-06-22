@@ -1,0 +1,97 @@
+{
+  "fpgaModel": "ALVEO_U55C",
+  "mallocList": {},
+  "memorySizeSim": 16,
+  "name": "ApproxDenseSub_Main",
+  "sendArgumentList": {
+    "vertex_subset_helper": [
+      "ApproxDenseSub"
+    ]
+  },
+  "spawnList": {
+    "ApproxDenseSub": [
+      "vertex_subset_helper"
+    ]
+  },
+  "spawnNextList": {},
+  "targetFrequency": 300,
+  "taskDescriptors": [
+    {
+      "spawnServersCount": 1,
+      "dynamicMemAlloc": false,
+      "isCont": true,
+      "isRoot": true,
+      "name": "ApproxDenseSub",
+      "numProcessingElements": 1,
+      "peHDLPath": "../hls-kernel-output/ApproxDenseSub/ApproxDenseSub",
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 1024,
+          "sideType": "scheduler"
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 128,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "sideType": "argumentNotifier"
+        }
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 1024,
+      "hasAXI": true,
+      "taskId": 0,
+      "generateArgOutWriteBuffer": false
+    },
+    {
+      "spawnServersCount": 1,
+      "dynamicMemAlloc": false,
+      "isCont": false,
+      "isRoot": false,
+      "name": "vertex_subset_helper",
+      "numProcessingElements": 8,
+      "peHDLPath": "../hls-kernel-output/ApproxDenseSub/vertex_subset_helper",
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 2097152,
+          "numVirtualServers": 1,
+          "portWidth": 1024,
+          "sideType": "scheduler"
+        }
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 1024,
+      "hasAXI": true,
+      "isAIE": false,
+      "generateSpawnNextWriteBuffer": false,
+      "generateArgOutWriteBuffer": false,
+      "taskId": 1,
+      "participatesInLock": true,
+      "lockPorts": 2
+    }
+  ],
+  "widthAddress": 64,
+  "widthContCounter": 32,
+  "isVitisProject": true,
+  "keepAXI4Interfaces": true,
+  "mFPGASynth": false,
+  "mFPGASimulation": false,
+  "fpgaCountSim": 1,
+  "maximumAXIPorts": 31,
+  "hasAXIDMAInput": false,
+  "transformAXI": false,
+  "transformPattern": [],
+  "widthAXIAddress": 34,
+  "lockConfig": {
+    "N": 16,
+    "P": 8,
+    "tagStoreSize": 64,
+    "inflightDepth": 5
+  }
+}

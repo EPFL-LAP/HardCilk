@@ -33,6 +33,8 @@ struct XRTMemory : Memory{
     std::vector<uint64_t> availableBytes;
     xrt::device dev_;
     xrt::ip hardCilk_ip_;
+    int defaultFirstBank_ = 0;
+    int defaultLastBank_ = NUM_BANKS - 1;
 
 
     public:
@@ -73,11 +75,106 @@ struct XRTMemory : Memory{
       uint64_t aligned_size = alignUp(size, alloc_alignment);
 
       if (aligned_size <= BANK_SIZE) {
-        return allocateSingleBo(aligned_size, alignment);
+        return allocateSingleBoInBankRange(aligned_size, alignment,
+                                           defaultFirstBank_, defaultLastBank_);
       }
 
-      return allocateContiguousBoSpan(aligned_size, alignment);
-    } 
+      return allocateContiguousBoSpanInBankRange(aligned_size, alignment,
+                                                 defaultFirstBank_, defaultLastBank_);
+    }
+
+    void setDefaultBankRange(int firstBank, int lastBank) {
+      if (firstBank < 0 || lastBank >= NUM_BANKS || firstBank > lastBank) {
+        throw std::runtime_error("setDefaultBankRange: invalid bank range");
+      }
+      defaultFirstBank_ = firstBank;
+      defaultLastBank_ = lastBank;
+    }
+
+    uint64_t allocateMemFPGAInBankRange(uint64_t size, uint64_t alignment,
+                                        int firstBank, int lastBank) {
+      if (size == 0) {
+        throw std::runtime_error("Cannot allocate zero bytes");
+      }
+      if (firstBank < 0 || lastBank >= NUM_BANKS || firstBank > lastBank) {
+        throw std::runtime_error("allocateMemFPGAInBankRange: invalid bank range");
+      }
+
+      uint64_t alloc_alignment = std::max<uint64_t>(alignment, PAGE_SIZE);
+      uint64_t aligned_size = alignUp(size, alloc_alignment);
+
+      if (aligned_size <= BANK_SIZE) {
+        return allocateSingleBoInBankRange(aligned_size, alignment, firstBank, lastBank);
+      }
+
+      return allocateContiguousBoSpanInBankRange(aligned_size, alignment,
+                                                 firstBank, lastBank);
+    }
+
+    // Additive, non-breaking helper (used only by the triangleCountDecoupled
+    // telemetry path): allocate a physically-contiguous span that BEGINS at a
+    // specific HBM bank. Because each U55C HBM bank has a fixed base address
+    // (bank * BANK_SIZE), this lets the caller pin a region to a known device
+    // address (e.g. firstBank=16 -> 0x2_0000_0000). The BOs are registered in
+    // addressBufferMap exactly like the normal allocators, so copyTo/FromDevice
+    // work over the region. No existing method or allocation behavior is changed.
+    uint64_t allocateMemFPGASpanFromBank(uint64_t size, uint64_t alignment, int firstBank) {
+      if (size == 0) {
+        throw std::runtime_error("Cannot allocate zero bytes");
+      }
+      if (firstBank < 0 || firstBank >= NUM_BANKS) {
+        throw std::runtime_error("allocateMemFPGASpanFromBank: firstBank out of range");
+      }
+
+      uint64_t alloc_alignment = std::max<uint64_t>(alignment, PAGE_SIZE);
+      uint64_t aligned_size = alignUp(size, alloc_alignment);
+
+      uint64_t remaining = aligned_size;
+      uint64_t expected_addr = 0;
+      uint64_t base_addr = 0;
+      std::vector<std::pair<uint64_t, BufferInfo>> span;
+
+      for (int bank = firstBank; bank < NUM_BANKS && remaining > 0; ++bank) {
+        uint64_t chunk_size = std::min<uint64_t>(remaining, BANK_SIZE);
+        if (availableBytes[bank] < chunk_size) {
+          throw std::runtime_error(
+              "allocateMemFPGASpanFromBank: a bank in the requested span has insufficient free space");
+        }
+
+        // Normal (host-mapped) BO rather than device_only: the telemetry watcher
+        // writes here directly (not as a kernel argument), and a host-mapped BO
+        // lets bo.read()/sync() reflect those device-side writes. device_only BOs
+        // are only safe when the kernel owns them as an argument.
+        auto buffer = xrt::bo(dev_, chunk_size, xrt::bo::flags::normal, bank);
+        uint64_t addr = buffer.address();
+
+        if (span.empty()) {
+          if (alignment != 0 && addr % alignment != 0) {
+            throw std::runtime_error(
+                "allocateMemFPGASpanFromBank: base address does not satisfy alignment");
+          }
+          base_addr = addr;
+        } else if (addr != expected_addr) {
+          throw std::runtime_error(
+              "allocateMemFPGASpanFromBank: span banks are not address-contiguous");
+        }
+
+        expected_addr = addr + chunk_size;
+        remaining -= chunk_size;
+        span.emplace_back(addr, BufferInfo{std::move(buffer), chunk_size, bank});
+      }
+
+      if (remaining != 0) {
+        throw std::runtime_error(
+            "allocateMemFPGASpanFromBank: not enough banks at/above firstBank for the requested span");
+      }
+
+      for (auto &entry : span) {
+        availableBytes[entry.second.bank_index] -= entry.second.size;
+        addressBufferMap.emplace(entry.first, std::move(entry.second));
+      }
+      return base_addr;
+    }
 
 
   void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint64_t size) override
@@ -129,6 +226,48 @@ struct XRTMemory : Memory{
     }
   }
 
+  // Pull a device region into its host backing so a subsequent copyFromDevice
+  // reflects writes made directly by the kernel (e.g. the telemetry watcher
+  // reaches its BO by hardcoded address, not as a kernel argument, so the host
+  // side is stale until DMA'd back). Returns true if a sync was issued for the
+  // whole range.
+  bool syncRegionFromDevice(uint64_t addr, uint64_t size) {
+    uint64_t current_addr = addr;
+    uint64_t left = size;
+    while (left > 0) {
+      auto located = findBuffer(current_addr);
+      if (located == addressBufferMap.end()) {
+        return false;
+      }
+      auto &page_buffer = located->second.buffer;
+      uint64_t page_offset = current_addr - located->first;
+      uint64_t chunk = std::min<uint64_t>(left, located->second.size - page_offset);
+      page_buffer.sync(XCL_BO_SYNC_BO_FROM_DEVICE, static_cast<size_t>(chunk), static_cast<size_t>(page_offset));
+      left -= chunk;
+      current_addr += chunk;
+    }
+    return true;
+  }
+
+  // Counterpart to syncRegionFromDevice: push host backing down to device memory.
+  bool syncRegionToDevice(uint64_t addr, uint64_t size) {
+    uint64_t current_addr = addr;
+    uint64_t left = size;
+    while (left > 0) {
+      auto located = findBuffer(current_addr);
+      if (located == addressBufferMap.end()) {
+        return false;
+      }
+      auto &page_buffer = located->second.buffer;
+      uint64_t page_offset = current_addr - located->first;
+      uint64_t chunk = std::min<uint64_t>(left, located->second.size - page_offset);
+      page_buffer.sync(XCL_BO_SYNC_BO_TO_DEVICE, static_cast<size_t>(chunk), static_cast<size_t>(page_offset));
+      left -= chunk;
+      current_addr += chunk;
+    }
+    return true;
+  }
+
   ~XRTMemory() {}
 
 private:
@@ -154,9 +293,16 @@ private:
     }
 
     uint64_t allocateSingleBo(uint64_t aligned_size, uint64_t requested_alignment) {
+      return allocateSingleBoInBankRange(aligned_size, requested_alignment, 0, NUM_BANKS - 1);
+    }
+
+    uint64_t allocateSingleBoInBankRange(uint64_t aligned_size,
+                                         uint64_t requested_alignment,
+                                         int firstBank,
+                                         int lastBank) {
       int bank = -1;
       uint64_t best_available = 0;
-      for (int i = 0; i < NUM_BANKS; ++i) {
+      for (int i = firstBank; i <= lastBank; ++i) {
         if (availableBytes[i] >= aligned_size && availableBytes[i] > best_available) {
           bank = i;
           best_available = availableBytes[i];
@@ -164,7 +310,7 @@ private:
       }
 
       if (bank < 0) {
-        throw std::runtime_error("No HBM bank has enough free space for a contiguous BO");
+        throw std::runtime_error("No HBM bank in the requested range has enough free space for a contiguous BO");
       }
 
       auto buffer = xrt::bo(dev_, aligned_size, xrt::bo::flags::device_only, bank);
@@ -179,13 +325,20 @@ private:
     }
 
     uint64_t allocateContiguousBoSpan(uint64_t aligned_size, uint64_t requested_alignment) {
-      for (int first_bank = 0; first_bank < NUM_BANKS; ++first_bank) {
+      return allocateContiguousBoSpanInBankRange(aligned_size, requested_alignment, 0, NUM_BANKS - 1);
+    }
+
+    uint64_t allocateContiguousBoSpanInBankRange(uint64_t aligned_size,
+                                                 uint64_t requested_alignment,
+                                                 int firstBank,
+                                                 int lastBank) {
+      for (int first_bank = firstBank; first_bank <= lastBank; ++first_bank) {
         uint64_t remaining = aligned_size;
         uint64_t expected_addr = 0;
         uint64_t base_addr = 0;
         std::vector<std::pair<uint64_t, BufferInfo>> span;
 
-        for (int bank = first_bank; bank < NUM_BANKS && remaining > 0; ++bank) {
+        for (int bank = first_bank; bank <= lastBank && remaining > 0; ++bank) {
           uint64_t chunk_size = std::min<uint64_t>(remaining, BANK_SIZE);
           if (availableBytes[bank] < chunk_size) {
             span.clear();
@@ -226,7 +379,7 @@ private:
       }
 
       throw std::runtime_error(
-          "Could not allocate a physically contiguous multi-bank HBM span. "
+          "Could not allocate a physically contiguous multi-bank HBM span in the requested range. "
           "The xclbin/platform must expose adjacent HBM bank address windows, "
           "and the banks in the span must be free when the large allocation is made.");
     }

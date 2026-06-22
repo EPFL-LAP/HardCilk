@@ -14,7 +14,7 @@
     ]
   },
   "spawnNextList": {},
-  "targetFrequency": 200,
+  "targetFrequency": 300,
   "taskDescriptors": [
     {
       "spawnServersCount": 1,
@@ -90,8 +90,8 @@
   "widthAXIAddress": 34,
   "lockConfig": {
     "N": 16,
-    "P": 4,
+    "P": 8,
     "tagStoreSize": 64,
-    "inflightDepth": 1
+    "inflightDepth": 4
   }
 }

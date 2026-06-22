@@ -70,8 +70,12 @@ object HardCilkUtil {
         // Call the other helper for the HardCilk case
         getPhysicalSubsystemPort(port, scheds, allocs, notifiers, memAllocs)
       case "PE" =>
+        val physicalPortType =
+          if (port.portType == "taskOutGlobal" && port.portIndex > 0)
+            s"${port.portType}_${port.portIndex}"
+          else port.portType
         pes(port.parentName)(port.parentIndex)
-          .getPort(port.portType)
+          .getPort(physicalPortType)
       case "spawnNextWB" | "sendArgumentWB" =>
         getPhysicalWBPort(port, spawnNextWBs, sendArgumentWBs)
     }

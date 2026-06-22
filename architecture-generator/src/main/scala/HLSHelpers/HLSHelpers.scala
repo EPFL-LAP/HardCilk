@@ -572,7 +572,7 @@ object VitisModuleFactory {
       is_ap_idle,
       is_ap_ready,
       hasArgumentWriteBuffer_,
-      if(hasArgumentWriteBuffer_) taskDescriptor.argumentSizeList.head else 0,
+      if(taskDescriptor.generateArgOutWriteBuffer) taskDescriptor.argumentSizeList.head else 0,
       taskDescriptor.generateArgOutWriteBuffer
     )
   }

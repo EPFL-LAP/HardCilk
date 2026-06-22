@@ -161,7 +161,11 @@ class InputArbiter(
       Operation.safe(Mux1H(requestHits, selectedHeads.map(_.operation.asUInt)))._1
     selectedRequest.atomicMode :=
       AtomicMode.safe(Mux1H(requestHits, selectedHeads.map(_.atomicMode.asUInt)))._1
+    selectedRequest.floatCompare :=
+      Mux1H(requestHits, selectedHeads.map(_.floatCompare))
     selectedRequest.meta := Mux1H(requestHits, selectedHeads.map(_.meta))
+    // Only ever set on the AMU return path, which bypasses the arbiter.
+    selectedRequest.writeOccurred := false.B
     selectedRequest.isValid := selected.orR
     selectedRequest
   }
@@ -227,9 +231,19 @@ class InputArbiter(
              )
            )
            ._1)
+    rawSelectedRequest.floatCompare :=
+      (if (singleSelect) selectedRequest1.floatCompare
+       else
+         Mux(
+           selectCycleReg,
+           selectedRequest2.floatCompare,
+           selectedRequest1.floatCompare
+         ))
     rawSelectedRequest.meta :=
       (if (singleSelect) selectedRequest1.meta
        else Mux(selectCycleReg, selectedRequest2.meta, selectedRequest1.meta))
+    // Only ever set on the AMU return path, which bypasses the arbiter.
+    rawSelectedRequest.writeOccurred := false.B
     rawSelectedRequest.isValid := selected_top_p(i).orR
 
     val needsSlot =

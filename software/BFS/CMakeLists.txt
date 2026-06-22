@@ -10,6 +10,7 @@ if(HC_ENABLE_XRT_TARGETS)
     target_include_directories(BFS_xrt
         PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../common/include
         /beta/bradley/gbbs
         /beta/bradley/gbbs/bazel-gbbs/external/+git_repository+parlaylib
     )

@@ -9,11 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include <BFSDriver.h>
-#include <memIO_xrt.h>
-
-#include <experimental/xrt_ip.h>
-#include <experimental/xrt_xclbin.h>
-#include <xrt/xrt_device.h>
+#include <SingleFpgaBenchmark.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -156,9 +152,15 @@ private:
 
 inline int run_bfs_benchmark(int argc, char *argv[],
                              const std::string &kernel_name) {
+  // Cap the official GBBS (parlaylib) reference run at 4 CPUs. parlay reads
+  // PARLAY_NUM_THREADS once, lazily, when its scheduler is first constructed,
+  // so this must be set before any GBBS/parlay call. overwrite=0 keeps an
+  // explicitly-set env value winning if the user wants something else.
+  setenv("PARLAY_NUM_THREADS", "4", 0);
+
   BfsBenchArgs args;
   if (!bfs_parse_args(argc, argv, args)) return EXIT_FAILURE;
-  if (bfs_cpu_only_requested(args.xclbin_path)) {
+  if (benchmarkCpuOnlyRequested(args.xclbin_path)) {
     auto start = std::chrono::high_resolution_clock::now();
     int rc = BFSDriver::run_cpu_test_bench(args.graph_file, args.source,
                                            args.max_depth);
@@ -168,31 +170,9 @@ inline int run_bfs_benchmark(int argc, char *argv[],
     return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
   }
 
-  if (!bfs_check_runtime_env()) return EXIT_FAILURE;
-
-  xrt::device device(0);
-  std::cout << "[Init] Loading '" << args.xclbin_path << "' onto FPGA 0..."
-            << std::endl;
-  xrt::uuid uuid;
-  {
-    ScopedHeartbeat heartbeat("loading xclbin");
-    uuid = device.load_xclbin(args.xclbin_path);
-  }
-  std::cout << "[Init] xclbin loaded." << std::endl;
-
-  xrt::ip kernel(device, uuid, kernel_name);
-  std::cout << "[Init] Opened CU '" << kernel_name << "'.\n";
-
-  XRTMemory memory(device, kernel);
-
-  BFSDriver driver(&memory, args.graph_file, args.source, args.max_depth,
-                   args.watchdog_s, args.fast_mode);
-
-  auto start = std::chrono::high_resolution_clock::now();
-  int rc = driver.run_test_bench();
-  auto end = std::chrono::high_resolution_clock::now();
-  std::cout << "[Run] total wall time (including validation): "
-            << std::chrono::duration<double>(end - start).count() << "s\n";
-
-  return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+  return runSingleFpgaBenchmark(args.xclbin_path, kernel_name, [&](Memory *m) {
+    BFSDriver driver(m, args.graph_file, args.source, args.max_depth,
+                     args.watchdog_s, args.fast_mode);
+    return driver.run_test_bench();
+  });
 }

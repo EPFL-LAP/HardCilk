@@ -1,0 +1,97 @@
+{
+  "fpgaModel": "ALVEO_U55C",
+  "mallocList": {},
+  "memorySizeSim": 16,
+  "name": "BellmanFord_Main",
+  "sendArgumentList": {
+    "sparse_edgemap_helper": [
+      "BellmanFord"
+    ]
+  },
+  "spawnList": {
+    "BellmanFord": [
+      "sparse_edgemap_helper"
+    ]
+  },
+  "spawnNextList": {},
+  "targetFrequency": 300,
+  "taskDescriptors": [
+    {
+      "spawnServersCount": 1,
+      "dynamicMemAlloc": false,
+      "isCont": true,
+      "isRoot": true,
+      "name": "BellmanFord",
+      "numProcessingElements": 1,
+      "peHDLPath": "../hls-kernel-output/BellmanFord/BellmanFord",
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 1024,
+          "sideType": "scheduler"
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 128,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "sideType": "argumentNotifier"
+        }
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 1024,
+      "hasAXI": true,
+      "taskId": 0,
+      "generateArgOutWriteBuffer": false
+    },
+    {
+      "spawnServersCount": 1,
+      "dynamicMemAlloc": false,
+      "isCont": false,
+      "isRoot": false,
+      "name": "sparse_edgemap_helper",
+      "numProcessingElements": 8,
+      "peHDLPath": "../hls-kernel-output/BellmanFord/sparse_edgemap_helper",
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 2097152,
+          "numVirtualServers": 1,
+          "portWidth": 1024,
+          "sideType": "scheduler"
+        }
+      ],
+      "variableSpawn": false,
+      "widthMalloc": 0,
+      "widthTask": 1024,
+      "hasAXI": true,
+      "isAIE": false,
+      "generateSpawnNextWriteBuffer": false,
+      "generateArgOutWriteBuffer": false,
+      "taskId": 1,
+      "participatesInLock": true,
+      "lockPorts": 3
+    }
+  ],
+  "widthAddress": 64,
+  "widthContCounter": 32,
+  "isVitisProject": true,
+  "keepAXI4Interfaces": true,
+  "mFPGASynth": false,
+  "mFPGASimulation": false,
+  "fpgaCountSim": 1,
+  "maximumAXIPorts": 31,
+  "hasAXIDMAInput": false,
+  "transformAXI": false,
+  "transformPattern": [],
+  "widthAXIAddress": 34,
+  "lockConfig": {
+    "N": 24,
+    "P": 4,
+    "tagStoreSize": 64,
+    "inflightDepth": 5
+  }
+}
