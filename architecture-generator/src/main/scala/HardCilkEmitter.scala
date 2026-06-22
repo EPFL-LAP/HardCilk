@@ -54,16 +54,24 @@ object HardCilkEmitter extends App {
         // Generate the Vitis kernel description (user_0.xml) and v++ connectivity
         // (conn_u55c.cfg) from the same generator state that produced the RTL, so
         // the port list (incl. the appended LockServer master) stays in lockstep.
-        // The emitter is generic; for now we only invoke it for BFS and leave the
-        // other benchmarks on their hand-written XML so their builds need no
-        // re-validation.
-        if (jsonName == "BFS") {
+        val emitGeneratedXrt = Set(
+          "BFS",
+          "WP-BF",
+          "BellmanFord",
+          "ApproxDenseSub",
+          "MaximalIndependentSet",
+          "GraphColoring",
+          "triangleCountDecoupled"
+        )
+        if (emitGeneratedXrt.contains(jsonName)) {
+          val rootTaskName =
+            systemDescriptor.taskDescriptors.find(_.isRoot).map(_.name).getOrElse(jsonName)
           val xrtDir = s"${cfg.output_dir}/$outputDirName/xrt"
           KernelXmlTemplate.generate(
             descriptor = systemDescriptor,
             numHbmPortExports = numHbmPortExports,
-            kernelName = s"${jsonName}_0",
-            vlnvName = jsonName,
+            kernelName = s"${rootTaskName}_0",
+            vlnvName = rootTaskName,
             outputDir = xrtDir
           )
           println(s"Emitted kernel.xml + conn cfg to: $xrtDir")
@@ -74,11 +82,16 @@ object HardCilkEmitter extends App {
         val outputDirPathTcl = s"${cfg.output_dir}/$outputDirName/tcl"
         Files.createDirectories(Paths.get(outputDirPathTcl))
         val lockAxiPortCount = if (systemDescriptor.lockConfig.nonEmpty) 1 else 0
-        val tclAxiPortCount = cfg.reduce_axi + lockAxiPortCount
+        // The watcher (when present) exports one dedicated master appended after
+        // reduce_axi and the lock port, exactly like the lock server.
+        val watcherAxiPortCount =
+          if (systemDescriptor.watcherConfig.nonEmpty) 1 else 0
+        val tclAxiPortCount =
+          cfg.reduce_axi + lockAxiPortCount + watcherAxiPortCount
         require(
           tclAxiPortCount <= 32,
           s"Tcl HBM port count is $tclAxiPortCount, but U55C HBM exposes at most 32 AXI ports. " +
-            s"reduce_axi=${cfg.reduce_axi}, lock ports=$lockAxiPortCount"
+            s"reduce_axi=${cfg.reduce_axi}, lock ports=$lockAxiPortCount, watcher ports=$watcherAxiPortCount"
         )
 
         TclGeneratorMemPEs.generate(

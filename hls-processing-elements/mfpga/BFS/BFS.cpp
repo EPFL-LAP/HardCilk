@@ -6,6 +6,14 @@
 #define VERTICES_PER_TASK 64
 #define MAX_OUTSTANDING_LOCKS 1
 
+// End-of-stream marker for the uint32_t index streams below. Vertex/neighbor
+// indices are always < vertex_count (well under 2^31), so the top bit is free to
+// flag the terminating beat. Consumers test that single bit instead of a full
+// 32-bit equality, which was the critical path in write_to_frontier
+// (HLS 200-871 / 200-1016). This does NOT apply to vertex_output's 64-bit
+// neighbor_address sentinel, where bit 31 can be a real address bit.
+static const uint32_t STREAM_END = 0x80000000u;
+
 void BFS(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlobal,
          hls::stream<BFS_args> &taskIn)
 {
@@ -130,7 +138,7 @@ void read_vertices(void *mem, hls::stream<uint32_t> &output_vertices, sparse_edg
     }
 
     // Last vertex sentinel
-    output_vertices.write(0xFFFFFFFF);
+    output_vertices.write(STREAM_END);
 }
 
 void load_vertices(void *mem, hls::stream<uint32_t> &input_vertices, hls::stream<vertex_output> &output_vertices, sparse_edgemap_helper_args &task)
@@ -139,7 +147,7 @@ void load_vertices(void *mem, hls::stream<uint32_t> &input_vertices, hls::stream
     {
 #pragma HLS pipeline II = 1
         uint32_t vertex = input_vertices.read();
-        if (vertex == 0xFFFFFFFF)
+        if (vertex & STREAM_END)
         {
             break;
         }
@@ -171,7 +179,7 @@ void read_neighbors(void *mem, hls::stream<vertex_output> &input_vertices, hls::
             output_neighbors.write(neighbor);
         }
     }
-    output_neighbors.write(0xFFFFFFFF);
+    output_neighbors.write(STREAM_END);
 }
 
 void neighbor_visited_check(void *mem, hls::stream<uint32_t> &input_neighbors, hls::stream<uint32_t> &output_unvisited_neighbors, sparse_edgemap_helper_args &task)
@@ -180,7 +188,7 @@ void neighbor_visited_check(void *mem, hls::stream<uint32_t> &input_neighbors, h
     {
 #pragma HLS pipeline II = 1
         uint32_t neighbor = input_neighbors.read();
-        if (neighbor == 0xFFFFFFFF)
+        if (neighbor & STREAM_END)
         {
             break;
         }
@@ -190,7 +198,7 @@ void neighbor_visited_check(void *mem, hls::stream<uint32_t> &input_neighbors, h
             output_unvisited_neighbors.write(neighbor);
         }
     }
-    output_unvisited_neighbors.write(0xFFFFFFFF);
+    output_unvisited_neighbors.write(STREAM_END);
 }
 
 void attempt_test_and_set(hls::stream<uint32_t> &input_unvisited_neighbors, hls::stream<uint32_t> &output_awaiting_responses, sparse_edgemap_helper_args &task, hls::stream<lock_req> &toLock)
@@ -199,7 +207,7 @@ void attempt_test_and_set(hls::stream<uint32_t> &input_unvisited_neighbors, hls:
     {
 #pragma HLS pipeline II = 1
         uint32_t neighbor = input_unvisited_neighbors.read();
-        if (neighbor == 0xFFFFFFFF)
+        if (neighbor & STREAM_END)
         {
             break;
         }
@@ -207,54 +215,99 @@ void attempt_test_and_set(hls::stream<uint32_t> &input_unvisited_neighbors, hls:
         toLock.write(req);
         output_awaiting_responses.write(neighbor);
     }
-    output_awaiting_responses.write(0xFFFFFFFF);
+    output_awaiting_responses.write(STREAM_END);
 }
 
 void recieve_test_and_set_responses(void *mem, hls::stream<uint32_t> &input_awaiting_response, hls::stream<uint32_t> &successful_ts, sparse_edgemap_helper_args &task, hls::stream<lock_resp> &fromLock, hls::stream<lock_req> &toLock2)
 {
+    // Address-math hoist: distance[neighbor] is at mem + task.distance +
+    // neighbor*4, and neighbor = tag - task.visited (the visited array is
+    // byte-addressed, one byte per slot). So distance[neighbor] is also
+    //   mem + (task.distance - task.visited*4) + tag*4.
+    // The parenthesised term is loop-invariant, so fold it out here; inside the
+    // loop the store address is just distance_base + tag*4 (a shift plus one
+    // add). That keeps the 32-bit tag subtraction off the store's address path
+    // -- it still runs for successful_ts below, but that's a parallel FIFO
+    // write, not the critical path (HLS 200-871 / 200-1016).
+    const addr_t distance_base = task.distance - ((addr_t)task.visited << 2);
     while (true)
     {
 #pragma HLS pipeline II = 1
-        uint32_t neighbor = input_awaiting_response.read();
-        if (neighbor == 0xFFFFFFFF)
+        uint32_t _token = input_awaiting_response.read();
+        if (_token & STREAM_END)
         {
             break;
         }
+        // Responses may arrive out of order, so recover which neighbor this is
+        // from the echoed tag instead of pairing by FIFO order. The lock address
+        // was task.visited + neighbor, so subtract the base to get the index.
         lock_resp resp = fromLock.read();
-        if (lock_resp_success(resp) && resp.data(71, 64) == 0)
+        ap_uint<64> tag = lock_resp_tag(resp);
+        uint32_t neighbor = (uint32_t)(tag - (ap_uint<64>)task.visited);
+        if (lock_resp_success(resp) && lock_resp_current_byte(resp) == 0)
         {
-            MEM_ARR_OUT(mem, task.distance, neighbor, int32_t, task.currentDistance);
+            *((int32_t *)((uint8_t *)mem + distance_base + ((addr_t)tag << 2))) = task.currentDistance;
             successful_ts.write(neighbor);
             lock_req req = make_lock_req(task.nextFChar, 1, LOCK_OP_ADD_N_RETURN_CURRENT, true, ATOMIC_MODE_DOUBLEWORD);
             toLock2.write(req);
         }
     }
-    successful_ts.write(0xFFFFFFFF);
+    successful_ts.write(STREAM_END);
 }
 
 void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sparse_edgemap_helper_args &task, hls::stream<lock_resp> &fromLock2, hls::stream<uint64_t> &argOut)
 {
+    uint32_t last_slot = 0;
+    bool wrote_any = false;
     while (true)
     {
 #pragma HLS pipeline II = 1
         uint32_t neighbor = input_successful_ts.read();
-        if (neighbor == 0xFFFFFFFF)
+        if (neighbor & STREAM_END)
         {
             break;
         }
+        // The add-N response only carries the allocated slot (its previous
+        // counter value); every second lock shares the same tag (task.nextFChar),
+        // so the tag can't identify the neighbor -- it comes from the FIFO. Any
+        // reorder between the two is harmless: each neighbor still lands in a
+        // unique slot, so next_frontier ends up holding the same set.
         lock_resp resp = fromLock2.read();
         if (lock_resp_success(resp))
         {
             uint32_t nextFChar = lock_resp_current(resp);
-            MEM_ARR_OUT(mem, task.next_frontier, nextFChar, uint32_t, neighbor);
+            MEM_ARR_OUT_VOLATILE(mem, task.next_frontier, nextFChar, uint32_t, neighbor);
+            last_slot = nextFChar;
+            wrote_any = true;
         }
+    }
+
+    // Memory fence before completion. The next-frontier length the continuation
+    // trusts is `nextFChar`, which is bumped via the lock/AMU at ADD_N time
+    // (recieve_test_and_set_responses) and is committed to HBM before its
+    // response returns. The matching slot store above is a plain m_axi write, and
+    // nothing otherwise guarantees it has committed when we emit argOut below. The
+    // join counter then reaches zero and the continuation spawns the next level,
+    // reading frontier[0 .. frontier_length) -- so a slot that is counted but not
+    // yet committed is read STALE: that vertex is dropped (-1) and the stale slot
+    // value is reprocessed (wrong distance). Force the writes to drain by reading
+    // the last-written slot back (read-after-write on the same m_axi port) and
+    // feeding it into the value we hand to argOut, so HLS cannot drop or reorder
+    // the read past the completion token.
+    addr_t cont_out = task.cont;
+    if (wrote_any)
+    {
+        volatile uint32_t flush =
+            MEM_ARR_IN_VOLATILE(mem, task.next_frontier, last_slot, uint32_t);
+        if (flush == 0xFFFFFFFFu) // never true for a real vertex id; just a data dependency
+            cont_out ^= (addr_t)flush;
     }
 
     bool sent = false;
     while (!sent)
     {
 #pragma HLS PIPELINE off
-        sent = argOut.write_nb(task.cont);
+        sent = argOut.write_nb(cont_out);
     }
 }
 

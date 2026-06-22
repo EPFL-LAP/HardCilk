@@ -17,9 +17,9 @@
 // hls-processing-elements/mfpga/BFS/util.h.
 // ─────────────────────────────────────────────────────────────────────────────
 
+#include <GraphBenchmarkCommon.h>
 #include <benchmarks/BFS/NonDeterministicBFS/BFS.h>
 #include <graph.h>
-#include <hardCilkDriver.h>
 
 #include <algorithm>
 #include <chrono>
@@ -30,7 +30,6 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
-#include <streambuf>
 #include <thread>
 #include <tuple>
 #include <vector>
@@ -41,6 +40,23 @@ using Addr = uint64_t;
 // test-and-sets a single byte per request, so each Visited entry is one byte
 // (4x less HBM than the 32-bit layout).
 static const Addr VISITED_SLOT_BYTES = 1;
+static constexpr int32_t BFS_UNREACHED_DISTANCE = -1;
+
+// ── Investigation instrumentation (host-only; no HDL/HLS change) ─────────────
+// com-orkut corrupts HBM "somewhere" and the damage survives process restarts
+// (needs xrt-smi reset). To localize it without rebuilding the bitstream we:
+//   1. append a sentinel-filled guard region after every kernel-written buffer
+//      and verify it post-run -- a corrupted guard names the overrun buffer and
+//      the first bad offset (the classic next-frontier / distance overflow),
+//   2. assert nextFChar (next-frontier length) never exceeds vertex_count -- if
+//      it does, the lock's test-and-set let a vertex be discovered twice, which
+//      both inflates the frontier past its buffer and points straight at the
+//      pipelined-lock dedup as the regression,
+//   3. probe for a still-running kernel after `done` (re-read distances after a
+//      pause): if they keep changing, free-running PEs are draining stale tasks
+//      and stomping HBM -- exactly what would poison the next run until reset.
+static const uint64_t BFS_GUARD_BYTES = 4ull * 1024 * 1024; // 4 MiB per buffer
+static const uint8_t BFS_GUARD_FILL = 0xAB;
 
 // Mirror of hls-processing-elements/mfpga/BFS/util.h (128 bytes). The PE writes
 // its continuation closure here field-by-field via store_continuation(); the
@@ -70,26 +86,19 @@ static_assert(sizeof(BFS_args) == 128,
 // Byte offset of the `done` field inside the continuation closure.
 static const Addr BFS_DONE_OFFSET = offsetof(BFS_args, done);
 
-// initSystem requires a condition function pointer; this driver polls the
-// `done` field directly (see managementLoopBFS), so the stored condition is
-// unused.
-inline bool bfsDoneConditionStub(int32_t /*val*/) { return false; }
-
-class BFSDriver : public hardCilkDriver
+class BFSDriver : public BenchmarkDriverBase
 {
 public:
   std::string graph_file_;
   int source_;
-  int max_depth_;     // <= 0 means "unbounded" (set to vertex_count)
-  double watchdog_s_; // wall-clock deadline for the management loop
-  bool fast_mode_;    // poll only done; skip progress/debug readbacks
+  int max_depth_; // <= 0 means "unbounded" (set to vertex_count)
 
   BFSDriver(Memory *memory, const std::string &graph_file, int source = 0,
             int max_depth = 0, double watchdog_s = 600.0,
             bool fast_mode = false)
-      : hardCilkDriver(memory), graph_file_(graph_file), source_(source),
-        max_depth_(max_depth), watchdog_s_(watchdog_s),
-        fast_mode_(fast_mode) {}
+      : BenchmarkDriverBase(memory, watchdog_s, fast_mode, "BFS"),
+        graph_file_(graph_file), source_(source),
+        max_depth_(max_depth) {}
 
   static int run_cpu_test_bench(const std::string &graph_file, int source = 0,
                                 int max_depth_arg = 0)
@@ -182,14 +191,21 @@ public:
         graphEntries.size() * sizeof(uint64_t));
 
     // ── Work buffers ────────────────────────────────────────────────────────
+    // Each kernel-written buffer is over-allocated by BFS_GUARD_BYTES; the guard
+    // sits at [base + payloadBytes, base + payloadBytes + BFS_GUARD_BYTES) and is
+    // checked after the run (see checkGuard). The payload byte counts are kept so
+    // the guard offset is unambiguous.
+    const uint64_t distanceBytes = (uint64_t)n * sizeof(int32_t);
+    const uint64_t visitedBytes = (uint64_t)n * VISITED_SLOT_BYTES;
+    const uint64_t frontierBytes = (uint64_t)n * sizeof(uint32_t);
     Addr distance_base =
-        memory_->allocateMemFPGA((uint64_t)n * sizeof(int32_t), 512);
+        memory_->allocateMemFPGA(distanceBytes + BFS_GUARD_BYTES, 512);
     Addr visited_base =
-        memory_->allocateMemFPGA((uint64_t)n * VISITED_SLOT_BYTES, 512);
+        memory_->allocateMemFPGA(visitedBytes + BFS_GUARD_BYTES, 512);
     Addr frontier0_base =
-        memory_->allocateMemFPGA((uint64_t)n * sizeof(uint32_t), 512);
+        memory_->allocateMemFPGA(frontierBytes + BFS_GUARD_BYTES, 512);
     Addr frontier1_base =
-        memory_->allocateMemFPGA((uint64_t)n * sizeof(uint32_t), 512);
+        memory_->allocateMemFPGA(frontierBytes + BFS_GUARD_BYTES, 512);
     // nextFChar is now a single 64-bit atomic counter (the AMU ADD_ONE handout
     // for next-frontier slots), not a per-vertex flag array. 8 bytes suffice.
     Addr nextFChar_base = memory_->allocateMemFPGA(sizeof(uint64_t), 512);
@@ -197,12 +213,26 @@ public:
 
     // Required host-side init. The PE no longer has an init loop (BFS_new.cpp
     // dropped it), so the host is solely responsible for pre-initializing
-    // distance to -1, visited to 0, and nextFChar to 0 before the first task.
+    // distance to BFS_UNREACHED_DISTANCE, visited to 0, and nextFChar to 0
+    // before the first task.
     {
-      std::vector<int32_t> distInit(n, -1);
+      std::vector<int32_t> distInit(n, BFS_UNREACHED_DISTANCE);
       memory_->copyToDevice(distance_base,
                             reinterpret_cast<const uint8_t *>(distInit.data()),
-                            (uint64_t)n * sizeof(int32_t));
+                            distanceBytes);
+      std::vector<int32_t> distCheck(n, 0);
+      memory_->copyFromDevice(reinterpret_cast<uint8_t *>(distCheck.data()),
+                              distance_base, distanceBytes);
+      auto badDistance = std::find_if(
+          distCheck.begin(), distCheck.end(), [](int32_t value)
+          { return value != BFS_UNREACHED_DISTANCE; });
+      if (badDistance != distCheck.end())
+      {
+        std::cerr << "[BFS] distance init check failed at v="
+                  << std::distance(distCheck.begin(), badDistance)
+                  << " value=" << *badDistance << "\n";
+        return 1;
+      }
       std::vector<uint8_t> visInit(n, 0);
       memory_->copyToDevice(visited_base,
                             reinterpret_cast<const uint8_t *>(visInit.data()),
@@ -211,6 +241,17 @@ public:
       memory_->copyToDevice(nextFChar_base,
                             reinterpret_cast<const uint8_t *>(&nextFCharInit),
                             sizeof(uint64_t));
+
+      // Lay down the guard sentinel just past each kernel-written buffer.
+      std::vector<uint8_t> guard(BFS_GUARD_BYTES, BFS_GUARD_FILL);
+      memory_->copyToDevice(distance_base + distanceBytes, guard.data(),
+                            BFS_GUARD_BYTES);
+      memory_->copyToDevice(visited_base + visitedBytes, guard.data(),
+                            BFS_GUARD_BYTES);
+      memory_->copyToDevice(frontier0_base + frontierBytes, guard.data(),
+                            BFS_GUARD_BYTES);
+      memory_->copyToDevice(frontier1_base + frontierBytes, guard.data(),
+                            BFS_GUARD_BYTES);
     }
 
     std::cout << "[BFS] buffers: graph=0x" << std::hex << graph_base
@@ -249,17 +290,29 @@ public:
 
     std::vector<BFS_args> base_task_data = {root};
 
-    tuneSchedulerQueueCapacities(n);
+    tuneSchedulerQueueCapacities("BFS", n);
 
     // ── Program management registers and seed the root task ─────────────────
     auto t_init = std::chrono::high_resolution_clock::now();
-    initSystem(base_task_data, &bfsDoneConditionStub, /*fpgaId=*/0,
+    initSystem(base_task_data, &hardcilkDoneConditionStub, /*fpgaId=*/0,
                /*taskId=*/0,
                /*no_base_task=*/false);
     auto t_started = std::chrono::high_resolution_clock::now();
     std::cout << "[BFS] init took "
               << std::chrono::duration<double>(t_started - t_init).count()
               << "s\n";
+
+    // ── Run official GBBS BFS to get true max distance ──────────────────────
+    OfficialGBBSResult gbbs_result = runTimedOfficialGBBSBFS(G, effective_source, max_depth);
+    std::vector<int> dist_ref = std::move(gbbs_result.distances);
+    int true_max_dist = 0;
+    for (int d : dist_ref)
+    {
+      if (d > true_max_dist)
+      {
+        true_max_dist = d;
+      }
+    }
 
     // Kernel-only stopwatch: this brackets startSystem() -> done edge, the FPGA
     // analog of GBBS's bfs_s (graph already resident, source already seeded). It
@@ -271,7 +324,7 @@ public:
     startSystem();
 
     // ── Watchdog-bounded management loop ────────────────────────────────────
-    int rc = managementLoopBFS(cont_base, visited_base, n);
+    int rc = managementLoopBFS(cont_base, visited_base, distance_base, n, true_max_dist);
     auto t_kernel_done = t_kernel_done_;
     if (rc != 0)
     {
@@ -286,9 +339,42 @@ public:
                             distance_base, (uint64_t)n * sizeof(int32_t));
     auto t_fpga_result_ready = std::chrono::high_resolution_clock::now();
 
-    OfficialGBBSResult gbbs_result =
-        runTimedOfficialGBBSBFS(G, effective_source, max_depth);
-    std::vector<int> dist_ref = std::move(gbbs_result.distances);
+    // ── Post-`done` corruption diagnostics (host-only) ──────────────────────
+    // 1) Did the kernel overrun any work buffer? Localizes "writes garbage
+    //    somewhere" to a specific buffer + offset. Skipped under hw_emu: the
+    //    simulator's approximate global-memory model returns 0xFF for the tail of
+    //    an unwritten BO page, so the guard sentinel read-back false-positives
+    //    (on real hardware these guards read back intact).
+    if (!std::getenv("XCL_EMULATION_MODE"))
+    {
+      checkGuard("distance", distance_base, distanceBytes);
+      checkGuard("visited", visited_base, visitedBytes);
+      checkGuard("frontier0", frontier0_base, frontierBytes);
+      checkGuard("frontier1", frontier1_base, frontierBytes);
+    }
+
+    // 2) Is the kernel STILL writing after it raised `done`? If the distance
+    //    fingerprint keeps changing while we sit idle, free-running PEs are
+    //    draining stale tasks and mutating HBM -- the state that poisons the
+    //    next run until `xrt-smi reset`.
+    {
+      uint64_t fp0 = distanceFingerprint(distance_base, n);
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      uint64_t fp1 = distanceFingerprint(distance_base, n);
+      if (fp0 != fp1)
+        std::cerr << "[BFS-LIVE] kernel STILL mutating distances after done "
+                  << "(fp " << std::hex << fp0 << " -> " << fp1 << std::dec
+                  << "); free-running PEs are draining stale tasks. This is the "
+                  << "state that survives until xrt-smi reset.\n";
+      else
+        std::cout << "[BFS-LIVE] distances stable 500ms after done (kernel "
+                  << "quiescent)\n";
+      // Helper queue should be empty at done; a non-empty queue means tasks were
+      // still pending when termination was declared (premature done).
+      dumpSchedulerState();
+    }
+
+    // GBBS result and dist_ref were already computed above before startSystem()
     const double graph_load_s =
         std::chrono::duration<double>(t_graph_loaded - t_benchmark).count();
     const double fpga_execution_s =
@@ -328,28 +414,6 @@ public:
   }
 
 private:
-  // Set by managementLoopBFS the instant the `done` edge is observed (before any
-  // diagnostic readback), so the kernel-only stopwatch in run_test_bench stops
-  // at the FPGA's completion rather than after the progress dump.
-  std::chrono::high_resolution_clock::time_point t_kernel_done_;
-
-  class NullStreambuf : public std::streambuf
-  {
-  protected:
-    int_type overflow(int_type ch) override { return traits_type::not_eof(ch); }
-  };
-
-  class ScopedCoutSilencer
-  {
-  public:
-    ScopedCoutSilencer() : previous_(std::cout.rdbuf(&null_)) {}
-    ~ScopedCoutSilencer() { std::cout.rdbuf(previous_); }
-
-  private:
-    NullStreambuf null_;
-    std::streambuf *previous_;
-  };
-
   static Graph loadBenchmarkGraph(const std::string &graph_file, int source,
                                   std::string &synthetic_name,
                                   int &effective_source)
@@ -772,37 +836,50 @@ private:
     return result;
   }
 
-  void tuneSchedulerQueueCapacities(int vertex_count)
-  {
-    const uint64_t bfs_queue_entries = 64;
-    const uint64_t helper_queue_entries =
-        std::max<uint64_t>(64, static_cast<uint64_t>(vertex_count));
-
-    for (auto &task : descriptor.taskDescriptors)
-    {
-      uint64_t target =
-          task.name == "BFS" ? bfs_queue_entries : helper_queue_entries;
-      for (auto &config : task.sidesConfigs)
-      {
-        if (config.sideType != "scheduler")
-          continue;
-        if (config.capacityVirtualQueue <= 0)
-          continue;
-        uint64_t old_capacity =
-            static_cast<uint64_t>(config.capacityVirtualQueue);
-        if (target < old_capacity)
-        {
-          config.capacityVirtualQueue = static_cast<int>(target);
-          std::cout << "[BFS] scheduler queue cap for " << task.name << ": "
-                    << old_capacity << " -> " << target << " entries\n";
-        }
-      }
-    }
-  }
-
   // Drive paused-server management while polling the continuation's `done`
   // flag, bounded by a wall-clock watchdog. Returns 0 on done, -1 on watchdog
   // timeout.
+  // Read back a buffer's guard region and report the first byte that no longer
+  // holds the sentinel. A hit proves the kernel wrote past the end of `name`
+  // (e.g. a next-frontier slot index >= vertex_count) and tells us by how far.
+  bool checkGuard(const char *name, Addr base, uint64_t payloadBytes)
+  {
+    std::vector<uint8_t> guard(BFS_GUARD_BYTES);
+    memory_->copyFromDevice(guard.data(), base + payloadBytes, BFS_GUARD_BYTES);
+    for (uint64_t i = 0; i < BFS_GUARD_BYTES; i++)
+    {
+      if (guard[i] != BFS_GUARD_FILL)
+      {
+        std::cerr << "[BFS-GUARD] CORRUPT: " << name << " overran by "
+                  << i << " byte(s) past its " << payloadBytes
+                  << "-byte payload; first stomped byte=0x" << std::hex
+                  << (unsigned)guard[i] << std::dec << " at device addr 0x"
+                  << std::hex << (base + payloadBytes + i) << std::dec << "\n";
+        return false;
+      }
+    }
+    std::cout << "[BFS-GUARD] ok: " << name << " (" << payloadBytes
+              << "-byte payload) guard intact\n";
+    return true;
+  }
+
+  // Cheap order-independent fingerprint of the distance buffer, used to detect a
+  // kernel that is still mutating HBM after `done` (free-running PEs draining
+  // stale tasks -- the corruption that survives a process restart until reset).
+  uint64_t distanceFingerprint(Addr distance_base, int n)
+  {
+    std::vector<int32_t> d(n);
+    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(d.data()), distance_base,
+                            (uint64_t)n * sizeof(int32_t));
+    uint64_t h = 1469598103934665603ull; // FNV-1a
+    for (int32_t v : d)
+    {
+      h ^= (uint32_t)v;
+      h *= 1099511628211ull;
+    }
+    return h;
+  }
+
   size_t countVisited(Addr visited_base, int vertex_count)
   {
     std::vector<uint8_t> visited(vertex_count);
@@ -875,6 +952,16 @@ private:
               << " first_current=" << dbg(116) << " first_neighbor=" << dbg(120)
               << " nextFChar_hbm=" << nextfchar_hbm << "\n";
 
+    // A correct BFS level discovers each vertex at most once, so the
+    // next-frontier length can never exceed the vertex count. If it does, the
+    // lock's test-and-set admitted a duplicate -- which simultaneously overflows
+    // the frontier buffer (size vertex_count) and indicts the pipelined-lock
+    // dedup as the source of the corruption.
+    if (nextfchar_hbm > (uint64_t)vertex_count)
+      std::cerr << "[BFS-BUG] nextFChar=" << nextfchar_hbm << " EXCEEDS n="
+                << vertex_count << " -> duplicate discovery; frontier buffer "
+                << "overflow imminent (lock dedup failure)\n";
+
     dumpSchedulerState();
   }
 
@@ -910,7 +997,7 @@ private:
     }
   }
 
-  int managementLoopBFS(Addr cont_base, Addr visited_base, int vertex_count)
+  int managementLoopBFS(Addr cont_base, Addr visited_base, Addr distance_base, int vertex_count, int true_max_dist)
   {
     const auto start = std::chrono::high_resolution_clock::now();
     const auto deadline = std::chrono::high_resolution_clock::now() +
@@ -918,6 +1005,7 @@ private:
     auto next_progress = start;
     uint32_t done = 0;
     uint64_t iters = 0;
+    const bool is_emulation = std::getenv("XCL_EMULATION_MODE") != nullptr;
     while (true)
     {
       if (!fast_mode_ && checkPaused() == 0)
@@ -953,6 +1041,24 @@ private:
             << "s elapsed without done; possible lock deadlock or stall.\n";
         return -1;
       }
+
+      if (is_emulation && (iters % 1000 == 0))
+      {
+        std::vector<int32_t> current_dists(vertex_count);
+        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(current_dists.data()), distance_base, (uint64_t)vertex_count * sizeof(int32_t));
+        for (int v = 0; v < vertex_count; v++)
+        {
+          if (current_dists[v] != BFS_UNREACHED_DISTANCE && current_dists[v] > true_max_dist)
+          {
+            std::cerr << "[BFS-SIM-FAIL] FATAL ERROR: Distance " << current_dists[v]
+                      << " at vertex " << v << " exceeds true max distance " << true_max_dist << "!\n"
+                      << "Failing out early because we are in SIM mode.\n";
+            t_kernel_done_ = std::chrono::high_resolution_clock::now();
+            return -1;
+          }
+        }
+      }
+
       iters++;
       std::this_thread::sleep_for(fast_mode_
                                       ? std::chrono::milliseconds(10)

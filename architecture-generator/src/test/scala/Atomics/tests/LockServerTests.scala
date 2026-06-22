@@ -8,7 +8,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import scala.Predef.{assert => scalaAssert, _}
 import scala.collection.mutable
 
-class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.scalatest.ParallelTestExecution {
+class LockServerTests
+    extends AnyFlatSpec
+    with ChiselScalatestTester
+    with org.scalatest.ParallelTestExecution {
   behavior of "LockServer"
 
   private case class Params(n: Int, p: Int, tagStoreSize: Int)
@@ -35,6 +38,12 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     test(new LockServer(params.n, params.p, params.tagStoreSize))
       .withAnnotations(Seq(VerilatorBackendAnnotation))(body)
 
+  private def testDutVerilatorAddrW(params: Params, addrW: Int)(
+      body: LockServer => Unit
+  ): Unit =
+    test(new LockServer(params.n, params.p, params.tagStoreSize, addrW = addrW))
+      .withAnnotations(Seq(VerilatorBackendAnnotation))(body)
+
   private case class Request(
       pe: Int,
       isLock: Boolean,
@@ -43,13 +52,22 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
       isBlocking: Boolean = false,
       opcodeOverride: Option[Int] = None,
       atomicModeBits: Int = 0,
-      meta: Int = 0
+      meta: Int = 0,
+      floatCompare: Boolean = false
   )
+
+  // IEEE-754 single-precision bit pattern as an unsigned BigInt.
+  private def f32(x: Float): BigInt =
+    BigInt(java.lang.Float.floatToRawIntBits(x).toLong & 0xffffffffL)
   private case class Response(
       pe: Int,
       success: Boolean,
       data: BigInt,
-      meta: Int = 0
+      meta: Int = 0,
+      tag: BigInt = 0,
+      // Status bit 1: for conditional AMU ops, whether the store actually
+      // happened; for every other op it mirrors success.
+      writeOccurred: Boolean = false
   )
 
   // tdata layout (see LockServer): tag in bits 63:0, atomic mode in bits
@@ -62,7 +80,8 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
       .getOrElse(if (req.isLock) BigInt(1) else BigInt(0))
     val blocking = if (req.isBlocking) BigInt(1) else BigInt(0)
     val atomicMode = BigInt(req.atomicModeBits & 0x3)
-    (BigInt(req.meta & 0xff) << 136) |
+    val floatBit = if (req.floatCompare) BigInt(1) << 135 else BigInt(0)
+    (BigInt(req.meta & 0xff) << 136) | floatBit |
       (atomicMode << 133) | (blocking << 132) | (opcode << 128) |
       (req.data << 64) | BigInt(req.tag)
   }
@@ -105,6 +124,9 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     }
   }
 
+  // Response tdata layout (see LockServer): success in bits 7:0, the requested
+  // lock addr in bits 71:8, previous memory value in bits 135:72, metadata in
+  // bits 143:136.
   private def collectResponses(dut: LockServer): Seq[Response] = {
     val out = mutable.ArrayBuffer.empty[Response]
     for (i <- 0 until dut.n) {
@@ -113,15 +135,33 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
         out += Response(
           i,
           (tdata & 1) == 1,
-          (tdata >> 64) & ((BigInt(1) << 64) - 1),
-          ((tdata >> 136) & 0xff).toInt
+          (tdata >> 72) & ((BigInt(1) << 64) - 1),
+          ((tdata >> 136) & 0xff).toInt,
+          (tdata >> 8) & ((BigInt(1) << 64) - 1),
+          ((tdata >> 1) & 1) == 1
         )
       }
     }
     out.toSeq
   }
 
-  private class GMemModel(dut: LockServer, latency: Int = 0) {
+  // latency: fixed response latency. randomLatency: when set to (lo, hi), each
+  // read/write response is given an independent random latency in [lo, hi], so
+  // responses complete OUT OF ISSUE ORDER (the AMU/LockServer must route them by
+  // AXI id, not arrival order). The two channels are independent, so a younger
+  // request can retire before an older one -- exactly the reordering the deployed
+  // HBM interconnect can produce.
+  private class GMemModel(
+      dut: LockServer,
+      latency: Int = 0,
+      randomLatency: Option[(Int, Int)] = None,
+      seed: Long = 1
+  ) {
+    private val rng = new scala.util.Random(seed)
+    private def nextLatency(): Int = randomLatency match {
+      case Some((lo, hi)) => lo + rng.nextInt(math.max(1, hi - lo + 1))
+      case None           => latency
+    }
     val mem = mutable.Map.empty[BigInt, BigInt].withDefaultValue(BigInt(0))
     val arAddrs = mutable.ArrayBuffer.empty[BigInt]
     val awAddrs = mutable.ArrayBuffer.empty[BigInt]
@@ -224,7 +264,7 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
 
       if (capAr._1) {
         arAddrs += capAr._3
-        readResp += ((latency, capAr._2, mem(beatBase(capAr._3))))
+        readResp += ((nextLatency(), capAr._2, mem(beatBase(capAr._3))))
       }
       if (capAw._1) {
         awAddrs += capAw._3
@@ -236,7 +276,7 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
         val (data, strb) = wQ.dequeue()
         val base = beatBase(addr)
         mem(base) = applyStrobe(mem(base), data, strb)
-        bResp += ((latency, id))
+        bResp += ((nextLatency(), id))
       }
     }
   }
@@ -1057,7 +1097,8 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     var lastAcceptCycle = 0
     var cyc = 0
     while (cyc < 200) {
-      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head)) else driveNoReq(dut)
+      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head))
+      else driveNoReq(dut)
       val rdy = pending.nonEmpty && dut.io.req(0).ready.peek().litToBoolean
       dut.clock.step()
       cyc += 1
@@ -1088,7 +1129,8 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     val got = mutable.ArrayBuffer.empty[Response]
     var drain = 0
     while (got.size < total && drain < 2000) {
-      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head)) else driveNoReq(dut)
+      if (pending.nonEmpty) driveReqs(dut, Seq(pending.head))
+      else driveNoReq(dut)
       val rdy = pending.nonEmpty && dut.io.req(0).ready.peek().litToBoolean
       got ++= collectResponses(dut)
       dut.clock.step()
@@ -1336,6 +1378,73 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     logDone("addrW-lower-bits-hbm", params)
   }
 
+  // The response echoes the requested lock address back in bits 71:8 so a PE can
+  // correlate out-of-order completions by tag. Every distinct-tag lock must come
+  // back carrying its own tag.
+  private def runTagEchoedForLocks(dut: LockServer, params: Params): Unit = {
+    logStart("tag-echoed-for-locks", params)
+    waitForInit(dut, params)
+
+    val reqs = Seq.tabulate(params.n)(i =>
+      Request(pe = i, isLock = true, tag = 0x100 + i)
+    )
+    val out = runRequests(dut, params, reqs)
+    val pairs = out.values.flatten.toSeq
+    scalaAssert(
+      pairs.size == params.n,
+      s"expected ${params.n} responses, got ${pairs.size}"
+    )
+    for ((req, resp) <- pairs) {
+      scalaAssert(resp.success, s"distinct-tag lock should succeed: $resp")
+      scalaAssert(
+        resp.tag == BigInt(req.tag),
+        s"PE ${req.pe}: response tag ${resp.tag} should echo request tag ${req.tag}"
+      )
+    }
+    logDone("tag-echoed-for-locks", params)
+  }
+
+  // Regression for the tag-field shift: the response tag (bits 71:8) and previous
+  // value (bits 135:72) sit at fixed offsets because the addrW-bit tag is
+  // zero-extended to a full 64-bit field. With a narrow addrW an unpadded tag
+  // would shorten the packet and slide every field down. An AMU add-N returns a
+  // nonzero previous value, so a shifted layout would both mis-read the previous
+  // value and bleed its low bits up into the echoed tag -- this test pins both.
+  private def runTagEchoUnderNarrowAddr(
+      dut: LockServer,
+      params: Params,
+      addrW: Int,
+      addr: Int
+  ): Unit = {
+    logStart(s"tag-echo-addrW-$addrW", params)
+    waitForInit(dut, params)
+
+    val mask = (BigInt(1) << addrW) - 1
+    val truncated = BigInt(addr) & mask
+    val mem = new GMemModel(dut)
+    mem.mem(truncated) = BigInt(42)
+    val out = runRequests(
+      dut,
+      params,
+      Seq(lockAddNReq(pe = 0, addr = addr)),
+      mem = Some(mem)
+    )
+    val resp = out(0).head._2
+    scalaAssert(
+      resp.success && resp.data == BigInt(42),
+      s"add-N should return previous value 42, got $resp"
+    )
+    scalaAssert(
+      resp.tag == truncated,
+      s"response tag should echo the truncated request address $truncated, got ${resp.tag}"
+    )
+    scalaAssert(
+      mem.mem(truncated) == BigInt(43),
+      s"add-N should write back the incremented value 43, got ${mem.mem(truncated)}"
+    )
+    logDone(s"tag-echo-addrW-$addrW", params)
+  }
+
   private def runAtomicModeWordFromPacket(
       dut: LockServer,
       params: Params
@@ -1361,6 +1470,166 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
       s"word atomic mode should update only upper word, got ${mem.mem(0x300).toString(16)}"
     )
     logDone("atomic-mode-word-packet", params)
+  }
+
+  // Conditional set (LockSetIf{Greater,SignedLess}UnlockAndReturnCurrent): the
+  // op always reports success and returns the previous value, but status bit 1
+  // (writeOccurred) is set only when the predicate held and the AMU actually
+  // stored. Verifies both the response bit and the resulting memory state.
+  private def runConditionalSetWriteOccurred(
+      dut: LockServer,
+      params: Params,
+      opcode: Int,
+      label: String,
+      addr: Int,
+      current: BigInt,
+      operand: BigInt,
+      expectWrite: Boolean
+  ): Unit = {
+    logStart(s"$label-write=$expectWrite", params)
+    waitForInit(dut, params)
+
+    val mem = new GMemModel(dut)
+    mem.mem(addr) = current
+    val out = runRequests(
+      dut,
+      params,
+      Seq(
+        Request(
+          pe = 0,
+          isLock = true,
+          tag = addr,
+          data = operand,
+          opcodeOverride = Some(opcode)
+        )
+      ),
+      mem = Some(mem)
+    )
+    val resp = out(0).head._2
+    scalaAssert(
+      resp.success,
+      s"$label should always report success, got $resp"
+    )
+    scalaAssert(
+      resp.data == current,
+      s"$label should return the previous value $current, got $resp"
+    )
+    scalaAssert(
+      resp.writeOccurred == expectWrite,
+      s"$label writeOccurred bit should be $expectWrite, got $resp"
+    )
+    val expectedMem = if (expectWrite) operand else current
+    scalaAssert(
+      mem.mem(addr) == expectedMem,
+      s"$label memory should be $expectedMem, got ${mem.mem(addr)}"
+    )
+    logDone(s"$label-write=$expectWrite", params)
+  }
+
+  // End-to-end float-compare path: a conditional set with the packet's
+  // float-compare bit set must order operand vs memory as IEEE-754 floats (word
+  // mode = 32-bit single), so negative distances relax correctly -- the case a
+  // plain signed-int compare gets wrong.
+  private def runFloatConditionalSet(
+      dut: LockServer,
+      params: Params,
+      opcode: Int,
+      label: String,
+      addr: Int,
+      current: Float,
+      operand: Float,
+      expectWrite: Boolean
+  ): Unit = {
+    logStart(s"$label-float", params)
+    waitForInit(dut, params)
+
+    val mem = new GMemModel(dut)
+    mem.mem(addr) = f32(current)
+    val out = runRequests(
+      dut,
+      params,
+      Seq(
+        Request(
+          pe = 0,
+          isLock = true,
+          tag = addr,
+          data = f32(operand),
+          opcodeOverride = Some(opcode),
+          atomicModeBits = 2, // word
+          floatCompare = true
+        )
+      ),
+      mem = Some(mem)
+    )
+    val resp = out(0).head._2
+    scalaAssert(resp.success, s"$label should report success, got $resp")
+    scalaAssert(
+      resp.writeOccurred == expectWrite,
+      s"$label writeOccurred should be $expectWrite, got $resp"
+    )
+    val expectedMem = if (expectWrite) f32(operand) else f32(current)
+    scalaAssert(
+      mem.mem(addr) == expectedMem,
+      s"$label memory should be 0x${expectedMem.toString(16)}, got 0x${mem.mem(addr).toString(16)}"
+    )
+    logDone(s"$label-float", params)
+  }
+
+  // The unconditional ops (plain lock, testAndSet, add-N) have no notion of a
+  // skipped store, so status bit 1 (writeOccurred) must just mirror success:
+  // 1 whenever the op succeeds.
+  private def runUnconditionalOpsReportWriteOccurred(
+      dut: LockServer,
+      params: Params
+  ): Unit = {
+    logStart("unconditional-ops-write-occurred", params)
+    waitForInit(dut, params)
+
+    val mem = new GMemModel(dut)
+    mem.mem(0x900) = 5
+    // testAndSet always stores -> writeOccurred set.
+    val tas = runRequests(
+      dut,
+      params,
+      Seq(
+        Request(
+          pe = 0,
+          isLock = true,
+          tag = 0x900,
+          data = 42,
+          opcodeOverride = Some(2)
+        )
+      ),
+      mem = Some(mem)
+    )(0).head._2
+    scalaAssert(
+      tas.success && tas.writeOccurred,
+      s"testAndSet should set both success and writeOccurred, got $tas"
+    )
+
+    // add-N always stores -> writeOccurred set.
+    val add = runRequests(
+      dut,
+      params,
+      Seq(lockAddNReq(pe = 0, addr = 0x908, addend = 1)),
+      mem = Some(mem)
+    )(0).head._2
+    scalaAssert(
+      add.success && add.writeOccurred,
+      s"add-N should set both success and writeOccurred, got $add"
+    )
+
+    // Plain lock: no AMU write, writeOccurred just mirrors success.
+    val lock = runRequests(
+      dut,
+      params,
+      Seq(Request(pe = 0, isLock = true, tag = 0x910))
+    )(0).head._2
+    scalaAssert(
+      lock.success && lock.writeOccurred,
+      s"a successful plain lock should report writeOccurred=1, got $lock"
+    )
+    logDone("unconditional-ops-write-occurred", params)
   }
 
   // Reproduces HLS PE.cpp phase 2: every PE hammers the SAME address with
@@ -1460,6 +1729,328 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     logDone(s"concurrent-blocking-add-one active=$activePes", params)
   }
 
+  // BFS allocates each next-frontier SLOT via a blocking ADD_N(+1) on the shared
+  // nextFChar counter and writes next_frontier[returnedPrevValue] = neighbor. So
+  // every ADD_N's returned previous value MUST be a unique, contiguous slot in
+  // [start, start+total). If the AMU ever returns a GARBAGE prevValue (e.g. a
+  // wrong slot/id under out-of-order AXI), BFS writes a neighbor id at a wild
+  // frontier index -> 34-bit address wrap into the distance buffer (the
+  // com-orkut garbage) AND that neighbor never lands in the real frontier (the
+  // dropped vertices). This checks the returned-value SET, which the plain
+  // add-one test never did, and stresses it with out-of-order AXI responses.
+  private def runAddNSlotIntegrity(
+      dut: LockServer,
+      params: Params,
+      perPe: Int,
+      activePes: Int,
+      ooo: Option[(Int, Int)] = None
+  ): Unit = {
+    val label =
+      s"addn-slot-integrity active=$activePes perPe=$perPe ooo=${ooo.isDefined}"
+    logStart(label, params)
+    dut.clock.setTimeout(0)
+    waitForInit(dut, params)
+    setRespReady(dut)
+
+    val addr = 0x1000
+    val start = BigInt(0)
+    val mem = new GMemModel(dut, latency = 8, randomLatency = ooo)
+    mem.mem(addr) = start
+
+    val pes = 0 until activePes
+    val remaining = Array.fill(params.n)(0)
+    pes.foreach(pe => remaining(pe) = perPe)
+    val awaiting = Array.fill(params.n)(false)
+    val slots = mutable.ArrayBuffer.empty[BigInt]
+    val total = activePes * perPe
+    def addReq(pe: Int) =
+      Request(
+        pe = pe,
+        isLock = true,
+        tag = addr,
+        data = 1,
+        isBlocking = true,
+        opcodeOverride = Some(5)
+      )
+    def allDone = slots.size == total && pes.forall(pe => !awaiting(pe))
+
+    var cycles = 0
+    var lastProgress = 0
+    val maxCycles = 400000
+    while (!allDone && (cycles - lastProgress) < 1000 && cycles < maxCycles) {
+      val driving = pes.collect {
+        case pe if !awaiting(pe) && remaining(pe) > 0 => addReq(pe)
+      }
+      driveReqs(dut, driving.toSeq)
+      mem.beforeStep()
+      val accepted =
+        driving
+          .filter(r => dut.io.req(r.pe).ready.peek().litToBoolean)
+          .map(_.pe)
+      for (resp <- collectResponses(dut)) {
+        scalaAssert(
+          resp.success,
+          s"ADD_N should respond only on success: $resp"
+        )
+        slots += resp.data
+        awaiting(resp.pe) = false
+        lastProgress = cycles
+      }
+      dut.clock.step()
+      mem.afterStep()
+      cycles += 1
+      for (pe <- accepted) { remaining(pe) -= 1; awaiting(pe) = true }
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      allDone,
+      s"did not collect $total slots in $cycles cycles (got ${slots.size})"
+    )
+    val sorted = slots.sorted
+    val expected = (0 until total).map(i => start + i)
+    if (sorted != expected) {
+      val dups = slots
+        .groupBy(identity)
+        .collect { case (k, v) if v.size > 1 => k }
+        .toSeq
+        .sorted
+      val garbage =
+        slots.filter(s => s < start || s >= start + total).distinct.sorted
+      scalaAssert(
+        false,
+        s"ADD_N returned slots are not a clean permutation of [$start,${start + total}): " +
+          s"duplicates=${dups.take(10)} garbage=${garbage.take(10)} " +
+          s"(garbage slot -> next_frontier wild write -> distance corruption)"
+      )
+    }
+    scalaAssert(
+      mem.mem(addr) == start + total,
+      s"counter mismatch: ${mem.mem(addr)} != ${start + total}"
+    )
+    logDone(label, params)
+  }
+
+  // Reproduces the BFS visited[] test-and-set under a dense graph: many PEs (and
+  // the same PE repeatedly) fire NON-blocking LockSetUnlockAndReturnCurrent at
+  // the SAME byte address, pipelined (issued without waiting). The contract BFS
+  // relies on: across all of them EXACTLY ONE sees current==0 (the unique first
+  // visitor that marks the vertex and appends it to the next frontier). Two
+  // winners == duplicate discovery -> the next-frontier buffer overflows past
+  // vertex_count, which is the com-orkut corruption signature. Zero winners ==
+  // a lost vertex.
+  private def runConcurrentTestAndSetSameAddr(
+      dut: LockServer,
+      params: Params,
+      perPe: Int,
+      activePes: Int,
+      addr: Int,
+      ooo: Option[(Int, Int)] = None
+  ): Unit = {
+    val label =
+      s"concurrent-tas-same-addr active=$activePes perPe=$perPe ooo=${ooo.isDefined}"
+    logStart(label, params)
+    dut.clock.setTimeout(0)
+    waitForInit(dut, params)
+    setRespReady(dut)
+
+    val beat = BigInt(addr) & ~BigInt(7)
+    val mem = new GMemModel(dut, latency = 6, randomLatency = ooo)
+    mem.mem(beat) = 0
+    val pes = 0 until activePes
+    val pending =
+      pes.map(pe => pe -> mutable.Queue.empty[Request]).toMap
+    for (pe <- pes; _ <- 0 until perPe)
+      pending(pe).enqueue(
+        Request(
+          pe = pe,
+          isLock = true,
+          tag = addr,
+          data = 1,
+          opcodeOverride = Some(2), // LockSetUnlockAndReturnCurrent
+          atomicModeBits = 1 // byte
+        )
+      )
+    val total = activePes * perPe
+    val got = mutable.ArrayBuffer.empty[Response]
+    var cycles = 0
+    val maxCycles = 50000
+    while (got.size < total && cycles < maxCycles) {
+      val driving = pes.flatMap(pe => pending(pe).headOption)
+      driveReqs(dut, driving)
+      mem.beforeStep()
+      val accepted = driving
+        .filter(r => dut.io.req(r.pe).ready.peek().litToBoolean)
+        .map(_.pe)
+      got ++= collectResponses(dut)
+      dut.clock.step()
+      mem.afterStep()
+      cycles += 1
+      for (pe <- accepted) pending(pe).dequeue()
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      got.size == total,
+      s"expected $total responses, got ${got.size} after $cycles cycles"
+    )
+    val firstVisits = got.count(r => r.success && r.data == 0)
+    scalaAssert(
+      firstVisits == 1,
+      s"exactly one test-and-set must observe current==0 (unique first visit); " +
+        s"got $firstVisits (>1 = duplicate discovery -> frontier overflow). " +
+        s"responses=${got.map(r => (r.pe, r.success, r.data)).sortBy(_._1)}"
+    )
+    scalaAssert(
+      mem.mem(beat) != 0,
+      s"visited byte should be set after the run, got ${mem.mem(beat)}"
+    )
+    logDone(label, params)
+  }
+
+  // The full BFS level pattern: a batch of distinct visited[] addresses, each
+  // hit by several concurrent NON-blocking test-and-sets (the same neighbor
+  // reachable from multiple frontier vertices), all pipelined across PEs.
+  // distinctAddrs intentionally exceeds tagStoreSize so the tag store churns.
+  // Invariant: every address has EXACTLY ONE first visitor and the total number
+  // of first visitors equals the number of distinct addresses -- none lost, none
+  // duplicated. A duplicate is precisely what overflows the next frontier.
+  private def runConcurrentTestAndSetLevel(
+      dut: LockServer,
+      params: Params,
+      distinctAddrs: Int,
+      dupPerAddr: Int,
+      baseAddr: Int,
+      ooo: Option[(Int, Int)] = None
+  ): Unit = {
+    val label =
+      s"concurrent-tas-level d=$distinctAddrs dup=$dupPerAddr ooo=${ooo.isDefined}"
+    logStart(label, params)
+    dut.clock.setTimeout(0)
+    waitForInit(dut, params)
+    setRespReady(dut)
+
+    val mem = new GMemModel(dut, latency = 6, randomLatency = ooo)
+    val pending =
+      (0 until params.n).map(pe => pe -> mutable.Queue.empty[Request]).toMap
+    var k = 0
+    for (a <- 0 until distinctAddrs; _ <- 0 until dupPerAddr) {
+      val pe = k % params.n
+      k += 1
+      pending(pe).enqueue(
+        Request(
+          pe = pe,
+          isLock = true,
+          tag = baseAddr + a,
+          data = 1,
+          opcodeOverride = Some(2),
+          atomicModeBits = 1
+        )
+      )
+    }
+    val total = distinctAddrs * dupPerAddr
+    val got = mutable.ArrayBuffer.empty[Response]
+    var cycles = 0
+    val maxCycles = 200000
+    while (got.size < total && cycles < maxCycles) {
+      val driving =
+        (0 until params.n).flatMap(pe => pending(pe).headOption)
+      driveReqs(dut, driving)
+      mem.beforeStep()
+      val accepted = driving
+        .filter(r => dut.io.req(r.pe).ready.peek().litToBoolean)
+        .map(_.pe)
+      got ++= collectResponses(dut)
+      dut.clock.step()
+      mem.afterStep()
+      cycles += 1
+      for (pe <- accepted) pending(pe).dequeue()
+    }
+    driveNoReq(dut)
+
+    scalaAssert(
+      got.size == total,
+      s"expected $total responses, got ${got.size} after $cycles cycles"
+    )
+    val byAddr = got.groupBy(_.tag)
+    val bad = (0 until distinctAddrs).flatMap { a =>
+      val t = BigInt(baseAddr + a)
+      val fv =
+        byAddr
+          .getOrElse(t, mutable.ArrayBuffer.empty)
+          .count(r => r.success && r.data == 0)
+      if (fv != 1) Some((t.toString(16), fv)) else None
+    }
+    scalaAssert(
+      bad.isEmpty,
+      s"every address must have exactly one first visitor; offenders (addr->firstVisits)=${bad.mkString(", ")}"
+    )
+    val totalFirstVisits = got.count(r => r.success && r.data == 0)
+    scalaAssert(
+      totalFirstVisits == distinctAddrs,
+      s"total first visits ($totalFirstVisits) must equal distinct addresses ($distinctAddrs)"
+    )
+    logDone(label, params)
+  }
+
+  it should "admit exactly one first visitor under concurrent same-address test-and-set (n=16 p=8 tagStoreSize=64)" in {
+    val params = wideParams
+    testDutVerilator(params) { dut =>
+      runConcurrentTestAndSetSameAddr(
+        dut,
+        params,
+        perPe = 16,
+        activePes = params.n,
+        addr = 0x2000
+      )
+    }
+  }
+
+  it should "give every vertex exactly one first visitor across a dense BFS level (n=16 p=8 tagStoreSize=64)" in {
+    val params = wideParams
+    testDutVerilator(params) { dut =>
+      runConcurrentTestAndSetLevel(
+        dut,
+        params,
+        distinctAddrs = 128,
+        dupPerAddr = 3,
+        baseAddr = 0x4000
+      )
+    }
+  }
+
+  // Same invariants, but the gmem AXI returns read/write responses OUT OF ORDER
+  // (independent random latencies per response). This is the case the pipelined
+  // lock was introduced for: the AMU must route completions by AXI id, and the
+  // LockServer must release the right held tag, regardless of arrival order.
+  it should "admit exactly one first visitor with out-of-order AXI responses (n=16 p=8 tagStoreSize=64)" in {
+    val params = wideParams
+    testDutVerilator(params) { dut =>
+      runConcurrentTestAndSetSameAddr(
+        dut,
+        params,
+        perPe = 8,
+        activePes = params.n,
+        addr = 0x2000,
+        ooo = Some((2, 40))
+      )
+    }
+  }
+
+  it should "give every vertex one first visitor across a dense BFS level with out-of-order AXI responses (n=16 p=8 tagStoreSize=64)" in {
+    val params = wideParams
+    testDutVerilator(params) { dut =>
+      runConcurrentTestAndSetLevel(
+        dut,
+        params,
+        distinctAddrs = 128,
+        dupPerAddr = 3,
+        baseAddr = 0x4000,
+        ooo = Some((2, 40))
+      )
+    }
+  }
+
   it should "use only lower addrW bits for lock tags" in {
     val params = smallParams
     test(new LockServer(params.n, params.p, params.tagStoreSize, addrW = 8)) {
@@ -1480,6 +2071,25 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     val params = smallParams
     testDutVerilator(params) { dut =>
       runAtomicModeWordFromPacket(dut, params)
+    }
+  }
+
+  it should "echo the requested tag in lock responses (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runTagEchoedForLocks(dut, params)
+    }
+  }
+
+  // addrW=34 mirrors the deployed widthAXIAddress; addrW=8 is the narrowest
+  // exercised. Both must keep the response tag/previous-value at their fixed
+  // offsets despite the narrow address width.
+  for (addrW <- Seq(8, 34)) {
+    it should s"keep the response tag and previous value at fixed offsets with addrW=$addrW" in {
+      val params = smallParams
+      testDutVerilatorAddrW(params, addrW) { dut =>
+        runTagEchoUnderNarrowAddr(dut, params, addrW, addr = 0x120)
+      }
     }
   }
 
@@ -1594,6 +2204,125 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
     }
   }
 
+  it should "set status bit 1 when a conditional set-if-greater actually stores (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runConditionalSetWriteOccurred(
+        dut,
+        params,
+        opcode = 3, // LockSetIfGreaterUnlockAndReturnCurrent
+        label = "set-if-greater",
+        addr = 0x340,
+        current = 5,
+        operand = 100,
+        expectWrite = true
+      )
+    }
+  }
+
+  it should "clear status bit 1 when a conditional set-if-greater skips the store (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runConditionalSetWriteOccurred(
+        dut,
+        params,
+        opcode = 3, // LockSetIfGreaterUnlockAndReturnCurrent
+        label = "set-if-greater",
+        addr = 0x340,
+        current = 100,
+        operand = 5,
+        expectWrite = false
+      )
+    }
+  }
+
+  it should "set status bit 1 when a conditional set-if-less actually stores (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runConditionalSetWriteOccurred(
+        dut,
+        params,
+        opcode = 4, // LockSetIfSignedLessUnlockAndReturnCurrent
+        label = "set-if-less",
+        addr = 0x350,
+        current = 100,
+        operand = 5,
+        expectWrite = true
+      )
+    }
+  }
+
+  it should "clear status bit 1 when a conditional set-if-less skips the store (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runConditionalSetWriteOccurred(
+        dut,
+        params,
+        opcode = 4, // LockSetIfSignedLessUnlockAndReturnCurrent
+        label = "set-if-less",
+        addr = 0x350,
+        current = 5,
+        operand = 100,
+        expectWrite = false
+      )
+    }
+  }
+
+  it should "mirror success into status bit 1 for unconditional ops (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runUnconditionalOpsReportWriteOccurred(dut, params)
+    }
+  }
+
+  it should "relax a smaller negative float with the float-compare bit set (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runFloatConditionalSet(
+        dut,
+        params,
+        opcode = 4,
+        label = "set-if-less",
+        addr = 0x300,
+        current = -2.0f,
+        operand = -5.0f,
+        expectWrite = true
+      )
+    }
+  }
+
+  it should "skip a larger negative float on a float set-if-less (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runFloatConditionalSet(
+        dut,
+        params,
+        opcode = 4,
+        label = "set-if-less",
+        addr = 0x300,
+        current = -5.0f,
+        operand = -2.0f,
+        expectWrite = false
+      )
+    }
+  }
+
+  it should "store a larger negative float on a float set-if-greater (n=8 p=4 tagStoreSize=16)" in {
+    val params = mediumParams
+    testDutVerilator(params) { dut =>
+      runFloatConditionalSet(
+        dut,
+        params,
+        opcode = 3,
+        label = "set-if-greater",
+        addr = 0x300,
+        current = -5.0f,
+        operand = -2.0f,
+        expectWrite = true
+      )
+    }
+  }
+
   it should "drain pipelined blocking locks once their tags are released (n=8 p=4 tagStoreSize=32)" in {
     val params = mixedParams
     testDutVerilator(params) { dut =>
@@ -1610,7 +2339,7 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
 
   it should "deliver an AMU return past a parked slotless lock when the store is full (n=8 p=4 tagStoreSize=16)" in {
     val params = mediumParams
-    test(new LockServer(params.n, params.p, params.tagStoreSize)) { dut =>
+    testDutVerilator(params) { dut =>
       runStoreFullAmuReturnUnblocksParkedLock(dut, params)
     }
   }
@@ -1644,6 +2373,26 @@ class LockServerTests extends AnyFlatSpec with ChiselScalatestTester with org.sc
   // LockAddNReturnCurrent (N=1), one request outstanding per PE. This used to
   // wedge when an AMU return was trapped behind a replayed lock waiting for a
   // free tag-store slot. Keep this last because it is the slowest regression.
+  it should "return unique contiguous ADD_N slots under contention (n=16 p=8 tagStoreSize=64)" in {
+    val params = wideParams
+    testDutVerilator(params) { dut =>
+      runAddNSlotIntegrity(dut, params, perPe = 16, activePes = params.n)
+    }
+  }
+
+  it should "return unique contiguous ADD_N slots under contention with out-of-order AXI (n=16 p=8 tagStoreSize=64)" in {
+    val params = wideParams
+    testDutVerilator(params) { dut =>
+      runAddNSlotIntegrity(
+        dut,
+        params,
+        perPe = 16,
+        activePes = params.n,
+        ooo = Some((2, 40))
+      )
+    }
+  }
+
   it should "avoid AMU-return deadlock under 8-PE blocking add-one contention (n=8 p=4 tagStoreSize=32)" in {
     val params = mixedParams
     testDutVerilator(

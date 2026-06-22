@@ -112,13 +112,36 @@ object HardCilkEmitterUtil {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
       val peHDLPath = task.peHDLPath
-      if(peHDLPath != ""){ 
+      if(peHDLPath != ""){
         val peHDLPathFiles = new java.io.File(peHDLPath).listFiles()
         peHDLPathFiles.foreach { file =>
           val fileName = file.getName()
           val fileContent = readFile(file.getAbsolutePath())
           writeFile(s"$outputDirPathRTL/$fileName", fileContent)
         }
+      }
+    }
+
+    // Stage the watcher's HLS Verilog the same way (it is not a task descriptor).
+    // Guarded so elaboration-only runs (before the watcher is synthesized) don't
+    // fail; the blackbox elaborates without the .v, the full build needs it staged.
+    systemDescriptor.watcherConfig.foreach { wc =>
+      val watcherDir = new java.io.File(wc.hdlPath)
+      val watcherFiles =
+        if (watcherDir.exists) watcherDir.listFiles() else null
+      if (watcherFiles != null) {
+        watcherFiles.foreach { file =>
+          writeFile(
+            s"$outputDirPathRTL/${file.getName()}",
+            readFile(file.getAbsolutePath())
+          )
+        }
+      } else {
+        println(
+          s"[Watcher] hdlPath '${wc.hdlPath}' not found at RTL-gen time; " +
+            "watcher.v will NOT be staged (fine for elaboration-only runs, " +
+            "but the xclbin build needs it synthesized first)."
+        )
       }
     }
 

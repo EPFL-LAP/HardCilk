@@ -1,0 +1,1667 @@
+<profile>
+    <ReportVersion>
+        <Version>2024.1</Version>
+    </ReportVersion>
+    <UserAssignments>
+        <unit>ns</unit>
+        <ProductFamily>virtexuplusHBM</ProductFamily>
+        <Part>xcu55c-fsvh2892-2L-e</Part>
+        <TopModelName>watcher</TopModelName>
+        <TargetClockPeriod>3.33</TargetClockPeriod>
+        <ClockUncertainty>0.90</ClockUncertainty>
+        <FlowTarget>vivado</FlowTarget>
+    </UserAssignments>
+    <PerformanceEstimates>
+        <PipelineType>no</PipelineType>
+        <SummaryOfTimingAnalysis>
+            <unit>ns</unit>
+            <EstimatedClockPeriod>2.433</EstimatedClockPeriod>
+        </SummaryOfTimingAnalysis>
+        <SummaryOfOverallLatency>
+            <unit>clock cycles</unit>
+            <Best-caseLatency>undef</Best-caseLatency>
+            <Average-caseLatency>undef</Average-caseLatency>
+            <Worst-caseLatency>undef</Worst-caseLatency>
+            <Best-caseRealTimeLatency>undef</Best-caseRealTimeLatency>
+            <Average-caseRealTimeLatency>undef</Average-caseRealTimeLatency>
+            <Worst-caseRealTimeLatency>undef</Worst-caseRealTimeLatency>
+            <Interval-min>undef</Interval-min>
+            <Interval-max>undef</Interval-max>
+        </SummaryOfOverallLatency>
+        <SummaryOfLoopLatency>
+            <VITIS_LOOP_104_1>
+                <Slack>2.43</Slack>
+                <TripCount>inf</TripCount>
+                <Latency>undef</Latency>
+                <AbsoluteTimeLatency>undef</AbsoluteTimeLatency>
+                <PipelineII>2</PipelineII>
+                <PipelineDepth>12</PipelineDepth>
+                <InstanceList/>
+            </VITIS_LOOP_104_1>
+        </SummaryOfLoopLatency>
+        <SummaryOfViolations>
+            <IssueType>-</IssueType>
+            <ViolationType>-</ViolationType>
+            <SourceLocation>../memAccess.cpp:61</SourceLocation>
+            <SummaryOfLoopViolations>
+                <VITIS_LOOP_104_1>
+                    <Name>VITIS_LOOP_104_1</Name>
+                    <IssueType>II Violation</IssueType>
+                    <ViolationType>Memory Dependency</ViolationType>
+                    <IterationDistance>1</IterationDistance>
+                    <SourceLocation>../memAccess.cpp:106</SourceLocation>
+                </VITIS_LOOP_104_1>
+            </SummaryOfLoopViolations>
+        </SummaryOfViolations>
+    </PerformanceEstimates>
+    <AreaEstimates>
+        <Resources>
+            <BRAM_18K>15</BRAM_18K>
+            <FF>4501</FF>
+            <LUT>5658</LUT>
+            <URAM>0</URAM>
+            <DSP>0</DSP>
+        </Resources>
+        <AvailableResources>
+            <BRAM_18K>4032</BRAM_18K>
+            <DSP>9024</DSP>
+            <FF>2607360</FF>
+            <LUT>1303680</LUT>
+            <URAM>960</URAM>
+        </AvailableResources>
+    </AreaEstimates>
+    <InterfaceSummary>
+        <RtlPorts>
+            <name>ap_clk</name>
+            <Object>watcher</Object>
+            <Type>return value</Type>
+            <Scope/>
+            <IOProtocol>ap_ctrl_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>control</Attribute>
+        </RtlPorts>
+        <RtlPorts>
+            <name>ap_rst_n</name>
+            <Object>watcher</Object>
+            <Type>return value</Type>
+            <Scope/>
+            <IOProtocol>ap_ctrl_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>control</Attribute>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWVALID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWREADY</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWADDR</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>64</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWLEN</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>8</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWSIZE</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>3</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWBURST</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>2</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWLOCK</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>2</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWCACHE</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>4</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWPROT</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>3</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWQOS</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>4</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWREGION</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>4</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_AWUSER</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_WVALID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_WREADY</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_WDATA</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>512</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_WSTRB</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>64</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_WLAST</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_WID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_WUSER</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARVALID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARREADY</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARADDR</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>64</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARLEN</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>8</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARSIZE</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>3</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARBURST</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>2</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARLOCK</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>2</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARCACHE</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>4</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARPROT</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>3</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARQOS</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>4</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARREGION</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>4</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_ARUSER</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_RVALID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_RREADY</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_RDATA</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>512</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_RLAST</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_RID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_RUSER</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_RRESP</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_BVALID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_BREADY</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>out</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_BRESP</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_BID</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>m_axi_gmem_BUSER</name>
+            <Object>gmem</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>m_axi</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>1</Bits>
+            <Attribute>unknown</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>mem</name>
+            <Object>mem</Object>
+            <Type>scalar</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>64</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>start_addr</name>
+            <Object>start_addr</Object>
+            <Type>scalar</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>64</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_in_0</name>
+            <Object>cont0_status_in_0</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_in_1</name>
+            <Object>cont0_status_in_1</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_in_2</name>
+            <Object>cont0_status_in_2</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_in_3</name>
+            <Object>cont0_status_in_3</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_out_0</name>
+            <Object>cont0_status_out_0</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_out_1</name>
+            <Object>cont0_status_out_1</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_out_2</name>
+            <Object>cont0_status_out_2</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>cont0_status_out_3</name>
+            <Object>cont0_status_out_3</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_in_0</name>
+            <Object>memReader_status_in_0</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_in_1</name>
+            <Object>memReader_status_in_1</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_in_2</name>
+            <Object>memReader_status_in_2</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_in_3</name>
+            <Object>memReader_status_in_3</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_out_0</name>
+            <Object>memReader_status_out_0</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_out_1</name>
+            <Object>memReader_status_out_1</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_out_2</name>
+            <Object>memReader_status_out_2</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>memReader_status_out_3</name>
+            <Object>memReader_status_out_3</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_in_0</name>
+            <Object>reentry0_status_in_0</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_in_1</name>
+            <Object>reentry0_status_in_1</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_in_2</name>
+            <Object>reentry0_status_in_2</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_in_3</name>
+            <Object>reentry0_status_in_3</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_out_0</name>
+            <Object>reentry0_status_out_0</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_out_1</name>
+            <Object>reentry0_status_out_1</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_out_2</name>
+            <Object>reentry0_status_out_2</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+        <RtlPorts>
+            <name>reentry0_status_out_3</name>
+            <Object>reentry0_status_out_3</Object>
+            <Type>pointer</Type>
+            <Scope/>
+            <IOProtocol>ap_none</IOProtocol>
+            <IOConfig/>
+            <Dir>in</Dir>
+            <Bits>2</Bits>
+            <Attribute>data</Attribute>
+            <CType>int</CType>
+        </RtlPorts>
+    </InterfaceSummary>
+    <RTLDesignHierarchy>
+        <TopModule MAX_DEPTH="2">
+            <ModuleName>watcher</ModuleName>
+            <BindInstances>add_ln109_fu_1629_p2 xor_ln142_fu_677_p2 xor_ln143_fu_690_p2 xor_ln144_fu_704_p2 xor_ln145_fu_717_p2 xor_ln142_1_fu_747_p2 xor_ln143_1_fu_760_p2 xor_ln144_1_fu_774_p2 xor_ln145_1_fu_787_p2 xor_ln142_2_fu_817_p2 xor_ln143_2_fu_830_p2 xor_ln144_2_fu_844_p2 xor_ln145_2_fu_857_p2 xor_ln142_3_fu_887_p2 xor_ln143_3_fu_900_p2 xor_ln144_3_fu_914_p2 xor_ln145_3_fu_927_p2 xor_ln160_fu_957_p2 xor_ln161_fu_970_p2 xor_ln162_fu_984_p2 xor_ln163_fu_997_p2 xor_ln160_1_fu_1027_p2 xor_ln161_1_fu_1040_p2 xor_ln162_1_fu_1054_p2 xor_ln163_1_fu_1067_p2 xor_ln160_2_fu_1097_p2 xor_ln161_2_fu_1110_p2 xor_ln162_2_fu_1124_p2 xor_ln163_2_fu_1137_p2 xor_ln160_3_fu_1167_p2 xor_ln161_3_fu_1180_p2 xor_ln162_3_fu_1194_p2 xor_ln163_3_fu_1207_p2 xor_ln178_fu_1237_p2 xor_ln179_fu_1250_p2 xor_ln180_fu_1264_p2 xor_ln181_fu_1277_p2 xor_ln178_1_fu_1307_p2 xor_ln179_1_fu_1320_p2 xor_ln180_1_fu_1334_p2 xor_ln181_1_fu_1347_p2 xor_ln178_2_fu_1377_p2 xor_ln179_2_fu_1390_p2 xor_ln180_2_fu_1404_p2 xor_ln181_2_fu_1417_p2 xor_ln178_3_fu_1447_p2 xor_ln179_3_fu_1460_p2 xor_ln180_3_fu_1474_p2 xor_ln181_3_fu_1487_p2 add_ln196_fu_1513_p2 add_ln196_1_fu_1536_p2 shl_ln196_fu_1644_p2 shl_ln196_1_fu_1841_p2 icmp_ln196_fu_1650_p2 select_ln196_fu_1655_p3 add_ln198_fu_1555_p2 gmem_m_axi_U</BindInstances>
+        </TopModule>
+    </RTLDesignHierarchy>
+    <ModuleInformation>
+        <Module>
+            <Name>watcher</Name>
+            <Loops>
+                <VITIS_LOOP_104_1/>
+            </Loops>
+            <PerformanceEstimates>
+                <SummaryOfTimingAnalysis>
+                    <TargetClockPeriod>3.33</TargetClockPeriod>
+                    <ClockUncertainty>0.90</ClockUncertainty>
+                    <EstimatedClockPeriod>2.433</EstimatedClockPeriod>
+                </SummaryOfTimingAnalysis>
+                <SummaryOfOverallLatency>
+                    <Best-caseLatency>undef</Best-caseLatency>
+                    <Average-caseLatency>undef</Average-caseLatency>
+                    <Worst-caseLatency>undef</Worst-caseLatency>
+                    <Best-caseRealTimeLatency>undef</Best-caseRealTimeLatency>
+                    <Average-caseRealTimeLatency>undef</Average-caseRealTimeLatency>
+                    <Worst-caseRealTimeLatency>undef</Worst-caseRealTimeLatency>
+                    <PipelineInitiationInterval>undef</PipelineInitiationInterval>
+                    <PipelineType>no</PipelineType>
+                </SummaryOfOverallLatency>
+                <SummaryOfLoopLatency>
+                    <VITIS_LOOP_104_1>
+                        <Name>VITIS_LOOP_104_1</Name>
+                        <Slack>2.43</Slack>
+                        <TripCount>inf</TripCount>
+                        <Latency>undef</Latency>
+                        <AbsoluteTimeLatency>undef</AbsoluteTimeLatency>
+                        <PipelineII>2</PipelineII>
+                        <PipelineDepth>12</PipelineDepth>
+                        <PipelineType>yes</PipelineType>
+                        <InstanceList/>
+                    </VITIS_LOOP_104_1>
+                </SummaryOfLoopLatency>
+                <SummaryOfViolations>
+                    <IssueType>-</IssueType>
+                    <ViolationType>-</ViolationType>
+                    <SourceLocation>../memAccess.cpp:61</SourceLocation>
+                    <SummaryOfLoopViolations>
+                        <VITIS_LOOP_104_1>
+                            <Name>VITIS_LOOP_104_1</Name>
+                            <IssueType>II Violation</IssueType>
+                            <ViolationType>Memory Dependency</ViolationType>
+                            <IterationDistance>1</IterationDistance>
+                            <SourceLocation>../memAccess.cpp:106</SourceLocation>
+                        </VITIS_LOOP_104_1>
+                    </SummaryOfLoopViolations>
+                </SummaryOfViolations>
+            </PerformanceEstimates>
+            <AreaEstimates>
+                <Resources>
+                    <BRAM_18K>15</BRAM_18K>
+                    <AVAIL_BRAM>4032</AVAIL_BRAM>
+                    <UTIL_BRAM>~0</UTIL_BRAM>
+                    <FF>4501</FF>
+                    <AVAIL_FF>2607360</AVAIL_FF>
+                    <UTIL_FF>~0</UTIL_FF>
+                    <LUT>5658</LUT>
+                    <AVAIL_LUT>1303680</AVAIL_LUT>
+                    <UTIL_LUT>~0</UTIL_LUT>
+                    <URAM>0</URAM>
+                    <AVAIL_URAM>960</AVAIL_URAM>
+                    <UTIL_URAM>0</UTIL_URAM>
+                    <DSP>0</DSP>
+                    <AVAIL_DSP>9024</AVAIL_DSP>
+                    <UTIL_DSP>0</UTIL_DSP>
+                </Resources>
+            </AreaEstimates>
+            <BindNodes>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op add" DSP="0" ID="" IMPL="fabric" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="add" PRAGMA="" RTLNAME="add_ln109_fu_1629_p2" SOURCE="../memAccess.cpp:109" STORAGESUBTYPE="" URAM="0" VARIABLE="add_ln109" VISIBLE="true"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln142_fu_677_p2" SOURCE="../memAccess.cpp:142" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln142" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln143_fu_690_p2" SOURCE="../memAccess.cpp:143" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln143" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln144_fu_704_p2" SOURCE="../memAccess.cpp:144" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln144" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln145_fu_717_p2" SOURCE="../memAccess.cpp:145" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln145" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln142_1_fu_747_p2" SOURCE="../memAccess.cpp:142" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln142_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln143_1_fu_760_p2" SOURCE="../memAccess.cpp:143" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln143_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln144_1_fu_774_p2" SOURCE="../memAccess.cpp:144" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln144_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln145_1_fu_787_p2" SOURCE="../memAccess.cpp:145" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln145_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln142_2_fu_817_p2" SOURCE="../memAccess.cpp:142" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln142_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln143_2_fu_830_p2" SOURCE="../memAccess.cpp:143" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln143_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln144_2_fu_844_p2" SOURCE="../memAccess.cpp:144" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln144_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln145_2_fu_857_p2" SOURCE="../memAccess.cpp:145" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln145_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln142_3_fu_887_p2" SOURCE="../memAccess.cpp:142" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln142_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln143_3_fu_900_p2" SOURCE="../memAccess.cpp:143" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln143_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln144_3_fu_914_p2" SOURCE="../memAccess.cpp:144" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln144_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln145_3_fu_927_p2" SOURCE="../memAccess.cpp:145" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln145_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln160_fu_957_p2" SOURCE="../memAccess.cpp:160" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln160" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln161_fu_970_p2" SOURCE="../memAccess.cpp:161" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln161" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln162_fu_984_p2" SOURCE="../memAccess.cpp:162" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln162" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln163_fu_997_p2" SOURCE="../memAccess.cpp:163" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln163" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln160_1_fu_1027_p2" SOURCE="../memAccess.cpp:160" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln160_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln161_1_fu_1040_p2" SOURCE="../memAccess.cpp:161" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln161_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln162_1_fu_1054_p2" SOURCE="../memAccess.cpp:162" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln162_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln163_1_fu_1067_p2" SOURCE="../memAccess.cpp:163" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln163_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln160_2_fu_1097_p2" SOURCE="../memAccess.cpp:160" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln160_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln161_2_fu_1110_p2" SOURCE="../memAccess.cpp:161" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln161_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln162_2_fu_1124_p2" SOURCE="../memAccess.cpp:162" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln162_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln163_2_fu_1137_p2" SOURCE="../memAccess.cpp:163" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln163_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln160_3_fu_1167_p2" SOURCE="../memAccess.cpp:160" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln160_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln161_3_fu_1180_p2" SOURCE="../memAccess.cpp:161" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln161_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln162_3_fu_1194_p2" SOURCE="../memAccess.cpp:162" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln162_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln163_3_fu_1207_p2" SOURCE="../memAccess.cpp:163" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln163_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln178_fu_1237_p2" SOURCE="../memAccess.cpp:178" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln178" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln179_fu_1250_p2" SOURCE="../memAccess.cpp:179" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln179" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln180_fu_1264_p2" SOURCE="../memAccess.cpp:180" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln180" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln181_fu_1277_p2" SOURCE="../memAccess.cpp:181" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln181" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln178_1_fu_1307_p2" SOURCE="../memAccess.cpp:178" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln178_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln179_1_fu_1320_p2" SOURCE="../memAccess.cpp:179" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln179_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln180_1_fu_1334_p2" SOURCE="../memAccess.cpp:180" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln180_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln181_1_fu_1347_p2" SOURCE="../memAccess.cpp:181" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln181_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln178_2_fu_1377_p2" SOURCE="../memAccess.cpp:178" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln178_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln179_2_fu_1390_p2" SOURCE="../memAccess.cpp:179" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln179_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln180_2_fu_1404_p2" SOURCE="../memAccess.cpp:180" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln180_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln181_2_fu_1417_p2" SOURCE="../memAccess.cpp:181" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln181_2" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln178_3_fu_1447_p2" SOURCE="../memAccess.cpp:178" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln178_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln179_3_fu_1460_p2" SOURCE="../memAccess.cpp:179" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln179_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln180_3_fu_1474_p2" SOURCE="../memAccess.cpp:180" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln180_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op xor" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="xor" PRAGMA="" RTLNAME="xor_ln181_3_fu_1487_p2" SOURCE="../memAccess.cpp:181" STORAGESUBTYPE="" URAM="0" VARIABLE="xor_ln181_3" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op add" DSP="0" ID="" IMPL="fabric" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="add" PRAGMA="" RTLNAME="add_ln196_fu_1513_p2" SOURCE="../memAccess.cpp:196" STORAGESUBTYPE="" URAM="0" VARIABLE="add_ln196" VISIBLE="true"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op add" DSP="0" ID="" IMPL="fabric" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="add" PRAGMA="" RTLNAME="add_ln196_1_fu_1536_p2" SOURCE="../memAccess.cpp:196" STORAGESUBTYPE="" URAM="0" VARIABLE="add_ln196_1" VISIBLE="true"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op shl" DSP="0" ID="" IMPL="auto_pipe" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="shl" PRAGMA="" RTLNAME="shl_ln196_fu_1644_p2" SOURCE="../memAccess.cpp:196" STORAGESUBTYPE="" URAM="0" VARIABLE="shl_ln196" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op shl" DSP="0" ID="" IMPL="auto_pipe" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="shl" PRAGMA="" RTLNAME="shl_ln196_1_fu_1841_p2" SOURCE="../memAccess.cpp:196" STORAGESUBTYPE="" URAM="0" VARIABLE="shl_ln196_1" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op setne" DSP="0" ID="" IMPL="auto" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="setne" PRAGMA="" RTLNAME="icmp_ln196_fu_1650_p2" SOURCE="../memAccess.cpp:196" STORAGESUBTYPE="" URAM="0" VARIABLE="icmp_ln196" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op select" DSP="0" ID="" IMPL="auto_sel" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="select" PRAGMA="" RTLNAME="select_ln196_fu_1655_p3" SOURCE="../memAccess.cpp:196" STORAGESUBTYPE="" URAM="0" VARIABLE="select_ln196" VISIBLE="false"/>
+                <BindNode BINDTYPE="op" BRAM="0" BUNDLEDNAME="" DISPNAME="bind_op add" DSP="0" ID="" IMPL="fabric" LATENCY="0" LOOP="VITIS_LOOP_104_1" OPTYPE="add" PRAGMA="" RTLNAME="add_ln198_fu_1555_p2" SOURCE="../memAccess.cpp:198" STORAGESUBTYPE="" URAM="0" VARIABLE="add_ln198" VISIBLE="true"/>
+                <BindNode BINDTYPE="adapter" BRAM="15" BUNDLEDNAME="gmem" DISPNAME="bind_adapter " DSP="0" ID="" IMPL="" LATENCY="" LOOP="" OPTYPE="" PRAGMA="" RTLNAME="gmem_m_axi_U" SOURCE="" STORAGESIZE="" STORAGESUBTYPE="m_axi" STORAGEUSAGE="interface" URAM="0" VARIABLE=""/>
+            </BindNodes>
+        </Module>
+    </ModuleInformation>
+    <FIFOInformation/>
+    <UserConfigCommands>
+        <config_interface m_axi_num_read_outstanding="32" m_axi_num_write_outstanding="32"/>
+    </UserConfigCommands>
+    <Args>
+        <Arg ArgName="mem" index="0" direction="in" srcType="TelemetryBundle*" srcSize="512">
+            <hwRefs>
+                <hwRef type="interface" interface="m_axi_gmem" name="" usage="data" direction="in"/>
+                <hwRef type="port" interface="mem" name="mem" usage="address" direction="in"/>
+            </hwRefs>
+        </Arg>
+        <Arg ArgName="start_addr" index="1" direction="in" srcType="long unsigned int" srcSize="64">
+            <hwRefs>
+                <hwRef type="port" interface="start_addr" name="start_addr" usage="data" direction="in"/>
+            </hwRefs>
+        </Arg>
+        <Arg ArgName="cont0_status" index="2" direction="in" srcType="PEStatus*" srcSize="32">
+            <hwRefs>
+                <hwRef type="port" interface="cont0_status_in_0" name="cont0_status_in_0" usage="data" direction="in"/>
+                <hwRef type="port" interface="cont0_status_in_1" name="cont0_status_in_1" usage="data" direction="in"/>
+                <hwRef type="port" interface="cont0_status_in_2" name="cont0_status_in_2" usage="data" direction="in"/>
+                <hwRef type="port" interface="cont0_status_in_3" name="cont0_status_in_3" usage="data" direction="in"/>
+                <hwRef type="port" interface="cont0_status_out_0" name="cont0_status_out_0" usage="data" direction="in"/>
+                <hwRef type="port" interface="cont0_status_out_1" name="cont0_status_out_1" usage="data" direction="in"/>
+                <hwRef type="port" interface="cont0_status_out_2" name="cont0_status_out_2" usage="data" direction="in"/>
+                <hwRef type="port" interface="cont0_status_out_3" name="cont0_status_out_3" usage="data" direction="in"/>
+            </hwRefs>
+        </Arg>
+        <Arg ArgName="memReader_status" index="3" direction="in" srcType="PEStatus*" srcSize="32">
+            <hwRefs>
+                <hwRef type="port" interface="memReader_status_in_0" name="memReader_status_in_0" usage="data" direction="in"/>
+                <hwRef type="port" interface="memReader_status_in_1" name="memReader_status_in_1" usage="data" direction="in"/>
+                <hwRef type="port" interface="memReader_status_in_2" name="memReader_status_in_2" usage="data" direction="in"/>
+                <hwRef type="port" interface="memReader_status_in_3" name="memReader_status_in_3" usage="data" direction="in"/>
+                <hwRef type="port" interface="memReader_status_out_0" name="memReader_status_out_0" usage="data" direction="in"/>
+                <hwRef type="port" interface="memReader_status_out_1" name="memReader_status_out_1" usage="data" direction="in"/>
+                <hwRef type="port" interface="memReader_status_out_2" name="memReader_status_out_2" usage="data" direction="in"/>
+                <hwRef type="port" interface="memReader_status_out_3" name="memReader_status_out_3" usage="data" direction="in"/>
+            </hwRefs>
+        </Arg>
+        <Arg ArgName="reentry0_status" index="4" direction="in" srcType="PEStatus*" srcSize="32">
+            <hwRefs>
+                <hwRef type="port" interface="reentry0_status_in_0" name="reentry0_status_in_0" usage="data" direction="in"/>
+                <hwRef type="port" interface="reentry0_status_in_1" name="reentry0_status_in_1" usage="data" direction="in"/>
+                <hwRef type="port" interface="reentry0_status_in_2" name="reentry0_status_in_2" usage="data" direction="in"/>
+                <hwRef type="port" interface="reentry0_status_in_3" name="reentry0_status_in_3" usage="data" direction="in"/>
+                <hwRef type="port" interface="reentry0_status_out_0" name="reentry0_status_out_0" usage="data" direction="in"/>
+                <hwRef type="port" interface="reentry0_status_out_1" name="reentry0_status_out_1" usage="data" direction="in"/>
+                <hwRef type="port" interface="reentry0_status_out_2" name="reentry0_status_out_2" usage="data" direction="in"/>
+                <hwRef type="port" interface="reentry0_status_out_3" name="reentry0_status_out_3" usage="data" direction="in"/>
+            </hwRefs>
+        </Arg>
+    </Args>
+    <Interfaces>
+        <Interface InterfaceName="ap_clk" type="clock" busTypeName="clock" mode="slave">
+            <busParams>
+                <busParam busParamName="ASSOCIATED_BUSIF">m_axi_gmem</busParam>
+                <busParam busParamName="ASSOCIATED_RESET">ap_rst_n</busParam>
+            </busParams>
+            <portMaps>
+                <portMap portMapName="ap_clk">CLK</portMap>
+            </portMaps>
+            <ports>
+                <port>ap_clk</port>
+            </ports>
+        </Interface>
+        <Interface InterfaceName="ap_rst_n" type="reset" busTypeName="reset" mode="slave">
+            <busParams>
+                <busParam busParamName="POLARITY">ACTIVE_LOW</busParam>
+            </busParams>
+            <portMaps>
+                <portMap portMapName="ap_rst_n">RST</portMap>
+            </portMaps>
+            <ports>
+                <port>ap_rst_n</port>
+            </ports>
+        </Interface>
+        <Interface InterfaceName="m_axi_gmem" type="axi4full" busTypeName="aximm" mode="master" dataWidth="512" addrWidth="64" portPrefix="m_axi_gmem_" paramPrefix="C_M_AXI_GMEM_" preferredUsageValue="MEMORY">
+            <busParams>
+                <busParam busParamName="NUM_READ_OUTSTANDING">32</busParam>
+                <busParam busParamName="NUM_WRITE_OUTSTANDING">32</busParam>
+                <busParam busParamName="MAX_READ_BURST_LENGTH">16</busParam>
+                <busParam busParamName="MAX_WRITE_BURST_LENGTH">16</busParam>
+                <busParam busParamName="MAX_BURST_LENGTH">256</busParam>
+                <busParam busParamName="PROTOCOL">AXI4</busParam>
+                <busParam busParamName="READ_WRITE_MODE">WRITE_ONLY</busParam>
+                <busParam busParamName="HAS_BURST">0</busParam>
+                <busParam busParamName="SUPPORTS_NARROW_BURST">0</busParam>
+            </busParams>
+            <ports>
+                <port>m_axi_gmem_ARADDR</port>
+                <port>m_axi_gmem_ARBURST</port>
+                <port>m_axi_gmem_ARCACHE</port>
+                <port>m_axi_gmem_ARID</port>
+                <port>m_axi_gmem_ARLEN</port>
+                <port>m_axi_gmem_ARLOCK</port>
+                <port>m_axi_gmem_ARPROT</port>
+                <port>m_axi_gmem_ARQOS</port>
+                <port>m_axi_gmem_ARREADY</port>
+                <port>m_axi_gmem_ARREGION</port>
+                <port>m_axi_gmem_ARSIZE</port>
+                <port>m_axi_gmem_ARUSER</port>
+                <port>m_axi_gmem_ARVALID</port>
+                <port>m_axi_gmem_AWADDR</port>
+                <port>m_axi_gmem_AWBURST</port>
+                <port>m_axi_gmem_AWCACHE</port>
+                <port>m_axi_gmem_AWID</port>
+                <port>m_axi_gmem_AWLEN</port>
+                <port>m_axi_gmem_AWLOCK</port>
+                <port>m_axi_gmem_AWPROT</port>
+                <port>m_axi_gmem_AWQOS</port>
+                <port>m_axi_gmem_AWREADY</port>
+                <port>m_axi_gmem_AWREGION</port>
+                <port>m_axi_gmem_AWSIZE</port>
+                <port>m_axi_gmem_AWUSER</port>
+                <port>m_axi_gmem_AWVALID</port>
+                <port>m_axi_gmem_BID</port>
+                <port>m_axi_gmem_BREADY</port>
+                <port>m_axi_gmem_BRESP</port>
+                <port>m_axi_gmem_BUSER</port>
+                <port>m_axi_gmem_BVALID</port>
+                <port>m_axi_gmem_RDATA</port>
+                <port>m_axi_gmem_RID</port>
+                <port>m_axi_gmem_RLAST</port>
+                <port>m_axi_gmem_RREADY</port>
+                <port>m_axi_gmem_RRESP</port>
+                <port>m_axi_gmem_RUSER</port>
+                <port>m_axi_gmem_RVALID</port>
+                <port>m_axi_gmem_WDATA</port>
+                <port>m_axi_gmem_WID</port>
+                <port>m_axi_gmem_WLAST</port>
+                <port>m_axi_gmem_WREADY</port>
+                <port>m_axi_gmem_WSTRB</port>
+                <port>m_axi_gmem_WUSER</port>
+                <port>m_axi_gmem_WVALID</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="m_axi" register_option="0" offset="direct" latency="0" num_read_outstanding="32" num_write_outstanding="32" max_read_burst_length="16" max_write_burst_length="16" max_widen_bitwidth="0" channel_id="0" argName="mem"/>
+                <constraint constraint_type="bitwidth" orig_bitwidth="512" final_bitwidth="512" argName="mem"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="mem" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="64">
+            <portMaps>
+                <portMap portMapName="mem">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>mem</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="mem"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="start_addr" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="64">
+            <portMaps>
+                <portMap portMapName="start_addr">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>start_addr</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="start_addr"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_in_0" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_in_0">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_in_0</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_in_1" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_in_1">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_in_1</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_in_2" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_in_2">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_in_2</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_in_3" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_in_3">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_in_3</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_out_0" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_out_0">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_out_0</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_out_1" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_out_1">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_out_1</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_out_2" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_out_2">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_out_2</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="cont0_status_out_3" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="cont0_status_out_3">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>cont0_status_out_3</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="cont0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_in_0" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_in_0">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_in_0</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_in_1" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_in_1">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_in_1</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_in_2" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_in_2">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_in_2</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_in_3" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_in_3">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_in_3</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_out_0" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_out_0">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_out_0</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_out_1" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_out_1">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_out_1</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_out_2" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_out_2">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_out_2</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="memReader_status_out_3" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="memReader_status_out_3">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>memReader_status_out_3</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="memReader_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_in_0" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_in_0">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_in_0</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_in_1" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_in_1">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_in_1</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_in_2" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_in_2">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_in_2</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_in_3" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_in_3">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_in_3</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_out_0" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_out_0">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_out_0</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_out_1" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_out_1">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_out_1</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_out_2" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_out_2">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_out_2</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+        <Interface InterfaceName="reentry0_status_out_3" type="data" busTypeName="data" protocol="ap_none" mode="slave" dataWidth="2">
+            <portMaps>
+                <portMap portMapName="reentry0_status_out_3">DATA</portMap>
+            </portMaps>
+            <ports>
+                <port>reentry0_status_out_3</port>
+            </ports>
+            <constraints>
+                <constraint constraint_type="pragma interface" mode="ap_none" register_option="0" argName="reentry0_status"/>
+            </constraints>
+        </Interface>
+    </Interfaces>
+    <ReportHWInterface>
+        <section name="HW Interfaces" level="0">
+            <item name="M_AXI">
+                <table>
+                    <keys size="13">Interface, Read/Write, Data Width (SW-&gt;HW), Address Width, Latency, Offset, Register, Max Widen Bitwidth, Max Read Burst Length, Max Write Burst Length, Num Read Outstanding, Num Write Outstanding, Resource Estimate</keys>
+                    <column name="m_axi_gmem">WRITE_ONLY, 512 -&gt; 512, 64, 0, direct, 0, 0, 16, 16, 32, 32, BRAM=15</column>
+                </table>
+            </item>
+            <item name="Other Ports">
+                <table>
+                    <keys size="4">Port, Mode, Direction, Bitwidth</keys>
+                    <column name="cont0_status_in_0">ap_none, in, 2</column>
+                    <column name="cont0_status_in_1">ap_none, in, 2</column>
+                    <column name="cont0_status_in_2">ap_none, in, 2</column>
+                    <column name="cont0_status_in_3">ap_none, in, 2</column>
+                    <column name="cont0_status_out_0">ap_none, in, 2</column>
+                    <column name="cont0_status_out_1">ap_none, in, 2</column>
+                    <column name="cont0_status_out_2">ap_none, in, 2</column>
+                    <column name="cont0_status_out_3">ap_none, in, 2</column>
+                    <column name="mem">ap_none, in, 64</column>
+                    <column name="memReader_status_in_0">ap_none, in, 2</column>
+                    <column name="memReader_status_in_1">ap_none, in, 2</column>
+                    <column name="memReader_status_in_2">ap_none, in, 2</column>
+                    <column name="memReader_status_in_3">ap_none, in, 2</column>
+                    <column name="memReader_status_out_0">ap_none, in, 2</column>
+                    <column name="memReader_status_out_1">ap_none, in, 2</column>
+                    <column name="memReader_status_out_2">ap_none, in, 2</column>
+                    <column name="memReader_status_out_3">ap_none, in, 2</column>
+                    <column name="reentry0_status_in_0">ap_none, in, 2</column>
+                    <column name="reentry0_status_in_1">ap_none, in, 2</column>
+                    <column name="reentry0_status_in_2">ap_none, in, 2</column>
+                    <column name="reentry0_status_in_3">ap_none, in, 2</column>
+                    <column name="reentry0_status_out_0">ap_none, in, 2</column>
+                    <column name="reentry0_status_out_1">ap_none, in, 2</column>
+                    <column name="reentry0_status_out_2">ap_none, in, 2</column>
+                    <column name="reentry0_status_out_3">ap_none, in, 2</column>
+                    <column name="start_addr">ap_none, in, 64</column>
+                </table>
+            </item>
+            <item name="TOP LEVEL CONTROL">
+                <table>
+                    <keys size="3">Interface, Type, Ports</keys>
+                    <column name="ap_clk">clock, ap_clk</column>
+                    <column name="ap_rst_n">reset, ap_rst_n</column>
+                    <column name="ap_ctrl">ap_ctrl_none, </column>
+                </table>
+            </item>
+        </section>
+    </ReportHWInterface>
+    <ReportSWInterface>
+        <section name="SW I/O Information" level="0">
+            <item name="Top Function Arguments">
+                <table>
+                    <keys size="3">Argument, Direction, Datatype</keys>
+                    <column name="mem">in, TelemetryBundle*</column>
+                    <column name="start_addr">in, long unsigned int</column>
+                    <column name="cont0_status">in, PEStatus*</column>
+                    <column name="memReader_status">in, PEStatus*</column>
+                    <column name="reentry0_status">in, PEStatus*</column>
+                </table>
+            </item>
+            <item name="SW-to-HW Mapping">
+                <table>
+                    <keys size="5">Argument, HW Interface, HW Type, HW Usage, HW Info</keys>
+                    <column name="mem">m_axi_gmem, interface, , channel=0</column>
+                    <column name="mem">mem, port, offset, </column>
+                    <column name="start_addr">start_addr, port, , </column>
+                    <column name="cont0_status">cont0_status_in_0, port, , </column>
+                    <column name="cont0_status">cont0_status_in_1, port, , </column>
+                    <column name="cont0_status">cont0_status_in_2, port, , </column>
+                    <column name="cont0_status">cont0_status_in_3, port, , </column>
+                    <column name="cont0_status">cont0_status_out_0, port, , </column>
+                    <column name="cont0_status">cont0_status_out_1, port, , </column>
+                    <column name="cont0_status">cont0_status_out_2, port, , </column>
+                    <column name="cont0_status">cont0_status_out_3, port, , </column>
+                    <column name="memReader_status">memReader_status_in_0, port, , </column>
+                    <column name="memReader_status">memReader_status_in_1, port, , </column>
+                    <column name="memReader_status">memReader_status_in_2, port, , </column>
+                    <column name="memReader_status">memReader_status_in_3, port, , </column>
+                    <column name="memReader_status">memReader_status_out_0, port, , </column>
+                    <column name="memReader_status">memReader_status_out_1, port, , </column>
+                    <column name="memReader_status">memReader_status_out_2, port, , </column>
+                    <column name="memReader_status">memReader_status_out_3, port, , </column>
+                    <column name="reentry0_status">reentry0_status_in_0, port, , </column>
+                    <column name="reentry0_status">reentry0_status_in_1, port, , </column>
+                    <column name="reentry0_status">reentry0_status_in_2, port, , </column>
+                    <column name="reentry0_status">reentry0_status_in_3, port, , </column>
+                    <column name="reentry0_status">reentry0_status_out_0, port, , </column>
+                    <column name="reentry0_status">reentry0_status_out_1, port, , </column>
+                    <column name="reentry0_status">reentry0_status_out_2, port, , </column>
+                    <column name="reentry0_status">reentry0_status_out_3, port, , </column>
+                </table>
+            </item>
+        </section>
+    </ReportSWInterface>
+    <ResolutionUrl key="ZZZ">docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&amp;url=ug1448-hls-guidance&amp;resourceid=ZZZ.html</ResolutionUrl>
+    <ReportBurst>
+        <section name="M_AXI Burst Information" level="0" HEADER_NOTE="Note: All burst requests might be further partitioned into multiple requests during RTL generation based on max_read_burst_length or max_write_burst_length settings.">
+            <item name="All M_AXI Variable Accesses">
+                <table>
+                    <keys size="7">HW Interface, Variable, Access Location, Direction, Burst Status, Resolution, Problem</keys>
+                    <column name="m_axi_gmem">mem, ../memAccess.cpp:196:35, write, Fail, 214-378, Unsupported access data type. Expected integer or floating point type but received %struct.TelemetryBundle = type { [4 x %struct.PackedPEStatus] [4 x %struct.PackedPEStatus] [4 x %struct.PackedPEStatus] %"struct.ap_uint&lt;16&gt;" %"struct.ap_uint&lt;64&gt;" }</column>
+                </table>
+            </item>
+        </section>
+    </ReportBurst>
+    <PragmaReport>
+        <Pragma type="interface" location="../memAccess.cpp:69" status="valid" parentFunction="watcher" variable="" isDirective="0" options="mode = m_axi port = mem offset = direct"/>
+        <Pragma type="interface" location="../memAccess.cpp:70" status="valid" parentFunction="watcher" variable="" isDirective="0" options="mode = ap_none port = start_addr"/>
+        <Pragma type="interface" location="../memAccess.cpp:71" status="valid" parentFunction="watcher" variable="" isDirective="0" options="ap_ctrl_none port = return"/>
+        <Pragma type="array_partition" location="../memAccess.cpp:74" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = cont0_status complete dim = 1"/>
+        <Pragma type="disaggregate" location="../memAccess.cpp:75" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = cont0_status"/>
+        <Pragma type="interface" location="../memAccess.cpp:76" status="valid" parentFunction="watcher" variable="" isDirective="0" options="mode = ap_none port = cont0_status"/>
+        <Pragma type="array_partition" location="../memAccess.cpp:78" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = memReader_status complete dim = 1"/>
+        <Pragma type="disaggregate" location="../memAccess.cpp:79" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = memReader_status"/>
+        <Pragma type="interface" location="../memAccess.cpp:80" status="valid" parentFunction="watcher" variable="" isDirective="0" options="mode = ap_none port = memReader_status"/>
+        <Pragma type="array_partition" location="../memAccess.cpp:82" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = reentry0_status complete dim = 1"/>
+        <Pragma type="disaggregate" location="../memAccess.cpp:83" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = reentry0_status"/>
+        <Pragma type="interface" location="../memAccess.cpp:84" status="valid" parentFunction="watcher" variable="" isDirective="0" options="mode = ap_none port = reentry0_status"/>
+        <Pragma type="pipeline" location="../memAccess.cpp:106" status="valid" parentFunction="watcher" variable="" isDirective="0" options="II = 1"/>
+        <Pragma type="aggregate" location="../memAccess.cpp:114" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = currentStatus compact = bit"/>
+        <Pragma type="aggregate" location="../memAccess.cpp:115" status="valid" parentFunction="watcher" variable="" isDirective="0" options="variable = lastStatus compact = bit"/>
+        <Pragma type="unroll" location="../memAccess.cpp:136" status="valid" parentFunction="watcher" variable="" isDirective="0" options=""/>
+        <Pragma type="unroll" location="../memAccess.cpp:154" status="valid" parentFunction="watcher" variable="" isDirective="0" options=""/>
+        <Pragma type="unroll" location="../memAccess.cpp:172" status="valid" parentFunction="watcher" variable="" isDirective="0" options=""/>
+        <Pragma type="interface" location="../memAccess.cpp:217" status="valid" parentFunction="whileloopmain_reentry0_cont0" variable="" isDirective="0" options="mode = axis port = taskIn"/>
+        <Pragma type="interface" location="../memAccess.cpp:218" status="valid" parentFunction="whileloopmain_reentry0_cont0" variable="" isDirective="0" options="mode = axis port = taskOutGlobal"/>
+        <Pragma type="interface" location="../memAccess.cpp:219" status="valid" parentFunction="whileloopmain_reentry0_cont0" variable="" isDirective="0" options="mode = m_axi port = mem"/>
+        <Pragma type="interface" location="../memAccess.cpp:220" status="valid" parentFunction="whileloopmain_reentry0_cont0" variable="" isDirective="0" options="ap_ctrl_none port = return"/>
+        <Pragma type="pipeline" location="../memAccess.cpp:221" status="valid" parentFunction="whileloopmain_reentry0_cont0" variable="" isDirective="0" options="II = 1 style = flp"/>
+        <Pragma type="dependence" location="../memAccess.cpp:225" status="valid" parentFunction="whileloopmain_reentry0_cont0" variable="" isDirective="0" options="variable = mem inter false"/>
+        <Pragma type="interface" location="../memAccess.cpp:264" status="valid" parentFunction="whileloopmain_exit0" variable="" isDirective="0" options="mode = axis port = taskIn"/>
+        <Pragma type="interface" location="../memAccess.cpp:265" status="valid" parentFunction="whileloopmain_exit0" variable="" isDirective="0" options="mode = axis port = argOut"/>
+        <Pragma type="interface" location="../memAccess.cpp:266" status="valid" parentFunction="whileloopmain_exit0" variable="" isDirective="0" options="ap_ctrl_none port = return"/>
+        <Pragma type="pipeline" location="../memAccess.cpp:267" status="valid" parentFunction="whileloopmain_exit0" variable="" isDirective="0" options="II = 1 style = flp"/>
+        <Pragma type="interface" location="../memAccess.cpp:281" status="valid" parentFunction="memreader" variable="" isDirective="0" options="mode = axis port = taskIn"/>
+        <Pragma type="interface" location="../memAccess.cpp:282" status="valid" parentFunction="memreader" variable="" isDirective="0" options="mode = axis port = argOut"/>
+        <Pragma type="interface" location="../memAccess.cpp:283" status="valid" parentFunction="memreader" variable="" isDirective="0" options="mode = axis port = argDataOut"/>
+        <Pragma type="interface" location="../memAccess.cpp:284" status="valid" parentFunction="memreader" variable="" isDirective="0" options="mode = m_axi port = mem"/>
+        <Pragma type="interface" location="../memAccess.cpp:285" status="valid" parentFunction="memreader" variable="" isDirective="0" options="ap_ctrl_none port = return"/>
+        <Pragma type="pipeline" location="../memAccess.cpp:286" status="valid" parentFunction="memreader" variable="" isDirective="0" options="II = 1 style = flp"/>
+        <Pragma type="interface" location="../memAccess.cpp:304" status="valid" parentFunction="whileloopmain" variable="" isDirective="0" options="mode = axis port = taskIn"/>
+        <Pragma type="interface" location="../memAccess.cpp:305" status="valid" parentFunction="whileloopmain" variable="" isDirective="0" options="mode = axis port = taskOutGlobal"/>
+        <Pragma type="interface" location="../memAccess.cpp:306" status="valid" parentFunction="whileloopmain" variable="" isDirective="0" options="ap_ctrl_none port = return"/>
+        <Pragma type="pipeline" location="../memAccess.cpp:307" status="valid" parentFunction="whileloopmain" variable="" isDirective="0" options="II = 1 style = flp"/>
+        <Pragma type="interface" location="../memAccess.cpp:338" status="valid" parentFunction="whileloopmain_reentry0" variable="" isDirective="0" options="mode = m_axi port = mem"/>
+        <Pragma type="interface" location="../memAccess.cpp:339" status="valid" parentFunction="whileloopmain_reentry0" variable="" isDirective="0" options="mode = axis port = taskIn"/>
+        <Pragma type="interface" location="../memAccess.cpp:340" status="valid" parentFunction="whileloopmain_reentry0" variable="" isDirective="0" options="mode = axis port = taskOutGlobal"/>
+        <Pragma type="interface" location="../memAccess.cpp:341" status="valid" parentFunction="whileloopmain_reentry0" variable="" isDirective="0" options="mode = axis port = closureIn"/>
+        <Pragma type="interface" location="../memAccess.cpp:342" status="valid" parentFunction="whileloopmain_reentry0" variable="" isDirective="0" options="mode = axis port = spawnNext"/>
+        <Pragma type="interface" location="../memAccess.cpp:343" status="valid" parentFunction="whileloopmain_reentry0" variable="" isDirective="0" options="ap_ctrl_none port = return"/>
+        <Pragma type="pipeline" location="../memAccess.cpp:344" status="valid" parentFunction="whileloopmain_reentry0" variable="" isDirective="0" options="II = 2 style = flp"/>
+    </PragmaReport>
+</profile>
+

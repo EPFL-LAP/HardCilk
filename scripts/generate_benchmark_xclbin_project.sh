@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VALID_BENCHMARKS=("BFS" "graphRandomWalk" "pageRank" "triangleCount")
+VALID_BENCHMARKS=("BFS" "WP-BF" "BellmanFord" "ApproxDenseSub" "MaximalIndependentSet" "GraphColoring" "graphRandomWalk" "pageRank" "triangleCount" "triangleCountDecoupled")
 
 usage() {
     echo "Usage: $0 <benchmarkName> [workspaceNumber]"
@@ -43,6 +43,7 @@ XRT_PROJECTS_DIR="$HARDCILK_ROOT/xrt-projects/$BENCHMARK"
 XCLBIN_WORKSPACE_DIR="$HARDCILK_ROOT/xclbin-workspace/${BENCHMARK}${WORKSPACE_SUFFIX}"
 DRIVER_TEMPLATE_INCLUDE_DIR="$HARDCILK_ROOT/architecture-generator/software_template/driver/include"
 DRIVER_TEMPLATE_SRC_DIR="$HARDCILK_ROOT/architecture-generator/software_template/driver/src"
+COMMON_INCLUDE_DIR="$HARDCILK_ROOT/software/common/include"
 
 # --- Check HardCilk output exists ---
 if [[ ! -d "$HARDCILK_OUTPUT_DIR" ]]; then
@@ -85,12 +86,16 @@ if [[ ! -d "$DRIVER_TEMPLATE_SRC_DIR" ]]; then
     echo "Error: driver template source directory not found: $DRIVER_TEMPLATE_SRC_DIR"
     exit 1
 fi
+if [[ ! -d "$COMMON_INCLUDE_DIR" ]]; then
+    echo "Error: common benchmark include directory not found: $COMMON_INCLUDE_DIR"
+    exit 1
+fi
 
 # --- Step 1: Copy xrt-projects/<benchmark> to xclbin-workspace, excluding *-arxiv folders ---
 echo "Creating workspace at $XCLBIN_WORKSPACE_DIR ..."
 mkdir -p "$XCLBIN_WORKSPACE_DIR"
 
-rsync -a --exclude='*-arxiv' "$XRT_PROJECTS_DIR/" "$XCLBIN_WORKSPACE_DIR/"
+rsync -a --no-owner --no-group --exclude='*-arxiv' "$XRT_PROJECTS_DIR/" "$XCLBIN_WORKSPACE_DIR/"
 
 # --- Step 2: Copy only files (not subfolders) from rtl/ into xclbin-workspace/<benchmark>/IP/ ---
 echo "Copying RTL files into $XCLBIN_WORKSPACE_DIR/IP/ ..."
@@ -114,6 +119,16 @@ if [[ -d "$DEST_DRIVER_SRC_DIR" ]]; then
 fi
 
 cp -r "$SOFTWARE_DIR/." "$XCLBIN_WORKSPACE_DIR/src/host/"
+
+echo "Refreshing common benchmark headers from $COMMON_INCLUDE_DIR ..."
+DEST_COMMON_PROJECT_DIR="$XCLBIN_WORKSPACE_DIR/src/host/projects/common"
+DEST_COMMON_INCLUDE_DIR="$DEST_COMMON_PROJECT_DIR/include"
+mkdir -p "$DEST_COMMON_PROJECT_DIR"
+if [[ ! -f "$DEST_COMMON_PROJECT_DIR/CMakeLists.txt" ]]; then
+    touch "$DEST_COMMON_PROJECT_DIR/CMakeLists.txt"
+fi
+mkdir -p "$DEST_COMMON_INCLUDE_DIR"
+cp -a "$COMMON_INCLUDE_DIR/." "$DEST_COMMON_INCLUDE_DIR/"
 
 echo "Refreshing driver headers from $DRIVER_TEMPLATE_INCLUDE_DIR ..."
 mkdir -p "$DEST_DRIVER_INCLUDE_DIR"

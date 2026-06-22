@@ -1,0 +1,1168 @@
+{
+  "Top": "watcher",
+  "RtlTop": "watcher",
+  "RtlPrefix": "",
+  "RtlSubPrefix": "watcher_",
+  "SourceLanguage": "cpp",
+  "HostMachineBits": "64",
+  "FunctionProtocol": "ap_ctrl_none",
+  "ResetStyle": "control",
+  "Target": {
+    "Family": "virtexuplushbm",
+    "Device": "xcu55c",
+    "Package": "-fsvh2892",
+    "Speed": "-2L-e",
+    "Triple": "fpga64-xilinx-none"
+  },
+  "Args": {
+    "mem": {
+      "index": "0",
+      "direction": "in",
+      "srcType": "TelemetryBundle*",
+      "srcSize": "512",
+      "hwRefs": [
+        {
+          "type": "interface",
+          "interface": "m_axi_gmem",
+          "name": "",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "mem",
+          "name": "mem",
+          "usage": "address",
+          "direction": "in"
+        }
+      ]
+    },
+    "start_addr": {
+      "index": "1",
+      "direction": "in",
+      "srcType": "long unsigned int",
+      "srcSize": "64",
+      "hwRefs": [{
+          "type": "port",
+          "interface": "start_addr",
+          "name": "start_addr",
+          "usage": "data",
+          "direction": "in"
+        }]
+    },
+    "cont0_status": {
+      "index": "2",
+      "direction": "in",
+      "srcType": "PEStatus*",
+      "srcSize": "32",
+      "hwRefs": [
+        {
+          "type": "port",
+          "interface": "cont0_status_in_0",
+          "name": "cont0_status_in_0",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "cont0_status_in_1",
+          "name": "cont0_status_in_1",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "cont0_status_in_2",
+          "name": "cont0_status_in_2",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "cont0_status_in_3",
+          "name": "cont0_status_in_3",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "cont0_status_out_0",
+          "name": "cont0_status_out_0",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "cont0_status_out_1",
+          "name": "cont0_status_out_1",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "cont0_status_out_2",
+          "name": "cont0_status_out_2",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "cont0_status_out_3",
+          "name": "cont0_status_out_3",
+          "usage": "data",
+          "direction": "in"
+        }
+      ]
+    },
+    "memReader_status": {
+      "index": "3",
+      "direction": "in",
+      "srcType": "PEStatus*",
+      "srcSize": "32",
+      "hwRefs": [
+        {
+          "type": "port",
+          "interface": "memReader_status_in_0",
+          "name": "memReader_status_in_0",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "memReader_status_in_1",
+          "name": "memReader_status_in_1",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "memReader_status_in_2",
+          "name": "memReader_status_in_2",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "memReader_status_in_3",
+          "name": "memReader_status_in_3",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "memReader_status_out_0",
+          "name": "memReader_status_out_0",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "memReader_status_out_1",
+          "name": "memReader_status_out_1",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "memReader_status_out_2",
+          "name": "memReader_status_out_2",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "memReader_status_out_3",
+          "name": "memReader_status_out_3",
+          "usage": "data",
+          "direction": "in"
+        }
+      ]
+    },
+    "reentry0_status": {
+      "index": "4",
+      "direction": "in",
+      "srcType": "PEStatus*",
+      "srcSize": "32",
+      "hwRefs": [
+        {
+          "type": "port",
+          "interface": "reentry0_status_in_0",
+          "name": "reentry0_status_in_0",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "reentry0_status_in_1",
+          "name": "reentry0_status_in_1",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "reentry0_status_in_2",
+          "name": "reentry0_status_in_2",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "reentry0_status_in_3",
+          "name": "reentry0_status_in_3",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "reentry0_status_out_0",
+          "name": "reentry0_status_out_0",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "reentry0_status_out_1",
+          "name": "reentry0_status_out_1",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "reentry0_status_out_2",
+          "name": "reentry0_status_out_2",
+          "usage": "data",
+          "direction": "in"
+        },
+        {
+          "type": "port",
+          "interface": "reentry0_status_out_3",
+          "name": "reentry0_status_out_3",
+          "usage": "data",
+          "direction": "in"
+        }
+      ]
+    }
+  },
+  "HlsSolution": {
+    "FlowTarget": "vivado",
+    "ConfigTcl": [
+      "config_interface -m_axi_addr64=1",
+      "config_interface -m_axi_num_read_outstanding=32",
+      "config_interface -m_axi_num_write_outstanding=32"
+    ],
+    "ProfileOption": "0",
+    "ProfileType": "none",
+    "KernelName": "watcher"
+  },
+  "ClockInfo": {
+    "ClockName": "ap_clk",
+    "ClockPeriod": "3.333",
+    "Uncertainty": "0.89991",
+    "IsCombinational": "0",
+    "II": "undef",
+    "Latency": "undef"
+  },
+  "Xdc": {"OocClocks": ["create_clock -name ap_clk -period 3.333 [get_ports ap_clk]"]},
+  "Ipx": {
+    "Vendor": "xilinx.com",
+    "Library": "hls",
+    "Name": "watcher",
+    "Version": "1.0",
+    "DisplayName": "Watcher",
+    "Revision": "2114660693",
+    "Description": "An IP generated by Vitis HLS",
+    "Taxonomy": "\/VITIS_HLS_IP",
+    "AutoFamilySupport": "",
+    "ZipFile": "xilinx_com_hls_watcher_1_0.zip"
+  },
+  "Files": {
+    "CSource": [
+      "..\/..\/..\/memAccess.cpp",
+      "..\/..\/..\/memAccess_defs.h"
+    ],
+    "Vhdl": [
+      "impl\/vhdl\/watcher_gmem_m_axi.vhd",
+      "impl\/vhdl\/watcher.vhd"
+    ],
+    "Verilog": [
+      "impl\/verilog\/watcher_gmem_m_axi.v",
+      "impl\/verilog\/watcher.v"
+    ],
+    "IpMisc": ["impl\/misc\/logo.png"],
+    "CsynthXml": "syn\/report\/csynth.xml",
+    "DebugDir": ".debug",
+    "KernelXml": ".autopilot\/db\/kernel.internal.xml",
+    "Xo": "",
+    "XoHlsDir": "",
+    "ProtoInst": [".debug\/watcher.protoinst"]
+  },
+  "SubcoreInfo": {
+    "HasXpmMemory": false,
+    "HasClockedDsp": false,
+    "Ip": []
+  },
+  "Interfaces": {
+    "ap_clk": {
+      "type": "clock",
+      "busTypeName": "clock",
+      "mode": "slave",
+      "busParams": {
+        "ASSOCIATED_BUSIF": "m_axi_gmem",
+        "ASSOCIATED_RESET": "ap_rst_n"
+      },
+      "portMap": {"ap_clk": "CLK"},
+      "ports": ["ap_clk"]
+    },
+    "ap_rst_n": {
+      "type": "reset",
+      "busTypeName": "reset",
+      "mode": "slave",
+      "busParams": {"POLARITY": "ACTIVE_LOW"},
+      "portMap": {"ap_rst_n": "RST"},
+      "ports": ["ap_rst_n"]
+    },
+    "m_axi_gmem": {
+      "type": "axi4full",
+      "busTypeName": "aximm",
+      "mode": "master",
+      "dataWidth": "512",
+      "addrWidth": "64",
+      "portPrefix": "m_axi_gmem_",
+      "paramPrefix": "C_M_AXI_GMEM_",
+      "preferredUsageValue": "MEMORY",
+      "busParams": {
+        "NUM_READ_OUTSTANDING": "32",
+        "NUM_WRITE_OUTSTANDING": "32",
+        "MAX_READ_BURST_LENGTH": "16",
+        "MAX_WRITE_BURST_LENGTH": "16",
+        "MAX_BURST_LENGTH": "256",
+        "PROTOCOL": "AXI4",
+        "READ_WRITE_MODE": "WRITE_ONLY",
+        "HAS_BURST": "0",
+        "SUPPORTS_NARROW_BURST": "0"
+      },
+      "ports": [
+        "m_axi_gmem_ARADDR",
+        "m_axi_gmem_ARBURST",
+        "m_axi_gmem_ARCACHE",
+        "m_axi_gmem_ARID",
+        "m_axi_gmem_ARLEN",
+        "m_axi_gmem_ARLOCK",
+        "m_axi_gmem_ARPROT",
+        "m_axi_gmem_ARQOS",
+        "m_axi_gmem_ARREADY",
+        "m_axi_gmem_ARREGION",
+        "m_axi_gmem_ARSIZE",
+        "m_axi_gmem_ARUSER",
+        "m_axi_gmem_ARVALID",
+        "m_axi_gmem_AWADDR",
+        "m_axi_gmem_AWBURST",
+        "m_axi_gmem_AWCACHE",
+        "m_axi_gmem_AWID",
+        "m_axi_gmem_AWLEN",
+        "m_axi_gmem_AWLOCK",
+        "m_axi_gmem_AWPROT",
+        "m_axi_gmem_AWQOS",
+        "m_axi_gmem_AWREADY",
+        "m_axi_gmem_AWREGION",
+        "m_axi_gmem_AWSIZE",
+        "m_axi_gmem_AWUSER",
+        "m_axi_gmem_AWVALID",
+        "m_axi_gmem_BID",
+        "m_axi_gmem_BREADY",
+        "m_axi_gmem_BRESP",
+        "m_axi_gmem_BUSER",
+        "m_axi_gmem_BVALID",
+        "m_axi_gmem_RDATA",
+        "m_axi_gmem_RID",
+        "m_axi_gmem_RLAST",
+        "m_axi_gmem_RREADY",
+        "m_axi_gmem_RRESP",
+        "m_axi_gmem_RUSER",
+        "m_axi_gmem_RVALID",
+        "m_axi_gmem_WDATA",
+        "m_axi_gmem_WID",
+        "m_axi_gmem_WLAST",
+        "m_axi_gmem_WREADY",
+        "m_axi_gmem_WSTRB",
+        "m_axi_gmem_WUSER",
+        "m_axi_gmem_WVALID"
+      ],
+      "constraints": [
+        {
+          "constraint_type": "pragma interface",
+          "mode": "m_axi",
+          "register_option": "0",
+          "offset": "direct",
+          "latency": "0",
+          "num_read_outstanding": "32",
+          "num_write_outstanding": "32",
+          "max_read_burst_length": "16",
+          "max_write_burst_length": "16",
+          "max_widen_bitwidth": "0",
+          "channel_id": "0",
+          "argName": "mem"
+        },
+        {
+          "constraint_type": "bitwidth",
+          "orig_bitwidth": "512",
+          "final_bitwidth": "512",
+          "argName": "mem"
+        }
+      ]
+    },
+    "mem": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "64",
+      "portMap": {"mem": "DATA"},
+      "ports": ["mem"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "mem"
+        }]
+    },
+    "start_addr": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "64",
+      "portMap": {"start_addr": "DATA"},
+      "ports": ["start_addr"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "start_addr"
+        }]
+    },
+    "cont0_status_in_0": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_in_0": "DATA"},
+      "ports": ["cont0_status_in_0"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "cont0_status_in_1": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_in_1": "DATA"},
+      "ports": ["cont0_status_in_1"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "cont0_status_in_2": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_in_2": "DATA"},
+      "ports": ["cont0_status_in_2"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "cont0_status_in_3": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_in_3": "DATA"},
+      "ports": ["cont0_status_in_3"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "cont0_status_out_0": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_out_0": "DATA"},
+      "ports": ["cont0_status_out_0"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "cont0_status_out_1": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_out_1": "DATA"},
+      "ports": ["cont0_status_out_1"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "cont0_status_out_2": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_out_2": "DATA"},
+      "ports": ["cont0_status_out_2"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "cont0_status_out_3": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"cont0_status_out_3": "DATA"},
+      "ports": ["cont0_status_out_3"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "cont0_status"
+        }]
+    },
+    "memReader_status_in_0": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_in_0": "DATA"},
+      "ports": ["memReader_status_in_0"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "memReader_status_in_1": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_in_1": "DATA"},
+      "ports": ["memReader_status_in_1"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "memReader_status_in_2": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_in_2": "DATA"},
+      "ports": ["memReader_status_in_2"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "memReader_status_in_3": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_in_3": "DATA"},
+      "ports": ["memReader_status_in_3"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "memReader_status_out_0": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_out_0": "DATA"},
+      "ports": ["memReader_status_out_0"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "memReader_status_out_1": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_out_1": "DATA"},
+      "ports": ["memReader_status_out_1"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "memReader_status_out_2": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_out_2": "DATA"},
+      "ports": ["memReader_status_out_2"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "memReader_status_out_3": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"memReader_status_out_3": "DATA"},
+      "ports": ["memReader_status_out_3"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "memReader_status"
+        }]
+    },
+    "reentry0_status_in_0": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_in_0": "DATA"},
+      "ports": ["reentry0_status_in_0"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    },
+    "reentry0_status_in_1": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_in_1": "DATA"},
+      "ports": ["reentry0_status_in_1"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    },
+    "reentry0_status_in_2": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_in_2": "DATA"},
+      "ports": ["reentry0_status_in_2"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    },
+    "reentry0_status_in_3": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_in_3": "DATA"},
+      "ports": ["reentry0_status_in_3"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    },
+    "reentry0_status_out_0": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_out_0": "DATA"},
+      "ports": ["reentry0_status_out_0"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    },
+    "reentry0_status_out_1": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_out_1": "DATA"},
+      "ports": ["reentry0_status_out_1"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    },
+    "reentry0_status_out_2": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_out_2": "DATA"},
+      "ports": ["reentry0_status_out_2"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    },
+    "reentry0_status_out_3": {
+      "type": "data",
+      "busTypeName": "data",
+      "protocol": "ap_none",
+      "mode": "slave",
+      "dataWidth": "2",
+      "portMap": {"reentry0_status_out_3": "DATA"},
+      "ports": ["reentry0_status_out_3"],
+      "constraints": [{
+          "constraint_type": "pragma interface",
+          "mode": "ap_none",
+          "register_option": "0",
+          "argName": "reentry0_status"
+        }]
+    }
+  },
+  "RtlPorts": {
+    "ap_clk": {
+      "dir": "in",
+      "width": "1"
+    },
+    "ap_rst_n": {
+      "dir": "in",
+      "width": "1"
+    },
+    "m_axi_gmem_AWVALID": {
+      "dir": "out",
+      "width": "1"
+    },
+    "m_axi_gmem_AWREADY": {
+      "dir": "in",
+      "width": "1"
+    },
+    "m_axi_gmem_AWADDR": {
+      "dir": "out",
+      "width": "64"
+    },
+    "m_axi_gmem_AWID": {
+      "dir": "out",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_AWLEN": {
+      "dir": "out",
+      "width": "8"
+    },
+    "m_axi_gmem_AWSIZE": {
+      "dir": "out",
+      "width": "3"
+    },
+    "m_axi_gmem_AWBURST": {
+      "dir": "out",
+      "width": "2"
+    },
+    "m_axi_gmem_AWLOCK": {
+      "dir": "out",
+      "width": "2"
+    },
+    "m_axi_gmem_AWCACHE": {
+      "dir": "out",
+      "width": "4"
+    },
+    "m_axi_gmem_AWPROT": {
+      "dir": "out",
+      "width": "3"
+    },
+    "m_axi_gmem_AWQOS": {
+      "dir": "out",
+      "width": "4"
+    },
+    "m_axi_gmem_AWREGION": {
+      "dir": "out",
+      "width": "4"
+    },
+    "m_axi_gmem_AWUSER": {
+      "dir": "out",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_WVALID": {
+      "dir": "out",
+      "width": "1"
+    },
+    "m_axi_gmem_WREADY": {
+      "dir": "in",
+      "width": "1"
+    },
+    "m_axi_gmem_WDATA": {
+      "dir": "out",
+      "width": "512"
+    },
+    "m_axi_gmem_WSTRB": {
+      "dir": "out",
+      "width": "64"
+    },
+    "m_axi_gmem_WLAST": {
+      "dir": "out",
+      "width": "1"
+    },
+    "m_axi_gmem_WID": {
+      "dir": "out",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_WUSER": {
+      "dir": "out",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_ARVALID": {
+      "dir": "out",
+      "width": "1"
+    },
+    "m_axi_gmem_ARREADY": {
+      "dir": "in",
+      "width": "1"
+    },
+    "m_axi_gmem_ARADDR": {
+      "dir": "out",
+      "width": "64"
+    },
+    "m_axi_gmem_ARID": {
+      "dir": "out",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_ARLEN": {
+      "dir": "out",
+      "width": "8"
+    },
+    "m_axi_gmem_ARSIZE": {
+      "dir": "out",
+      "width": "3"
+    },
+    "m_axi_gmem_ARBURST": {
+      "dir": "out",
+      "width": "2"
+    },
+    "m_axi_gmem_ARLOCK": {
+      "dir": "out",
+      "width": "2"
+    },
+    "m_axi_gmem_ARCACHE": {
+      "dir": "out",
+      "width": "4"
+    },
+    "m_axi_gmem_ARPROT": {
+      "dir": "out",
+      "width": "3"
+    },
+    "m_axi_gmem_ARQOS": {
+      "dir": "out",
+      "width": "4"
+    },
+    "m_axi_gmem_ARREGION": {
+      "dir": "out",
+      "width": "4"
+    },
+    "m_axi_gmem_ARUSER": {
+      "dir": "out",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_RVALID": {
+      "dir": "in",
+      "width": "1"
+    },
+    "m_axi_gmem_RREADY": {
+      "dir": "out",
+      "width": "1"
+    },
+    "m_axi_gmem_RDATA": {
+      "dir": "in",
+      "width": "512"
+    },
+    "m_axi_gmem_RLAST": {
+      "dir": "in",
+      "width": "1"
+    },
+    "m_axi_gmem_RID": {
+      "dir": "in",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_RUSER": {
+      "dir": "in",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_RRESP": {
+      "dir": "in",
+      "width": "2"
+    },
+    "m_axi_gmem_BVALID": {
+      "dir": "in",
+      "width": "1"
+    },
+    "m_axi_gmem_BREADY": {
+      "dir": "out",
+      "width": "1"
+    },
+    "m_axi_gmem_BRESP": {
+      "dir": "in",
+      "width": "2"
+    },
+    "m_axi_gmem_BID": {
+      "dir": "in",
+      "width": "1",
+      "isVector": "true"
+    },
+    "m_axi_gmem_BUSER": {
+      "dir": "in",
+      "width": "1",
+      "isVector": "true"
+    },
+    "mem": {
+      "dir": "in",
+      "width": "64"
+    },
+    "start_addr": {
+      "dir": "in",
+      "width": "64"
+    },
+    "cont0_status_in_0": {
+      "dir": "in",
+      "width": "2"
+    },
+    "cont0_status_in_1": {
+      "dir": "in",
+      "width": "2"
+    },
+    "cont0_status_in_2": {
+      "dir": "in",
+      "width": "2"
+    },
+    "cont0_status_in_3": {
+      "dir": "in",
+      "width": "2"
+    },
+    "cont0_status_out_0": {
+      "dir": "in",
+      "width": "2"
+    },
+    "cont0_status_out_1": {
+      "dir": "in",
+      "width": "2"
+    },
+    "cont0_status_out_2": {
+      "dir": "in",
+      "width": "2"
+    },
+    "cont0_status_out_3": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_in_0": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_in_1": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_in_2": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_in_3": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_out_0": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_out_1": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_out_2": {
+      "dir": "in",
+      "width": "2"
+    },
+    "memReader_status_out_3": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_in_0": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_in_1": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_in_2": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_in_3": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_out_0": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_out_1": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_out_2": {
+      "dir": "in",
+      "width": "2"
+    },
+    "reentry0_status_out_3": {
+      "dir": "in",
+      "width": "2"
+    }
+  },
+  "ModuleInfo": {
+    "Hierarchy": {
+      "ModuleName": "watcher",
+      "BindInstances": "add_ln109_fu_1629_p2 xor_ln142_fu_677_p2 xor_ln143_fu_690_p2 xor_ln144_fu_704_p2 xor_ln145_fu_717_p2 xor_ln142_1_fu_747_p2 xor_ln143_1_fu_760_p2 xor_ln144_1_fu_774_p2 xor_ln145_1_fu_787_p2 xor_ln142_2_fu_817_p2 xor_ln143_2_fu_830_p2 xor_ln144_2_fu_844_p2 xor_ln145_2_fu_857_p2 xor_ln142_3_fu_887_p2 xor_ln143_3_fu_900_p2 xor_ln144_3_fu_914_p2 xor_ln145_3_fu_927_p2 xor_ln160_fu_957_p2 xor_ln161_fu_970_p2 xor_ln162_fu_984_p2 xor_ln163_fu_997_p2 xor_ln160_1_fu_1027_p2 xor_ln161_1_fu_1040_p2 xor_ln162_1_fu_1054_p2 xor_ln163_1_fu_1067_p2 xor_ln160_2_fu_1097_p2 xor_ln161_2_fu_1110_p2 xor_ln162_2_fu_1124_p2 xor_ln163_2_fu_1137_p2 xor_ln160_3_fu_1167_p2 xor_ln161_3_fu_1180_p2 xor_ln162_3_fu_1194_p2 xor_ln163_3_fu_1207_p2 xor_ln178_fu_1237_p2 xor_ln179_fu_1250_p2 xor_ln180_fu_1264_p2 xor_ln181_fu_1277_p2 xor_ln178_1_fu_1307_p2 xor_ln179_1_fu_1320_p2 xor_ln180_1_fu_1334_p2 xor_ln181_1_fu_1347_p2 xor_ln178_2_fu_1377_p2 xor_ln179_2_fu_1390_p2 xor_ln180_2_fu_1404_p2 xor_ln181_2_fu_1417_p2 xor_ln178_3_fu_1447_p2 xor_ln179_3_fu_1460_p2 xor_ln180_3_fu_1474_p2 xor_ln181_3_fu_1487_p2 add_ln196_fu_1513_p2 add_ln196_1_fu_1536_p2 shl_ln196_fu_1644_p2 shl_ln196_1_fu_1841_p2 icmp_ln196_fu_1650_p2 select_ln196_fu_1655_p3 add_ln198_fu_1555_p2 gmem_m_axi_U"
+    },
+    "Info": {"watcher": {
+        "FunctionProtocol": "ap_ctrl_none",
+        "isTaskLevelControl": "0",
+        "isPipelined": "0",
+        "isCombinational": "0",
+        "isOneStateSeq": "0"
+      }},
+    "Metrics": {"watcher": {
+        "Latency": {
+          "LatencyBest": "",
+          "LatencyAvg": "",
+          "LatencyWorst": "",
+          "PipelineII": "",
+          "PipelineDepth": "",
+          "PipelineType": "no"
+        },
+        "Timing": {
+          "Target": "3.33",
+          "Uncertainty": "0.90",
+          "Estimate": "2.433"
+        },
+        "Loops": [{
+            "Name": "VITIS_LOOP_104_1",
+            "TripCount": "inf",
+            "Latency": "",
+            "PipelineII": "2",
+            "PipelineDepth": "12"
+          }],
+        "Area": {
+          "BRAM_18K": "15",
+          "AVAIL_BRAM": "4032",
+          "UTIL_BRAM": "~0",
+          "FF": "4501",
+          "AVAIL_FF": "2607360",
+          "UTIL_FF": "~0",
+          "LUT": "5658",
+          "AVAIL_LUT": "1303680",
+          "UTIL_LUT": "~0",
+          "URAM": "0",
+          "AVAIL_URAM": "960",
+          "UTIL_URAM": "0",
+          "DSP": "0",
+          "AVAIL_DSP": "9024",
+          "UTIL_DSP": "0"
+        }
+      }}
+  },
+  "GenerateBdFiles": "0",
+  "GenData": {
+    "DataVersion": "0.2",
+    "Time": "2026-06-19 19:53:12 CEST",
+    "ToolName": "vitis_hls",
+    "ToolVersion": "2024.1"
+  }
+}

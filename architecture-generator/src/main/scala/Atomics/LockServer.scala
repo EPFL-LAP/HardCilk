@@ -16,13 +16,19 @@ import chext.amba.axi4.full.ConnectOp._
 //   bits 131:128 = opcode
 //   bit  132     = blocking lock request
 //   bits 134:133 = atomic mode (00 preserves the old 64-bit behavior)
-//   bit  135     = reserved flag
+//   bit  135     = float-compare flag: when set, the conditional SET_IF_* ops
+//                  order operand vs memory as IEEE-754 floats instead of ints
 //   bits 143:136 = sender metadata, echoed back in the response so a PE with
 //                  several requests in flight can correlate completions
 // Response packet skeleton:
-//   bit  0       = current success status
-//   bits 127:64  = previous memory value (HBM-backed atomic ops only)
-//   bits 143:136 = metadata echoed from the request
+//   bits  7:0     = success status:
+//                     bit 0 = request succeeded
+//                     bit 1 = for conditional AMU ops (SetIfGreater/SetIfLess),
+//                             whether the store actually happened; for every
+//                             other op it just mirrors bit 0 on success
+//   bits 71:8     = requested lock addr
+//   bits 135:72   = previous memory value (HBM-backed atomic ops only)
+//   bits 143:136  = metadata echoed from the request
 //
 // Requests from one PE may complete out of issue order (a retried request
 // finishes after a younger one that did not retry). PEs that need ordering
@@ -94,8 +100,16 @@ class RequestType(n: Int, addrW: Int = 64) extends Bundle {
   val requestingPE = UInt(log2Ceil(n).W)
   val isBlocking = Bool()
   val atomicMode = AtomicMode()
+  // When set, the conditional SET_IF_* ops compare operand vs memory as IEEE-754
+  // floats instead of integers (so negative values order correctly). Ignored by
+  // every non-conditional op.
+  val floatCompare = Bool()
   // Sender-defined correlation id, echoed back in the response.
   val meta = UInt(8.W)
+  // Set by the AMU on its return: whether the read-modify-write actually
+  // stored. Only meaningful on the AMU's UnlockAndRespond return path; ignored
+  // for ordinary requests. Drives response status bit 1.
+  val writeOccurred = Bool()
 }
 
 class WriteIndexEntry(tagStoreSize: Int) extends Bundle {
@@ -247,7 +261,10 @@ class LockServer(
     enq.bits.requestingPE := i.U
     enq.bits.isValid := true.B
     enq.bits.atomicMode := AtomicMode.decode(req.bits.tdata(134, 133))
+    enq.bits.floatCompare := req.bits.tdata(135, 135)
     enq.bits.meta := req.bits.tdata(143, 136)
+    // Only ever set by the AMU on its return path; default for fresh requests.
+    enq.bits.writeOccurred := false.B
   }
 
   val arbiter = Module(
@@ -307,6 +324,25 @@ class LockServer(
   // In the next cycle, we a) do a very large fanout and compare and
   // b) we also compare against the current writers
 
+  // Bit-exact wide equality mapped to a LUT reduction tree instead of a CARRY8
+  // chain. Vivado infers a carry chain for a 64-bit `===`; carry chains are
+  // column-locked and vertical, so the placer cannot spread them -- they are the
+  // residual routing-congestion hotspot in this tag-match CAM (tagStoreSize * p
+  // = many comparators packed into one pocket). Comparing in 6-bit chunks
+  // (one LUT6 each) and AND-reducing keeps the result identical to `a === b`
+  // while letting every comparator place freely. Used only for the high-
+  // multiplicity store compare below; the small p*p compares stay as `===`.
+  // The reductions are grouped in sixes so each level packs into one LUT6 and
+  // the tree stays shallow (~3 LUT levels for a 64b tag); a flat reduce would
+  // build a deep linear chain, and `.andR`/`===` would re-infer a carry chain.
+  def tagEqLut(a: UInt, b: UInt): Bool = {
+    def andTree(bits: Seq[Bool]): Bool =
+      if (bits.length <= 6) bits.reduce(_ && _)
+      else andTree(bits.grouped(6).map(_.reduce(_ && _)).toSeq)
+    val chunkEq = (a ^ b).asBools.grouped(6).map(g => !VecInit(g).asUInt.orR).toSeq
+    andTree(chunkEq)
+  }
+
   val storageComparison = Seq.fill(tagStoreSize)(Seq.fill(p)(Reg(Bool())))
   // unlockMatch(k)(i): cycle-1 slot k is an unlock that matches tagStore entry i.
   // At most one i matches per k since tags are unique in the store.
@@ -314,7 +350,7 @@ class LockServer(
   for (i <- 0 until tagStoreSize) {
     for (k <- 0 until p) {
       val compared =
-        (selected_requests(k).tag === tagStore(i)) && tagStoreValid(i)
+        tagEqLut(selected_requests(k).tag, tagStore(i)) && tagStoreValid(i)
       storageComparison(i)(k) := compared
       unlockMatch(k)(i) := compared && selected_requests(
         k
@@ -539,13 +575,27 @@ class LockServer(
       op === Operation.UnlockNoResponse
     laneRespond(i) := isReal && !try_again && !forwardSuccess &&
       op =/= Operation.UnlockNoResponse
-    // Response layout: bit 0 = success, bits 127:64 = previous memory value
-    // (AMU-backed ops only), bits 143:136 = echoed request metadata.
+    // Status bit 1: for an AMU return (UnlockAndRespond), whether the
+    // conditional read-modify-write actually stored, as reported by the AMU.
+    // For every other op the store-happened notion is meaningless, so it just
+    // mirrors success (1 when the op succeeded).
+    val writeOccurred =
+      Mux(op === Operation.UnlockAndRespond, req3.writeOccurred, success)
+    // Response layout:
+    //   bits  7:0     = success status (bit 0 = success, bit 1 = write occurred)
+    //   bits 71:8     = requested lock addr
+    //   bits 135:72   = previous memory value (HBM-backed atomic ops only)
+    //   bits 143:136  = metadata echoed from the request
     laneRespData(i) := Cat(
       req3.meta,
-      0.U(8.W),
       Mux(op === Operation.UnlockAndRespond, req3.data, 0.U(64.W)),
-      0.U(63.W),
+      // Zero-extend the addrW-bit tag to a fixed 64-bit field so the response
+      // layout (and RespWidth) is independent of addrW: consumers decode the
+      // tag at bits 71:8 and the previous value at 135:72 regardless of the
+      // configured address width. Without this, addrW < 64 shifts every field.
+      req3.tag.pad(64),
+      0.U(6.W),
+      writeOccurred,
       success
     )
   }

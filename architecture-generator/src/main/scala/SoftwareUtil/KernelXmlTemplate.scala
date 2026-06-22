@@ -12,32 +12,37 @@ import java.nio.file.{Files, Paths}
   * already computed inside the generator, so we emit them instead and keep them
   * in lockstep with the RTL:
   *
-  *  - the `m_axi_*` master list comes straight from `numHbmPortExports` (the
-  *    total count of top-level HBM masters, which *includes* the LockServer's
-  *    dedicated port appended last by `HardCilk.connectLockServer`);
-  *  - the `s_axil_mgmt_hardcilk` register block uses the per-server management
-  *    base addresses `(idx << 6) + base` already assigned in the
-  *    `FullSysGenDescriptor` constructor (so they match `FullSysGenDescriptor.h`
-  *    and the host driver exactly);
-  *  - the mFPGA on/off state is read off the descriptor — with the flags off
-  *    (single-FPGA BFS) no `m_axis_mFPGA`/`s_axis_mFPGA` ports and no CMAC stream
-  *    connects are emitted.
+  *   - the `m_axi_*` master list comes straight from `numHbmPortExports` (the
+  *     total count of top-level HBM masters, which *includes* the LockServer's
+  *     dedicated port appended last by `HardCilk.connectLockServer`);
+  *   - the `s_axil_mgmt_hardcilk` register block uses the per-server management
+  *     base addresses `(idx << 6) + base` already assigned in the
+  *     `FullSysGenDescriptor` constructor (so they match
+  *     `FullSysGenDescriptor.h` and the host driver exactly);
+  *   - the mFPGA on/off state is read off the descriptor — with the flags off
+  *     (single-FPGA BFS) no `m_axis_mFPGA`/`s_axis_mFPGA` ports and no CMAC
+  *     stream connects are emitted.
   *
-  * The emitter is benchmark-agnostic: the only lock-specific aspect is "one extra
-  * `m_axi`", which it gets for free from `numHbmPortExports`. The `toLock`/
-  * `fromLock` lanes never cross the kernel boundary, so nothing is emitted for
-  * them.
+  * The emitter is benchmark-agnostic: the only lock-specific aspect is "one
+  * extra `m_axi`", which it gets for free from `numHbmPortExports`. The
+  * `toLock`/ `fromLock` lanes never cross the kernel boundary, so nothing is
+  * emitted for them.
   */
 object KernelXmlTemplate {
 
   /** Write `user_0.xml` and `conn_u55c.cfg` into `outputDir`.
     *
-    * @param descriptor         the parsed system descriptor (post-`validate()`,
-    *                           so the per-server base addresses are assigned)
-    * @param numHbmPortExports  total top-level `m_axi_*` masters, lock port last
-    * @param kernelName         Vitis kernel name, e.g. "BFS_0"
-    * @param vlnvName           VLNV leaf, e.g. "BFS" -> epfl.ch:hardcilk:BFS:1.0
-    * @param outputDir          directory to write both files into
+    * @param descriptor
+    *   the parsed system descriptor (post-`validate()`, so the per-server base
+    *   addresses are assigned)
+    * @param numHbmPortExports
+    *   total top-level `m_axi_*` masters, lock port last
+    * @param kernelName
+    *   Vitis kernel name, e.g. "BFS_0"
+    * @param vlnvName
+    *   VLNV leaf, e.g. "BFS" -> epfl.ch:hardcilk:BFS:1.0
+    * @param outputDir
+    *   directory to write both files into
     */
   def generate(
       descriptor: FullSysGenDescriptor,
@@ -48,10 +53,23 @@ object KernelXmlTemplate {
   ): Unit = {
     Files.createDirectories(Paths.get(outputDir))
 
-    val xml = renderKernelXml(descriptor, numHbmPortExports, kernelName, vlnvName)
+    // When a watcher is present it owns the last (topmost) master and is mapped to
+    // the exclusive top HBM channels HBM[16:31]; every other master is confined to
+    // HBM[0:15] and its addressable range is the lower 8 GB.
+    val hasWatcher = descriptor.watcherConfig.isDefined
+
+    val xml =
+      renderKernelXml(
+        descriptor,
+        numHbmPortExports,
+        kernelName,
+        vlnvName,
+        hasWatcher
+      )
     write(s"$outputDir/user_0.xml", xml)
 
-    val cfg = renderConnCfg(descriptor, numHbmPortExports, kernelName)
+    val cfg =
+      renderConnCfg(descriptor, numHbmPortExports, kernelName, hasWatcher)
     write(s"$outputDir/conn_u55c.cfg", cfg)
   }
 
@@ -76,8 +94,9 @@ object KernelXmlTemplate {
   /** Every assigned management-server base address, in `(idx << 6) + base`
     * order. These mirror `FullSysGenDescriptor.h` exactly; the host driver
     * writes raw registers at these offsets, so the args below are packaging
-    * bookkeeping only — but we still place them at the true offsets so the XML is
-    * self-consistent with the header. */
+    * bookkeeping only — but we still place them at the true offsets so the XML
+    * is self-consistent with the header.
+    */
   private def configBaseAddresses(descriptor: FullSysGenDescriptor): Seq[Int] =
     descriptor.taskDescriptors.flatMap { t =>
       t.mgmtBaseAddresses.schedulerServersBaseAddresses ++
@@ -91,27 +110,37 @@ object KernelXmlTemplate {
       descriptor: FullSysGenDescriptor,
       numMasters: Int,
       kernelName: String,
-      vlnvName: String
+      vlnvName: String,
+      hasWatcher: Boolean
   ): String = {
 
     val mfpga = descriptor.mFPGASynth || descriptor.mFPGASimulation
 
+    // With exclusive HBM channels every master sees only an 8 GB window
+    // (HBM[0:15] for compute, HBM[16:31] for the watcher); otherwise the full
+    // 16 GB range as before.
+    val masterRange = if (hasWatcher) "0x1FFFFFFFF" else "0x3FFFFFFFF"
+
     // --- ports ---
     val masterPorts = (0 until numMasters).map { i =>
-      s"""      <port name="${portName(i)}" mode="master" range="0x3FFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>"""
+      s"""      <port name="${portName(
+          i
+        )}" mode="master" range="${masterRange}" dataWidth="256" portType="addressable" base="0x0"/>"""
     }
 
     // Size the management slave to cover both the per-server register blocks and
     // the mem_* pointer args region (placed past the last server block, >= 0x200
     // to match the existing hand-written XMLs).
     val configAddrs = configBaseAddresses(descriptor)
-    val maxConfig   = if (configAddrs.nonEmpty) configAddrs.max else 0
+    val maxConfig = if (configAddrs.nonEmpty) configAddrs.max else 0
     val memArgsBase = math.max(0x200L, (((maxConfig.toLong) >> 6) + 1) << 6)
-    val topOffset   = memArgsBase + numMasters.toLong * 8
-    val slaveRange  = math.max(0x1000L, nextPow2(topOffset))
+    val topOffset = memArgsBase + numMasters.toLong * 8
+    val slaveRange = math.max(0x1000L, nextPow2(topOffset))
 
     val mgmtPort =
-      s"""      <port name="s_axil_mgmt_hardcilk" mode="slave" range="${hex(slaveRange)}" dataWidth="32" portType="addressable" base="0x0"/>"""
+      s"""      <port name="s_axil_mgmt_hardcilk" mode="slave" range="${hex(
+          slaveRange
+        )}" dataWidth="32" portType="addressable" base="0x0"/>"""
 
     val mfpgaPorts =
       if (mfpga)
@@ -129,7 +158,9 @@ object KernelXmlTemplate {
     var id = 0
     val configArgs = configAddrs.map { addr =>
       val a =
-        s"""      <arg name="cfg_${id}" addressQualifier="0" id="${id}" port="s_axil_mgmt_hardcilk" size="0x8" offset="${hex(addr.toLong)}" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>"""
+        s"""      <arg name="cfg_${id}" addressQualifier="0" id="${id}" port="s_axil_mgmt_hardcilk" size="0x8" offset="${hex(
+            addr.toLong
+          )}" hostOffset="0x0" hostSize="0x8" type="ap_uint&lt;64>"/>"""
       id += 1
       a
     }
@@ -138,7 +169,11 @@ object KernelXmlTemplate {
     val memArgs = (0 until numMasters).map { i =>
       val off = memArgsBase + i.toLong * 8
       val a =
-        s"""      <arg name="mem_${i}" addressQualifier="1" id="${id}" port="${portName(i)}" size="0x8" offset="${hex(off)}" hostOffset="0x0" hostSize="0x8" type="void*"/>"""
+        s"""      <arg name="mem_${i}" addressQualifier="1" id="${id}" port="${portName(
+            i
+          )}" size="0x8" offset="${hex(
+            off
+          )}" hostOffset="0x0" hostSize="0x8" type="void*"/>"""
       id += 1
       a
     }
@@ -175,25 +210,42 @@ ${argsBlock}
   private def renderConnCfg(
       descriptor: FullSysGenDescriptor,
       numMasters: Int,
-      kernelName: String
+      kernelName: String,
+      hasWatcher: Boolean
   ): String = {
 
     val freqHz = descriptor.targetFrequency.toLong * 1000000L
-    require(numMasters >= 1, s"expected at least one AXI master, got $numMasters")
+    require(
+      numMasters >= 1,
+      s"expected at least one AXI master, got $numMasters"
+    )
 
-    // Every master (PE/server masters AND, when present, the LockServer's
-    // dedicated last m_axi master) is mapped to the full U55C HBM range.
-    // The suffix after the range pins the HBM switch-network S_AXI index. Keep
-    // the lock server on S_AXI00 for the shortest path to HBM0 while preserving
-    // access to all pseudo-channels; assign the other masters unique nonzero
-    // switch indices so the linker cannot reuse index 0.
+    // The `.N` suffix is the (standard Vivado) HBM pseudo-channel the master binds
+    // to within its mapped range; it need not be unique across masters.
+    //
+    // Default (no watcher): every master maps to the full U55C HBM range. Keep the
+    // last master on PC0 (shortest path to HBM0) and give the others nonzero PCs.
     val lockPortIndex = numMasters - 1
-    def switchIndex(i: Int): Int =
+    def fullRangeSwitchIndex(i: Int): Int =
       if (i == lockPortIndex) 0 else i + 1
 
-    val spLines = (0 until numMasters).map { i =>
-      s"sp=${kernelName}.${portName(i)}:HBM[0:31].${switchIndex(i)}"
-    }.mkString("\n")
+    // With a watcher: the topmost master (index numMasters-1) is the watcher and
+    // gets the exclusive top half HBM[16:31]; every compute/server master is
+    // confined to HBM[0:15] so the watcher's traffic never crosses theirs. Each
+    // port's pseudo-channel stays inside its mapped range (compute spread across
+    // PC 0..15, watcher pinned to PC 16).
+    val watcherPortIndex = numMasters - 1
+    def spTag(i: Int): String =
+      if (hasWatcher) {
+        if (i == watcherPortIndex) "HBM[16:31].31"
+        else s"HBM[0:15].${i % 31}"
+      } else s"HBM[0:31].${fullRangeSwitchIndex(i)}"
+
+    val spLines = (0 until numMasters)
+      .map { i =>
+        s"sp=${kernelName}.${portName(i)}:${spTag(i)}"
+      }
+      .mkString("\n")
 
     s"""[connectivity]
 nk=${kernelName}:1:${kernelName}

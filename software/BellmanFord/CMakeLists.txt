@@ -1,0 +1,21 @@
+if(HC_ENABLE_XRT_TARGETS)
+    add_executable(BellmanFord_xrt
+        "src/xrt_main.cpp"
+    )
+    target_link_libraries(BellmanFord_xrt PUBLIC hardcilk::xrt_driver uuid)
+    target_include_directories(BellmanFord_xrt
+        PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../common/include
+        /beta/bradley/gbbs
+        /beta/bradley/gbbs/bazel-gbbs/external/+git_repository+parlaylib
+    )
+    target_compile_definitions(BellmanFord_xrt
+        PUBLIC
+        HOMEGROWN
+        LONG
+        AMORTIZEDPD
+        USEMALLOC
+        PARLAY_USE_STD_ALLOC
+    )
+endif()

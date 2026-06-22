@@ -20,8 +20,14 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester with 
       addr: BigInt,
       operand: BigInt,
       op: Operation.Type,
-      mode: AtomicMode.Type = AtomicMode.DoubleWord
+      mode: AtomicMode.Type = AtomicMode.DoubleWord,
+      floatCompare: Boolean = false
   )
+
+  // IEEE-754 single-precision bit pattern as an unsigned BigInt, for word-mode
+  // float-compare tests.
+  private def f32(x: Float): BigInt =
+    BigInt(java.lang.Float.floatToRawIntBits(x).toLong & 0xffffffffL)
 
   // A simple AXI4 (chext full) memory slave for the AMU's master port. Reads
   // return current memory; writes apply on the AW+W pair; B confirms. `latency`
@@ -153,6 +159,7 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester with 
     dut.io.req.bits.isValid.poke(true.B)
     dut.io.req.bits.requestingPE.poke(0.U)
     dut.io.req.bits.atomicMode.poke(AtomicMode.DoubleWord)
+    dut.io.req.bits.floatCompare.poke(false.B)
   }
 
   private def pokeReq(dut: AtomicMemoryUnit, r: AReq): Unit = {
@@ -163,6 +170,7 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester with 
     dut.io.req.bits.isValid.poke(true.B)
     dut.io.req.bits.requestingPE.poke(r.pe.U)
     dut.io.req.bits.atomicMode.poke(r.mode)
+    dut.io.req.bits.floatCompare.poke(r.floatCompare.B)
   }
 
   // Submit `reqs` (one accepted per cycle), service gmem, collect (pe, returnedData).
@@ -247,6 +255,127 @@ class AtomicMemoryUnitTests extends AnyFlatSpec with ChiselScalatestTester with 
       val r = run(dut, m, Seq(AReq(0, 0x80, 5, Operation.LockSetIfSignedLessUnlockAndReturnCurrent)))
       scalaAssert(r == Seq((0, BigInt(5))) && m.mem(0x80) == 5 && !m.sawWrite,
         s"ifLess equal should skip: r=$r mem=${m.mem(0x80)}")
+    }
+  }
+
+  // io.resp.bits.writeOccurred must report whether the read-modify-write
+  // actually stored: 1 for the unconditional ops and for a taken conditional
+  // store, 0 for a skipped conditional store. LockServer forwards this bit into
+  // response status bit 1.
+  private def runWriteOccurred(
+      dut: AtomicMemoryUnit,
+      mem: MemModel,
+      req: AReq,
+      maxCycles: Int = 2000
+  ): Boolean = {
+    val pending = mutable.Queue.empty[AReq] ++ Seq(req)
+    var result = Option.empty[Boolean]
+    var cycles = 0
+    dut.io.resp.ready.poke(true.B)
+    while ((pending.nonEmpty || result.isEmpty) && cycles < maxCycles) {
+      if (pending.nonEmpty) pokeReq(dut, pending.front) else driveNoReq(dut)
+      mem.beforeStep()
+      val accepted = pending.nonEmpty && dut.io.req.ready.peek().litToBoolean
+      if (dut.io.resp.valid.peek().litToBoolean) {
+        result = Some(dut.io.resp.bits.writeOccurred.peek().litToBoolean)
+      }
+      dut.clock.step()
+      mem.afterStep()
+      cycles += 1
+      if (accepted) pending.dequeue()
+    }
+    driveNoReq(dut)
+    scalaAssert(result.nonEmpty, s"no response in $cycles cycles")
+    result.get
+  }
+
+  it should "report writeOccurred for taken/skipped/unconditional stores" in {
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = 5
+      scalaAssert(
+        runWriteOccurred(dut, m, AReq(0, 0x80, 10, Operation.LockSetIfGreaterUnlockAndReturnCurrent)),
+        "ifGreater taken should report writeOccurred=true")
+    }
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = 5
+      scalaAssert(
+        !runWriteOccurred(dut, m, AReq(0, 0x80, 3, Operation.LockSetIfGreaterUnlockAndReturnCurrent)),
+        "ifGreater skipped should report writeOccurred=false")
+    }
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = 5
+      scalaAssert(
+        runWriteOccurred(dut, m, AReq(0, 0x80, 3, Operation.LockSetIfSignedLessUnlockAndReturnCurrent)),
+        "ifLess taken should report writeOccurred=true")
+    }
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = 5
+      scalaAssert(
+        !runWriteOccurred(dut, m, AReq(0, 0x80, 9, Operation.LockSetIfSignedLessUnlockAndReturnCurrent)),
+        "ifLess skipped should report writeOccurred=false")
+    }
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x40) = 7
+      scalaAssert(
+        runWriteOccurred(dut, m, AReq(0, 0x40, 99, Operation.LockSetUnlockAndReturnCurrent)),
+        "unconditional set should report writeOccurred=true")
+    }
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x40) = 7
+      scalaAssert(
+        runWriteOccurred(dut, m, AReq(0, 0x40, 1, Operation.LockAddNReturnCurrent)),
+        "add-N should report writeOccurred=true")
+    }
+  }
+
+  it should "order conditional sets as floats when the float-compare flag is set" in {
+    // Negative vs negative is exactly where signed-int and float compares
+    // disagree: -5.0 < -2.0 numerically, but as sign-magnitude bit patterns the
+    // signed-int compare orders them the other way.
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = f32(-2.0f)
+      val r = run(dut, m, Seq(AReq(0, 0x80, f32(-5.0f),
+        Operation.LockSetIfSignedLessUnlockAndReturnCurrent,
+        mode = AtomicMode.Word, floatCompare = true)))
+      scalaAssert(r == Seq((0, f32(-2.0f))) && m.mem(0x80) == f32(-5.0f) && m.sawWrite,
+        s"float ifLess should store the smaller -5.0: r=$r mem=${m.mem(0x80)} sawWrite=${m.sawWrite}")
+    }
+    // Same inputs WITHOUT the flag: the signed-int compare misorders the
+    // negatives and skips the (correct) store -- pins why the flag is needed.
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = f32(-2.0f)
+      val r = run(dut, m, Seq(AReq(0, 0x80, f32(-5.0f),
+        Operation.LockSetIfSignedLessUnlockAndReturnCurrent,
+        mode = AtomicMode.Word, floatCompare = false)))
+      scalaAssert(r == Seq((0, f32(-2.0f))) && m.mem(0x80) == f32(-2.0f) && !m.sawWrite,
+        s"signed-int ifLess should NOT store here: r=$r mem=${m.mem(0x80)}")
+    }
+    // float ifGreater across the same negatives: -2.0 > -5.0 -> store.
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = f32(-5.0f)
+      val r = run(dut, m, Seq(AReq(0, 0x80, f32(-2.0f),
+        Operation.LockSetIfGreaterUnlockAndReturnCurrent,
+        mode = AtomicMode.Word, floatCompare = true)))
+      scalaAssert(r == Seq((0, f32(-5.0f))) && m.mem(0x80) == f32(-2.0f) && m.sawWrite,
+        s"float ifGreater should store the larger -2.0: r=$r mem=${m.mem(0x80)}")
+    }
+    // float ifLess, negative operand vs positive current: -1.0 < 2.0 -> store.
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = f32(2.0f)
+      val r = run(dut, m, Seq(AReq(0, 0x80, f32(-1.0f),
+        Operation.LockSetIfSignedLessUnlockAndReturnCurrent,
+        mode = AtomicMode.Word, floatCompare = true)))
+      scalaAssert(r == Seq((0, f32(2.0f))) && m.mem(0x80) == f32(-1.0f) && m.sawWrite,
+        s"float ifLess neg-vs-pos should store -1.0: r=$r mem=${m.mem(0x80)}")
+    }
+    // float ifLess with no improvement: 5.0 < 3.0 is false -> skip.
+    test(mkDut) { dut =>
+      val m = new MemModel(dut); m.mem(0x80) = f32(3.0f)
+      val r = run(dut, m, Seq(AReq(0, 0x80, f32(5.0f),
+        Operation.LockSetIfSignedLessUnlockAndReturnCurrent,
+        mode = AtomicMode.Word, floatCompare = true)))
+      scalaAssert(r == Seq((0, f32(3.0f))) && m.mem(0x80) == f32(3.0f) && !m.sawWrite,
+        s"float ifLess should skip when not smaller: r=$r mem=${m.mem(0x80)}")
     }
   }
 

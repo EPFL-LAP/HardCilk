@@ -14,15 +14,12 @@
 //     the root task, route spawned helper tasks to the single helper instance,
 //     decrement the continuation's join counter as helpers finish, and re-inject
 //     the BFS continuation when the counter hits zero;
-//   * the LockServer (Atomics.LockServer, the new credit-based design): with
-//     ONE PE and a per-PE in-flight depth of 1, there is no contention and at
-//     most one request is outstanding at a time, so the helper blocks on each
-//     response before issuing the next. The barebones model is therefore a
-//     trivial always-succeeds responder that just applies the requested atomic
-//     read-modify-write to the byte buffer -- no per-PE response queue or
-//     out-of-order/meta-correlation handling is needed (those only matter when
-//     inflightDepth > 1). It runs on its own thread purely so the real helper's
-//     toLock/fromLock request/response handshake can complete.
+//   * the LockServer (Atomics.LockServer, the new credit-based design): the
+//     barebones model is a trivial always-succeeds responder that applies the
+//     requested atomic read-modify-write to the byte buffer and returns the same
+//     response packet layout as util.h's lock_resp_* decoders expect. It runs on
+//     its own thread purely so the real helper's toLock/fromLock request/response
+//     handshake can complete.
 //
 // Result distances are compared against a textbook reference BFS.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,8 +232,9 @@ static void lockServer(hls::stream<lock_req> *toLock,
 
     lock_resp resp;
     resp.data = 0;
-    resp.data(63, 0) = 1;       // status: success
-    resp.data(127, 64) = prev;  // previous contents (right-justified by the AMU)
+    resp.data(7, 0) = 1;       // status: success
+    resp.data(71, 8) = addr;   // echoed request tag (the lock address)
+    resp.data(135, 72) = prev; // previous contents, right-justified by AMU mode
     resp.keep = -1;
     resp.strb = -1;
     resp.last = 1;

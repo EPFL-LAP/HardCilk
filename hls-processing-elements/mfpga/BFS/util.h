@@ -130,10 +130,12 @@ static_assert(sizeof(sparse_edgemap_helper_args) == 128,
 //   tdata[131:128] = opcode
 //   tdata[132]     = blocking
 //   tdata[134:133] = atomic mode (00 = double-word, 01 = byte, 10 = word)
-//   tdata[135]     = reserved (0)
+//   tdata[135]     = float-compare flag: when set, the conditional SET_IF_* ops
+//                    order operand vs memory as IEEE-754 floats instead of ints
 static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
                                      LockOperation op, bool blocking,
-                                     AtomicMode atomic_mode)
+                                     AtomicMode atomic_mode, uint8_t metadata = 0,
+                                     bool float_compare = false)
 {
 #pragma HLS INLINE
   lock_req req;
@@ -143,32 +145,55 @@ static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
   req.data(131, 128) = (uint8_t)op;
   req.data(132, 132) = blocking ? 1 : 0;
   req.data(134, 133) = (uint8_t)atomic_mode;
-  req.data(135, 135) = 0;
+  req.data(135, 135) = float_compare ? 1 : 0;
+  req.data(143, 136) = metadata;
   req.keep = -1;
   req.strb = -1;
   req.last = 1;
   return req;
 }
 
-// Decode a lock response beat. The AMU response path packs Cat(0, data, 1), so:
-//   tdata[63:0]    = status (1 == read-modify-write completed)
-//   tdata[127:64]  = previous memory contents, with the addressed sub-word
+// Decode a lock response beat. The LockServer packs
+// Cat(meta, prevValue, tag, writeOccurred, success), so:
+//   tdata[0]       = success (1 == request completed)
+//   tdata[1]       = for conditional AMU ops (SET_IF_GREATER / SET_IF_LESS),
+//                    whether the store actually happened; for every other op it
+//                    just mirrors the success bit
+//   tdata[7:2]     = reserved (0)
+//   tdata[71:8]    = echoed request tag (the lock address)
+//   tdata[135:72]  = previous memory contents, with the addressed sub-word
 //                    right-justified into the low bits (byte/word atomics return
 //                    just their lane in [7:0]/[31:0]; doubleword is the full beat)
 static inline bool lock_resp_success(const lock_resp &resp)
 {
 #pragma HLS INLINE
-  return resp.data(63, 0) != 0;
+  return resp.data(0, 0) != 0;
+}
+
+// For a conditional AMU op (SET_IF_GREATER / SET_IF_LESS), true iff the store
+// actually happened (the predicate held). For all other ops this mirrors
+// lock_resp_success.
+static inline bool lock_resp_write_occurred(const lock_resp &resp)
+{
+#pragma HLS INLINE
+  return resp.data(1, 1) != 0;
 }
 
 static inline ap_uint<64> lock_resp_current(const lock_resp &resp)
 {
 #pragma HLS INLINE
-  return resp.data(127, 64);
+  return resp.data(135, 72);
+}
+
+static inline ap_uint<64> lock_resp_tag(const lock_resp &resp)
+{
+#pragma HLS INLINE
+  return resp.data(71, 8);
 }
 
 // The AMU right-justifies the addressed byte into the low bits of the returned
-// value, so the previous Visited byte is simply tdata[71:64]. No shift needed.
+// value, so the previous Visited byte is the low byte of lock_resp_current
+// (tdata[79:72]). No shift needed.
 static inline uint8_t lock_resp_current_byte(const lock_resp &resp)
 {
 #pragma HLS INLINE

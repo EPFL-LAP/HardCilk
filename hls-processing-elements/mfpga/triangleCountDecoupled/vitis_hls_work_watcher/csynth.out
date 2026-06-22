@@ -1,0 +1,178 @@
+
+****** Vitis HLS - High-Level Synthesis from C, C++ and OpenCL v2024.1 (64-bit)
+  **** SW Build 5069499 on May 21 2024
+  **** IP Build 5075265 on Wed May 22 21:45:21 MDT 2024
+  **** SharedData Build 5076995 on Wed May 22 18:29:18 MDT 2024
+  **** Start of session at: Fri Jun 19 19:53:03 2026
+    ** Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
+    ** Copyright 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+
+source /alpha/tools/Xilinx/Vitis_HLS/2024.1/scripts/vitis_hls/hls.tcl -notrace
+INFO: [HLS 200-10] For user 'bradely' on host 'lap-inf133' (Linux_x86_64 version 6.8.12) on Fri Jun 19 19:53:04 CEST 2026
+INFO: [HLS 200-10] On os Ubuntu 24.04.3 LTS
+INFO: [HLS 200-10] In directory '/beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher'
+WARNING: [HLS 200-2053] The vitis_hls executable is deprecated. Consider using vitis-run --mode hls --tcl
+Sourcing Tcl script '../Test/csynth_watcher.tcl'
+INFO: [HLS 200-1510] Running: open_project -reset watcher_proj 
+INFO: [HLS 200-10] Creating and opening project '/beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj'.
+INFO: [HLS 200-1510] Running: set_top watcher 
+INFO: [HLS 200-1510] Running: add_files /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp 
+INFO: [HLS 200-10] Adding design file '/beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp' to the project
+INFO: [HLS 200-1510] Running: add_files /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/memAccess_defs.h 
+INFO: [HLS 200-10] Adding design file '/beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/memAccess_defs.h' to the project
+INFO: [HLS 200-1510] Running: open_solution -reset solution1 -flow_target vivado 
+INFO: [HLS 200-10] Creating and opening solution '/beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1'.
+INFO: [HLS 200-10] Cleaning up the solution database.
+INFO: [HLS 200-1505] Using flow_target 'vivado'
+Resolution: For help on HLS 200-1505 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=200-1505.html
+INFO: [HLS 200-1510] Running: set_part xcu55c-fsvh2892-2L-e 
+INFO: [HLS 200-1611] Setting target device to 'xcu55c-fsvh2892-2L-e'
+INFO: [HLS 200-1510] Running: create_clock -period 3.3333 -name default 
+INFO: [SYN 201-201] Setting up clock 'default' with a period of 3.333ns.
+INFO: [HLS 200-1510] Running: config_interface -m_axi_addr64 
+INFO: [HLS 200-1510] Running: config_interface -m_axi_num_read_outstanding 32 
+INFO: [HLS 200-1510] Running: config_interface -m_axi_num_write_outstanding 32 
+INFO: [HLS 200-1510] Running: csynth_design 
+INFO: [HLS 200-111] Finished File checks and directory preparation: CPU user time: 0.02 seconds. CPU system time: 0 seconds. Elapsed time: 0.03 seconds; current allocated memory: 260.164 MB.
+INFO: [HLS 200-10] Analyzing design file '../memAccess.cpp' ... 
+WARNING: [HLS 207-4827] equality comparison with extraneous parentheses (../memAccess.cpp:229:17)
+INFO: [HLS 207-4186] remove extraneous parentheses around the comparison to silence this warning (../memAccess.cpp:229:17)
+INFO: [HLS 207-4187] use '=' to turn this equality comparison into an assignment (../memAccess.cpp:229:17)
+INFO: [HLS 200-111] Finished Source Code Analysis and Preprocessing: CPU user time: 1.12 seconds. CPU system time: 0.24 seconds. Elapsed time: 1.35 seconds; current allocated memory: 262.973 MB.
+INFO: [HLS 200-777] Using interface defaults for 'Vivado' flow target.
+INFO: [HLS 200-1995] There were 780 instructions in the design after the 'Compile/Link' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 848 instructions in the design after the 'Unroll/Inline (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 546 instructions in the design after the 'Unroll/Inline (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 546 instructions in the design after the 'Unroll/Inline (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 546 instructions in the design after the 'Unroll/Inline (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 708 instructions in the design after the 'Array/Struct (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 564 instructions in the design after the 'Array/Struct (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,357 instructions in the design after the 'Array/Struct (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 990 instructions in the design after the 'Array/Struct (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 876 instructions in the design after the 'Array/Struct (step 5)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 673 instructions in the design after the 'Performance (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 672 instructions in the design after the 'Performance (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 672 instructions in the design after the 'Performance (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 672 instructions in the design after the 'Performance (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 723 instructions in the design after the 'HW Transforms (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 883 instructions in the design after the 'HW Transforms (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+WARNING: [HLS 214-386] A depth specification is required for MAXI interface port 'mem' for cosimulation. (../memAccess.cpp:67:0)
+INFO: [HLS 214-210] Disaggregating variable 'cont0_status' (../memAccess.cpp:67:0)
+Resolution: For help on HLS 214-210 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=214-210.html
+INFO: [HLS 214-210] Disaggregating variable 'memReader_status' (../memAccess.cpp:67:0)
+Resolution: For help on HLS 214-210 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=214-210.html
+INFO: [HLS 214-210] Disaggregating variable 'reentry0_status' (../memAccess.cpp:67:0)
+Resolution: For help on HLS 214-210 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=214-210.html
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_134_2' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:134:23)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_152_3' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:152:23)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_170_4' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:170:23)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_134_2' (../memAccess.cpp:134:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:67:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_152_3' (../memAccess.cpp:152:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:67:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_170_4' (../memAccess.cpp:170:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:67:0)
+INFO: [HLS 214-248] Applying array_partition to 'cont0_status.0': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
+INFO: [HLS 214-248] Applying array_partition to 'cont0_status.1': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
+INFO: [HLS 214-248] Applying array_partition to 'memReader_status.0': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
+INFO: [HLS 214-248] Applying array_partition to 'memReader_status.1': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
+INFO: [HLS 214-248] Applying array_partition to 'reentry0_status.0': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
+INFO: [HLS 214-248] Applying array_partition to 'reentry0_status.1': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
+INFO: [HLS 214-241] Aggregating scalar variable 'currentStatus' with compact=bit mode in 128-bits (../memAccess.cpp:111:21)
+INFO: [HLS 214-241] Aggregating scalar variable 'watcher(TelemetryBundle*, unsigned long, PEStatus*, PEStatus*, PEStatus*)::lastStatus' with compact=bit mode in 128-bits (../memAccess.cpp:87:0)
+INFO: [HLS 200-111] Finished Compiling Optimization and Transform: CPU user time: 1.43 seconds. CPU system time: 0.2 seconds. Elapsed time: 6.28 seconds; current allocated memory: 272.719 MB.
+INFO: [HLS 200-111] Finished Checking Pragmas: CPU user time: 0 seconds. CPU system time: 0 seconds. Elapsed time: 0 seconds; current allocated memory: 272.719 MB.
+INFO: [HLS 200-10] Starting code transformations ...
+INFO: [HLS 200-111] Finished Standard Transforms: CPU user time: 0.01 seconds. CPU system time: 0 seconds. Elapsed time: 0.02 seconds; current allocated memory: 273.723 MB.
+INFO: [HLS 200-10] Checking synthesizability ...
+INFO: [HLS 200-111] Finished Checking Synthesizability: CPU user time: 0.02 seconds. CPU system time: 0 seconds. Elapsed time: 0.02 seconds; current allocated memory: 274.352 MB.
+INFO: [XFORM 203-11] Balancing expressions in function 'watcher' (../memAccess.cpp:61:21)...113 expression(s) balanced.
+INFO: [HLS 200-111] Finished Loop, function and other optimizations: CPU user time: 0.08 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.09 seconds; current allocated memory: 299.863 MB.
+WARNING: [XFORM 203-561] 'VITIS_LOOP_104_1' (../memAccess.cpp:104:21) in function 'watcher' is an infinite loop.
+INFO: [HLS 200-111] Finished Architecture Synthesis: CPU user time: 0.07 seconds. CPU system time: 0 seconds. Elapsed time: 0.07 seconds; current allocated memory: 299.863 MB.
+INFO: [HLS 200-10] Starting hardware synthesis ...
+INFO: [HLS 200-10] Synthesizing 'watcher' ...
+INFO: [HLS 200-10] ----------------------------------------------------------------
+INFO: [HLS 200-42] -- Implementing module 'watcher' 
+INFO: [HLS 200-10] ----------------------------------------------------------------
+INFO: [SCHED 204-11] Starting scheduling ...
+INFO: [SCHED 204-61] Pipelining loop 'VITIS_LOOP_104_1'.
+WARNING: [HLS 200-880] The II Violation in module 'watcher' (loop 'VITIS_LOOP_104_1'): Unable to enforce a carried dependence constraint (II = 1, distance = 1, offset = 1) between wire read operation ('cont0_status_in_0_read_1', ../memAccess.cpp:138) on port 'cont0_status_in_0' (../memAccess.cpp:138) and wire read operation ('cont0_status_in_0_read', ../memAccess.cpp:137) on port 'cont0_status_in_0' (../memAccess.cpp:137).
+Resolution: For help on HLS 200-880 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=200-880.html
+INFO: [HLS 200-1470] Pipelining result : Target II = 1, Final II = 2, Depth = 12, loop 'VITIS_LOOP_104_1'
+INFO: [SCHED 204-11] Finished scheduling.
+INFO: [HLS 200-111] Finished Scheduling: CPU user time: 0.08 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.09 seconds; current allocated memory: 299.863 MB.
+INFO: [BIND 205-100] Starting micro-architecture generation ...
+INFO: [BIND 205-101] Performing variable lifetime analysis.
+INFO: [BIND 205-101] Exploring resource sharing.
+INFO: [BIND 205-101] Binding ...
+INFO: [BIND 205-100] Finished micro-architecture generation.
+INFO: [HLS 200-111] Finished Binding: CPU user time: 0.02 seconds. CPU system time: 0 seconds. Elapsed time: 0.03 seconds; current allocated memory: 299.863 MB.
+INFO: [HLS 200-10] ----------------------------------------------------------------
+INFO: [HLS 200-10] -- Generating RTL for module 'watcher' 
+INFO: [HLS 200-10] ----------------------------------------------------------------
+WARNING: [RTGEN 206-101] Design contains AXI ports. Reset is fixed to synchronous and active low.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/gmem' to 'm_axi'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/mem' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/start_addr' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_in_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_in_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_in_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_in_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_out_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_out_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_out_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/cont0_status_out_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_in_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_in_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_in_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_in_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_out_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_out_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_out_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/memReader_status_out_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_in_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_in_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_in_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_in_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_out_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_out_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_out_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_out_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on function 'watcher' to 'ap_ctrl_none'.
+WARNING: [RTGEN 206-101] Register 'absolute_cycle_count' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'lastStatus' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'primed' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'write_idx' is power-on initialization.
+INFO: [RTGEN 206-100] Finished creating RTL model for 'watcher'.
+INFO: [HLS 200-111] Finished Creating RTL model: CPU user time: 0.05 seconds. CPU system time: 0 seconds. Elapsed time: 0.05 seconds; current allocated memory: 299.863 MB.
+INFO: [HLS 200-111] Finished Generating all RTL models: CPU user time: 0.13 seconds. CPU system time: 0 seconds. Elapsed time: 0.13 seconds; current allocated memory: 304.012 MB.
+INFO: [HLS 200-111] Finished Updating report files: CPU user time: 0.26 seconds. CPU system time: 0 seconds. Elapsed time: 0.27 seconds; current allocated memory: 308.758 MB.
+INFO: [VHDL 208-304] Generating VHDL RTL for watcher.
+INFO: [VLOG 209-307] Generating Verilog RTL for watcher.
+INFO: [HLS 200-790] **** Loop Constraint Status: All loop constraints were NOT satisfied.
+INFO: [HLS 200-789] **** Estimated Fmax: 411.00 MHz
+INFO: [HLS 200-2161] Finished Command csynth_design Elapsed time: 00:00:08; Allocated memory: 48.719 MB.
+INFO: [HLS 200-1510] Running: close_project 
+INFO: [HLS 200-112] Total CPU user time: 4.51 seconds. Total CPU system time: 0.57 seconds. Total elapsed time: 9.62 seconds; peak allocated memory: 308.883 MB.

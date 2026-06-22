@@ -2,6 +2,7 @@
 package HardCilk
 
 import chisel3._
+import chisel3.util.log2Ceil
 import Descriptors._
 import Scheduler._
 import Allocator._
@@ -255,11 +256,106 @@ trait HasHBMInterconnect extends Module {
         }
       val serverMux = numHBMPorts - peMux
 
-      assignGroupsToHbmPorts(peInterfaceGroups.toSeq, 0, peMux)
-      assignGroupsToHbmPorts(serverGroups.toSeq, peMux, serverMux)
+      // Decompose every PE-owned master into its OWN assignable unit, then group
+      // by exact (wData, wId) shape. A single PE can own masters of different
+      // shapes (e.g. m_axi_gmem 32b/id1, m_axi_spawnNext 512b/id0, m_axi_argOut
+      // 32b/id0), so bundling them per-PE forces a mixed-shape port -> PATH 3
+      // id-collapse. Grouping per interface lets every muxed port stay shape-
+      // uniform, the precondition for PATH 1/2 (native ids, no ProtocolConverter).
+      val peShapeGroups: Seq[HbmInterfaceGroup] =
+        peInterfaceGroups.toSeq.flatMap { g =>
+          g.interfaces.zipWithIndex.map { case (iface, ii) =>
+            HbmInterfaceGroup(s"${g.name}#$ii", Seq(iface))
+          }
+        }
+
+      // Distinct shape classes, biggest population first (then by width, id).
+      val peByShape: Seq[((Int, Int), Seq[HbmInterfaceGroup])] =
+        peShapeGroups
+          .groupBy(g => (g.interfaces.head.cfg.wData, g.interfaces.head.cfg.wId))
+          .toSeq
+          .sortBy { case (shape, gs) => (-gs.map(_.size).sum, shape._1, shape._2) }
+      val totalPeIfaces = math.max(1, peShapeGroups.map(_.size).sum)
+
+      if (peByShape.length <= peMux) {
+        // Enough PE ports to give every shape its own contiguous, proportional
+        // block -> no port ever mixes shapes.
+        var portCursor = 0
+        peByShape.zipWithIndex.foreach { case ((_, groups), idx) =>
+          val classesLeft = peByShape.length - idx
+          val portsLeft   = peMux - portCursor
+          val share =
+            if (idx == peByShape.length - 1) portsLeft
+            else math.max(
+              1,
+              math.min(
+                portsLeft - (classesLeft - 1),
+                math.round(peMux.toDouble * groups.map(_.size).sum / totalPeIfaces).toInt
+              )
+            )
+          assignGroupsToHbmPorts(groups, portCursor, share)
+          portCursor += share
+        }
+      } else {
+        // More distinct shapes than available PE ports: cannot isolate them all.
+        // Keep the original per-PE packing; the remaining mixed ports fall back to
+        // PATH 3 (and warn) rather than silently corrupting ids.
+        assignGroupsToHbmPorts(peInterfaceGroups.toSeq, 0, peMux)
+      }
+      // Shape-aware server allocation: group by wData (not (wData, wId))
+      // since different wId values can be harmonized by zero-extension (PATH 2b).
+      // This clusters same-data-width servers onto the same HBM ports.
+      val serverByDataWidth: Seq[(Int, Seq[HbmInterfaceGroup])] =
+        serverGroups.toSeq
+          .groupBy(g => g.interfaces.head.cfg.wData)
+          .toSeq
+          .sortBy { case (dw, gs) => (-gs.map(_.size).sum, dw) }
+      val totalServerIfaces = math.max(1, serverGroups.map(_.size).sum)
+
+      if (serverByDataWidth.length <= serverMux && serverGroups.nonEmpty) {
+        // Enough server ports to give every data-width class its own
+        // contiguous, proportional block.
+        var portCursor = peMux
+        serverByDataWidth.zipWithIndex.foreach { case ((_, groups), idx) =>
+          val classesLeft = serverByDataWidth.length - idx
+          val portsLeft   = serverMux - (portCursor - peMux)
+          val share =
+            if (idx == serverByDataWidth.length - 1) portsLeft
+            else math.max(
+              1,
+              math.min(
+                portsLeft - (classesLeft - 1),
+                math.round(serverMux.toDouble * groups.map(_.size).sum / totalServerIfaces).toInt
+              )
+            )
+          assignGroupsToHbmPorts(groups, portCursor, share)
+          portCursor += share
+        }
+      } else {
+        assignGroupsToHbmPorts(serverGroups.toSeq, peMux, serverMux)
+      }
+
+      // ---- Port allocation summary ------------------------------------
+      println(s"[HBM:Interconnect] Port budget: $peMux PE ports (0..${peMux - 1}), $serverMux server ports ($peMux..${peMux + serverMux - 1})")
+      peByShape.foreach { case ((dw, id), gs) =>
+        println(s"[HBM:Interconnect]   PE shape (wData=$dw, wId=$id): ${gs.map(_.size).sum} interfaces")
+      }
+      serverByDataWidth.foreach { case (dw, gs) =>
+        val idWidths = gs.flatMap(_.interfaces.map(_.cfg.wId)).distinct.sorted
+        println(s"[HBM:Interconnect]   Server wData=$dw: ${gs.map(_.size).sum} interfaces (wId=${idWidths.mkString(",")})")
+      }
+      println("[HBM:Interconnect]   Per-port mapping:")
+      hbmSlaves.zipWithIndex.foreach { case (buf, idx) =>
+        if (buf.nonEmpty) {
+          val shapes = buf.map(i => s"(${i.cfg.wData},id${i.cfg.wId})").groupBy(identity).map { case (k, v) => s"${v.size}×$k" }.mkString(", ")
+          val portName = f"m_axi_${idx}%02d"
+          println(s"[HBM:Interconnect]     $portName: ${buf.size} masters — $shapes")
+        }
+      }
     }
 
     def hbmSkidBuffer(source: axi4.full.Interface): axi4.full.Interface =
+
       axi4.full.SlaveBuffer(source, axi4.BufferConfig.all(8))
 
     def connectThroughHbmSkidBuffer(
@@ -285,61 +381,55 @@ trait HasHBMInterconnect extends Module {
 
     val axi3CompatFlag = false
     numHbmPortExports = hbmSlaves.count(_.nonEmpty)
-    hbmSlaves.filter(_.nonEmpty).zipWithIndex.map {
-      case (hbmSlave, i) => {
+    // ------------------------------------------------------------------
+    // Per-HBM-port export. Four paths, fastest first:
+    //   PATH 1   direct passthrough  (1 master / port)            -> native id, no PC
+    //   PATH 2   mux, no id collapse (N same-shape masters)       -> native id, no PC
+    //   PATH 2b  mux, id zero-extend (N same-wData, mixed-wId)   -> widened id, no PC
+    //   PATH 3   fallback id-collapse (mixed wData / overflow)    -> ProtocolConverter
+    //
+    // The HBM SAXI hard-caps the AXI id width at 6 bits. We may keep the full
+    // native id (up to 6) ONLY on PATHs 1 & 2, which never instantiate the
+    // ProtocolConverter (IdSerialize + Upscale) — that replicated machinery is
+    // what wrecks timing. PATH 3 is forced to collapse the id back to 2 bits and
+    // cannot close at a high Fmax, hence the loud warning so the user knows.
+    // ------------------------------------------------------------------
+    val hbmIdCap         = 6
+    val collapsedIdWidth = 2
+
+    def bigRedWarning(title: String, lines: Seq[String]): Unit = {
+      val red   = "[1;37;41m"
+      val reset = "[0m"
+      val body  = title +: lines
+      val w     = body.map(_.length).max
+      val bar   = "#" * (w + 4)
+      println(red + bar + reset)
+      body.foreach(l => println(red + "# " + l.padTo(w, ' ') + " #" + reset))
+      println(red + bar + reset)
+    }
+
+    hbmSlaves.filter(_.nonEmpty).zipWithIndex.foreach {
+      case (hbmSlave, i) =>
+        val portName       = f"m_axi_${i}%02d"
         val interfaceCount = hbmSlave.length
+        val dataWidths     = hbmSlave.map(_.cfg.wData).distinct
+        val idWidths       = hbmSlave.map(_.cfg.wId).distinct
+        val uniformShape   = dataWidths.length == 1 && idWidths.length == 1
+        val selBits        = if (interfaceCount > 1) log2Ceil(interfaceCount) else 0
+        val nativeMuxId    = hbmSlave.map(_.cfg.wId).max + selBits
+        // The HBM controller port is natively 256b, but Vitis inserts a width
+        // converter for any kernel m_axi up to 1024b — both upsizing
+        // (64/128->256) and downsizing (1024/512->256), preserving the id.
+        // 1024b is the hard ceiling: AXI4's data bus maxes out at 1024 bits.
+        // So anything <= 1024b rides the native paths and never needs in-fabric
+        // narrowing / id-collapse.
+        val vitisMaxWidth   = 1024
+        val vitisCanConvert = hbmSlave.forall(_.cfg.wData <= vitisMaxWidth)
 
-        if (
-          interfaceCount == 1 && hbmSlave.head.cfg.axi3Compat && hbmSlave.head.cfg.wData == 256
-          ) {
-          val axiOut =
-            IO(axi4.Master(hbmSlave.head.cfg)).suggestName(f"m_axi_${i}%02d")
-          connectThroughHbmSkidBuffer(hbmSlave.head, axiOut.asFull)
-          interfaceBuffer.addOne(
-            hdlinfo.Interface(
-              f"m_axi_${i}%02d", hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
-              "clock", "reset", Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
-            )
-          )
-          axiOuts.addOne(axiOut)
-        } else if (interfaceCount > 1) {
-          val mux = Module(
-            new axi4.full.components.Mux(
-              new axi4.full.components.MuxConfig(
-                axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = 2),
-                numSlaves = hbmSlave.length
-              )
-            )
-          )
-
-          mux.s_axi.zip(hbmSlave).foreach { case (muxPort, slavePort) =>
-            val protocolConverter = Module(
-              new axi4.full.components.ProtocolConverter(
-                new axi4.full.components.ProtocolConverterConfig(
-                  axiSlaveCfg = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
-                  axiMasterCfg = muxPort.cfg
-                )
-              )
-            )
-            axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> protocolConverter.s_axi
-            val protocolConverted = hbmSkidBuffer(protocolConverter.m_axi)
-
-            // if the slave cfg has data width smaller than the axi master config instantiate a Widen
-            if(slavePort.cfg.wData < muxPort.cfg.wData){
-              val widen_mod = Module(
-                new chext.amba.axi4.full.components.Widen(
-                  chext.amba.axi4.full.components.WidenConfig(muxPort.cfg)
-                )
-              )
-              connectThroughHbmSkidBuffer(protocolConverted, widen_mod.s_axi)
-              connectThroughHbmSkidBuffer(widen_mod.m_axi, muxPort)
-            } else{
-              connectThroughHbmSkidBuffer(protocolConverted, muxPort)
-            }
-          }
-
-          val axiOut = IO(axi4.Master(mux.m_axi.cfg)).suggestName(f"m_axi_${i}%02d")
-
+        // Create the exported HBM master IO + register its hdlinfo, then drive it
+        // from `src` (optionally through the address-bit permutation).
+        def exportFrom(src: axi4.full.Interface): Unit = {
+          val axiOut = IO(axi4.Master(src.cfg)).suggestName(portName)
           if (addressTransformFlag) {
             val addressTransform = Module(new Util.AddressTransform(
               AddressTransformConfig(
@@ -347,69 +437,145 @@ trait HasHBMInterconnect extends Module {
                 transform = Seq(33, 23, 22, 21, 20, 28, 27, 26, 25, 24, 32, 31, 30, 29, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0).reverse
               )
             ))
-            connectThroughHbmSkidBuffer(mux.m_axi, addressTransform.s_axi)
+            connectThroughHbmSkidBuffer(src, addressTransform.s_axi)
             connectThroughHbmSkidBuffer(addressTransform.m_axi, axiOut.asFull)
           } else {
-            connectThroughHbmSkidBuffer(mux.m_axi, axiOut.asFull)
+            connectThroughHbmSkidBuffer(src, axiOut.asFull)
           }
-
           interfaceBuffer.addOne(
             hdlinfo.Interface(
-              f"m_axi_${i}%02d", hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
-              "clock", "reset", Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
-            )
-          )
-          axiOuts.addOne(axiOut)
-        } else {
-          val outputCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = 2)
-          val axiOut =
-            IO(axi4.Master(outputCfg)).suggestName(f"m_axi_${i}%02d")
-          val protocolConverter = Module(
-            new axi4.full.components.ProtocolConverter(
-              new axi4.full.components.ProtocolConverterConfig(
-                axiSlaveCfg = hbmSlave.head.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
-                axiMasterCfg = outputCfg
-              )
-            )
-          )
-          axi4.full.SlaveBuffer(AxiUserYanker(hbmSlave.head), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
-          val protocolConverted = hbmSkidBuffer(protocolConverter.m_axi)
-
-          if (addressTransformFlag) {
-             val addressTransform = Module(new Util.AddressTransform(
-              AddressTransformConfig(
-                axiCfg = axiOut.cfg,
-                transform = Seq(33, 23, 22, 21, 20, 28, 27, 26, 25, 24, 32, 31, 30, 29, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0).reverse
-              )
-            ))
-            // #TODO add the widen here as well.
-            connectThroughHbmSkidBuffer(protocolConverted, addressTransform.s_axi)
-            connectThroughHbmSkidBuffer(addressTransform.m_axi, axiOut.asFull)
-          } else {
-            // Add the Widen for V80
-            if(protocolConverter.s_axi.cfg.wData < axiOut.cfg.wData){
-              val widen_mod = Module(
-                new chext.amba.axi4.full.components.Widen(
-                  chext.amba.axi4.full.components.WidenConfig(axiOut.cfg)
-                )
-              )
-              connectThroughHbmSkidBuffer(protocolConverted, widen_mod.s_axi)
-              connectThroughHbmSkidBuffer(widen_mod.m_axi, axiOut.asFull)
-            } else{
-              connectThroughHbmSkidBuffer(protocolConverted, axiOut.asFull)
-            }
-
-          }
-
-          interfaceBuffer.addOne(
-            hdlinfo.Interface(
-              f"m_axi_${i}%02d", hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
+              portName, hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
               "clock", "reset", Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
             )
           )
           axiOuts.addOne(axiOut)
         }
-      }
+
+        if (interfaceCount == 1 && vitisCanConvert && nativeMuxId <= hbmIdCap) {
+          // ===== PATH 1: DIRECT PASSTHROUGH ==============================
+          // Single master on this port -> no arbitration. Strip user bits
+          // (cheap) and let Vitis upsize native->256. Native id preserved
+          // (<= 6 bits, so it survives the HBM SAXI id width untruncated).
+          exportFrom(AxiUserYanker(hbmSlave.head))
+
+        } else if (interfaceCount > 1 && uniformShape && nativeMuxId <= hbmIdCap && vitisCanConvert) {
+          // ===== PATH 2: MUX, NO ID COLLAPSE =============================
+          // Same-shape masters -> a plain Mux preserves native ids (output id
+          // = native + select bits, still <= 6). Vitis upsizes the single mux
+          // output to 256. No ProtocolConverter / Upscale / IdSerialize.
+          val muxSlaveCfg = hbmSlave.head.cfg.copy(
+            wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0
+          )
+          val mux = Module(
+            new axi4.full.components.Mux(
+              new axi4.full.components.MuxConfig(
+                axiSlaveCfg = muxSlaveCfg,
+                numSlaves   = interfaceCount
+              )
+            )
+          )
+          mux.s_axi.zip(hbmSlave).foreach { case (muxPort, slavePort) =>
+            axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> muxPort
+          }
+          exportFrom(mux.m_axi)
+
+        } else if (interfaceCount > 1 && dataWidths.length == 1 && nativeMuxId <= hbmIdCap && vitisCanConvert) {
+          // ===== PATH 2b: MUX WITH ID ZERO-EXTENSION ====================
+          // Same data width but mixed id widths. Zero-extend all interfaces
+          // to the widest id, then use a plain Mux.  This is free in
+          // hardware (just wiring) and avoids the expensive
+          // ProtocolConverter / IdSerialize path.
+          val maxWId = idWidths.max
+          println(s"[HBM:Interconnect] $portName: PATH 2b — zero-extending ids to $maxWId bits (from ${idWidths.mkString(",")})")
+          val muxSlaveCfg = hbmSlave.head.cfg.copy(
+            wId = maxWId,
+            wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0
+          )
+          val mux = Module(
+            new axi4.full.components.Mux(
+              new axi4.full.components.MuxConfig(
+                axiSlaveCfg = muxSlaveCfg,
+                numSlaves   = interfaceCount
+              )
+            )
+          )
+          mux.s_axi.zip(hbmSlave).foreach { case (muxPort, slavePort) =>
+            axi4.full.SlaveBuffer(
+              AxiIdZeroExtend(AxiUserYanker(slavePort), maxWId),
+              axi4.BufferConfig.all(8)
+            ) :=> muxPort
+          }
+          exportFrom(mux.m_axi)
+
+        } else {
+          // ===== PATH 3: FALLBACK (id collapse via ProtocolConverter) ====
+          // Mixed shapes, id-budget overflow, or a >256b server port. Must
+          // instantiate the ProtocolConverter (IdSerialize + Upscale) and
+          // collapse the id -> 2 bits. This path will NOT close timing high.
+          // Each fallback cause has its OWN fix; print only the relevant one so
+          // the message is actionable (grouping does NOT help a >256b port).
+          val (reason, fix) =
+            if (!vitisCanConvert)
+              (s"a port wider than ${vitisMaxWidth}b exceeds the Vitis kernel-AXI max (data=${dataWidths.mkString(",")})",
+               s"emit this master at <=${vitisMaxWidth}b (Vitis converts to the 256b HBM port for free); wider must be narrowed here")
+            else if (!uniformShape)
+              (s"mixed master shapes on one port (data=${dataWidths.mkString(",")}, id=${idWidths.mkString(",")})",
+               "give this port a single PE shape (the tool auto-groups same-shape PEs when ports allow), or add HBM ports")
+            else
+              (s"native mux id $nativeMuxId exceeds the $hbmIdCap-bit HBM cap",
+               "add HBM ports (fewer PEs per mux), or shrink the per-PE id width")
+          bigRedWarning(
+            s"HBM port $portName fell back to the SLOW id-collapse path",
+            Seq(
+              s"reason : $reason",
+              s"effect : instantiates IdSerialize + Upscale, collapses id -> $collapsedIdWidth bits",
+              s"fix    : $fix"
+            )
+          )
+          val outputCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = collapsedIdWidth)
+
+          // Per-slave: yank user bits, collapse/convert to `sinkCfg`, widen if needed.
+          def collapseConvert(slavePort: axi4.full.Interface, sinkCfg: axi4.Config): axi4.full.Interface = {
+            val protocolConverter = Module(
+              new axi4.full.components.ProtocolConverter(
+                new axi4.full.components.ProtocolConverterConfig(
+                  axiSlaveCfg  = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+                  axiMasterCfg = sinkCfg
+                )
+              )
+            )
+            axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
+            val protocolConverted = hbmSkidBuffer(protocolConverter.m_axi)
+            if (slavePort.cfg.wData < sinkCfg.wData) {
+              val widen_mod = Module(
+                new chext.amba.axi4.full.components.Widen(
+                  chext.amba.axi4.full.components.WidenConfig(sinkCfg)
+                )
+              )
+              connectThroughHbmSkidBuffer(protocolConverted, widen_mod.s_axi)
+              widen_mod.m_axi
+            } else {
+              protocolConverted
+            }
+          }
+
+          if (interfaceCount > 1) {
+            val mux = Module(
+              new axi4.full.components.Mux(
+                new axi4.full.components.MuxConfig(
+                  axiSlaveCfg = outputCfg,
+                  numSlaves   = interfaceCount
+                )
+              )
+            )
+            mux.s_axi.zip(hbmSlave).foreach { case (muxPort, slavePort) =>
+              connectThroughHbmSkidBuffer(collapseConvert(slavePort, muxPort.cfg), muxPort)
+            }
+            exportFrom(mux.m_axi)
+          } else {
+            exportFrom(collapseConvert(hbmSlave.head, outputCfg))
+          }
+        }
     }
   }
 }
