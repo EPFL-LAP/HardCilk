@@ -258,37 +258,24 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
     std::cout << "Managing allocation server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << std::endl;
 
     std::vector<uint64_t> addresses;
+    addresses.reserve(size);
 
-    // Check the mapServerAddressToClosureBaseAddress and read the address as int and check it if set to 0x1000000 (indicating freed continuation task which is done by the argument notifier)
-    for (auto address : taskDescriptor.mapServerAddressToClosureBaseAddress[base_address])
+    // XRT continuation BOs are device_only, so host-side bo.read() is invalid.
+    // If the preallocated pool is ever exhausted, add fresh bank-local blocks
+    // rather than trying to scan old closures for the freed marker.
+    const uint64_t entry_bytes = taskDescriptor.widthTask / 8;
+    const uint64_t max_block_entries = (256ull * 1024 * 1024) / entry_bytes;
+    uint64_t entries_remaining = size;
+    while (entries_remaining > 0)
     {
-        // read the whole memory block and check each address
-        char *data = (char *)malloc(address.second * taskDescriptor.widthTask / 8);
-        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(data), address.first, address.second * taskDescriptor.widthTask / 8);
-
-        // iterate over data and check if the value is less than 0
-        for (int i = 0; i < address.second && addresses.size() < size; i++)
-        {
-            int val = *(int *)(data + i * taskDescriptor.widthTask / 8);
-            if (val == 0x1000000)
-            {
-                // Indication of a freed closure, tagged from the ArgumentNotifier
-                addresses.push_back(address.first + i * taskDescriptor.widthTask / 8);
-            }
-        }
-    }
-
-    // check the size of the addresses if less than size allocate memory to complete it
-    if (addresses.size() < size)
-    {
-        int left_size = size - addresses.size();
-        uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(left_size * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
-        taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, left_size));
-
-        for (auto i = 0; i < left_size; i++)
-        {
-            addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor.widthTask / 8);
-        }
+        uint64_t block_entries = std::min(entries_remaining, max_block_entries);
+        uint64_t block_addr = memory_->allocateMemFPGA(
+            block_entries * entry_bytes, entry_bytes);
+        taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(
+            std::pair<uint64_t, int>(block_addr, static_cast<int>(block_entries)));
+        for (uint64_t i = 0; i < block_entries; ++i)
+            addresses.push_back(block_addr + i * entry_bytes);
+        entries_remaining -= block_entries;
     }
 
     assert(addresses.size() == size);

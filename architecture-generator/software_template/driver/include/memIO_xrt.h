@@ -91,6 +91,46 @@ struct XRTMemory : Memory{
       defaultLastBank_ = lastBank;
     }
 
+    // Clear complete HBM banks without consuming them from this allocator. Each
+    // temporary BO is released before the next bank is opened, keeping host
+    // memory use bounded while still overwriting every device byte.
+    // Physically zero whole HBM banks so a fresh run never reads stale data left
+    // by a previous run (xrt-smi reset does NOT clear HBM). The zeroing BOs are
+    // temporary and freed before returning, so they do not consume the bank for
+    // the real allocations that follow -- the zeros persist in physical HBM.
+    //
+    // IMPORTANT: do NOT allocate one full-bank (512 MB) BO and write across it.
+    // A single large `normal` BO's host mapping is not reliably backed at high
+    // offsets on this platform, so writing past the first ~tens of MB faults with
+    // SIGBUS ("Bus error"). Instead tile the bank with several small BOs (the same
+    // 64 MB size the telemetry path writes successfully), each written only at
+    // offset 0. Holding them alive together forces XRT to place them at distinct,
+    // adjacent device offsets so the whole bank is covered; they are released at
+    // the end of each bank iteration.
+    void clearHBMBankRange(int firstBank, int lastBank) {
+      if (firstBank < 0 || lastBank >= NUM_BANKS || firstBank > lastBank) {
+        throw std::runtime_error("clearHBMBankRange: invalid bank range");
+      }
+
+      static constexpr uint64_t ZERO_CHUNK_BYTES = 64ULL * 1024 * 1024;
+      static const std::vector<uint8_t> zeros(ZERO_CHUNK_BYTES, 0);
+      for (int bank = firstBank; bank <= lastBank; ++bank) {
+        std::vector<xrt::bo> tiles;
+        tiles.reserve(static_cast<size_t>(BANK_SIZE / ZERO_CHUNK_BYTES) + 1);
+        for (uint64_t offset = 0; offset < BANK_SIZE;
+             offset += ZERO_CHUNK_BYTES) {
+          uint64_t chunk = std::min<uint64_t>(ZERO_CHUNK_BYTES,
+                                              BANK_SIZE - offset);
+          xrt::bo tile(dev_, static_cast<size_t>(chunk),
+                       xrt::bo::flags::normal, bank);
+          tile.write(zeros.data(), static_cast<size_t>(chunk), 0);
+          tile.sync(XCL_BO_SYNC_BO_TO_DEVICE, static_cast<size_t>(chunk), 0);
+          tiles.push_back(std::move(tile));
+        }
+        tiles.clear(); // free this bank's tiles; physical zeros remain in HBM
+      }
+    }
+
     uint64_t allocateMemFPGAInBankRange(uint64_t size, uint64_t alignment,
                                         int firstBank, int lastBank) {
       if (size == 0) {

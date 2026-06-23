@@ -573,7 +573,29 @@ inline ApproxDenseSubReference
 runExposedApproxDenseSubReference(const UnweightedGraph &G, double epsilon)
 {
   auto t0 = std::chrono::high_resolution_clock::now();
-  const double epsilon_quantized = (double)fixedU16_16(epsilon) / 65536.0;
+  // Density is defined the same way GBBS does: degree_sum / |S| (both
+  // directions counted), with threshold (1 + epsilon) * density. This matches
+  // GBBS's WorkEfficientDensestSubgraph numerically (its target_density is the
+  // same expression), so the exposed reference density is directly comparable
+  // to the real-GBBS value instead of being 2x smaller.
+  //
+  // All arithmetic mirrors the FPGA kernel's fixed-point types exactly so the
+  // reference stays bit-faithful to the hardware (AP_TRN truncation):
+  //   density_t = ap_ufixed<64,32> (32 fractional bits)
+  //   epsilon_t = ap_ufixed<32,16>
+  const uint32_t eps_bits16 = fixedU16_16(epsilon);
+  const uint64_t one_plus_eps_q32 =
+      ((uint64_t)1 << 32) + ((uint64_t)eps_bits16 << 16);
+  auto density_q32 = [](uint64_t degree_sum, uint32_t size) -> uint64_t {
+    if (size == 0)
+      return 0;
+    return (uint64_t)(((unsigned __int128)degree_sum << 32) / size);
+  };
+  auto threshold_q32 = [&](uint64_t density_bits) -> uint64_t {
+    return (uint64_t)(((unsigned __int128)one_plus_eps_q32 * density_bits) >>
+                      32);
+  };
+
   std::vector<uint32_t> degree(G.num_vertices);
   std::vector<uint32_t> S;
   std::vector<uint8_t> in_set(G.num_vertices, 1);
@@ -586,27 +608,28 @@ runExposedApproxDenseSubReference(const UnweightedGraph &G, double epsilon)
   }
 
   bool have_best = false;
+  uint64_t best_density_bits = 0;
   while (!S.empty())
   {
     out.rounds++;
     uint64_t degree_sum = 0;
     for (uint32_t v : S)
       degree_sum += degree[v];
-    double density = (double)degree_sum / (2.0 * (double)S.size());
-    if (!have_best || density > out.best_density)
+    uint64_t density_bits = density_q32(degree_sum, (uint32_t)S.size());
+    if (!have_best || density_bits > best_density_bits)
     {
-      out.best_density = density;
+      best_density_bits = density_bits;
       out.best_set = S;
       have_best = true;
     }
-    if (density == 0.0)
+    if (density_bits == 0)
       break;
 
-    double threshold = 2.0 * (1.0 + epsilon_quantized) * density;
+    uint64_t threshold_bits = threshold_q32(density_bits);
 
     std::vector<uint32_t> R;
     for (uint32_t v : S)
-      if ((double)degree[v] < threshold)
+      if (((uint64_t)degree[v] << 32) < threshold_bits)
         R.push_back(v);
     if (R.empty())
       break;
@@ -631,6 +654,7 @@ runExposedApproxDenseSubReference(const UnweightedGraph &G, double epsilon)
         next.push_back(v);
     S.swap(next);
   }
+  out.best_density = fixedU32_32ToDouble(best_density_bits);
   out.final_length = (uint32_t)S.size();
   auto t1 = std::chrono::high_resolution_clock::now();
   out.seconds = std::chrono::duration<double>(t1 - t0).count();

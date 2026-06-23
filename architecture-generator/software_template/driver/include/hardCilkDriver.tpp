@@ -48,7 +48,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
     };
 
     // Initialize the different servers
-    for(auto taskDescriptor : descriptor.taskDescriptors){
+    for(auto &taskDescriptor : descriptor.taskDescriptors){
       
             // Log which task is being initialized
             printf("Initializing task %s\n", taskDescriptor.name.c_str());
@@ -143,17 +143,32 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             
             // Allocate memory for all the allocation servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++){
-                // First allocate memory to carry the continuation tasks
-                uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, 512);
-                uint64_t continuation_queue_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, 512);
-                
-                // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
+                const uint64_t allocator_capacity = taskDescriptor.getCapacityVirtualQueue("allocator");
+                const uint64_t continuation_entry_bytes = taskDescriptor.widthTask / 8;
+                const uint64_t max_block_bytes = 256ull * 1024 * 1024;
+                const uint64_t max_block_entries = max_block_bytes / continuation_entry_bytes;
+
+                // Continuations are indirect through this address list, so keep
+                // their backing BOs within individual HBM pseudo-channels.
                 std::vector<uint64_t> addresses;
-                for(auto i = 0; i < taskDescriptor.getCapacityVirtualQueue("allocator"); i++){
-                    uint64_t addr = continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8;
-                    addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56); // address space for the fpgaId
-                    addresses.push_back(addr);
+                addresses.reserve(allocator_capacity);
+                uint64_t entries_remaining = allocator_capacity;
+                while (entries_remaining > 0) {
+                    uint64_t block_entries = std::min(entries_remaining, max_block_entries);
+                    uint64_t block_addr = memory_->allocateMemFPGA(
+                        block_entries * continuation_entry_bytes, 512);
+                    taskDescriptor.mapServerAddressToClosureBaseAddress[*base_address].push_back(
+                        std::pair<uint64_t, int>(block_addr, static_cast<int>(block_entries)));
+                    for (uint64_t i = 0; i < block_entries; ++i) {
+                        uint64_t addr = block_addr + i * continuation_entry_bytes;
+                        addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56);
+                        addresses.push_back(addr);
+                    }
+                    entries_remaining -= block_entries;
                 }
+
+                uint64_t continuation_queue_addr = memory_->allocateMemFPGA(
+                    allocator_capacity * descriptor.widthAddress/8, 512);
 
                 // Write the addresses to the continuation queue
                 memory_->copyToDevice(continuation_queue_addr, reinterpret_cast<const uint8_t*>(addresses.data()), addresses.size() * sizeof(uint64_t));
@@ -162,12 +177,11 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 memory_->writeReg64(*base_address + alloc_server_raddr_shift, continuation_queue_addr);
                 memory_->writeReg64(*base_address + alloc_server_availableSize_shift, taskDescriptor.getCapacityVirtualQueue("allocator"));
 
-                taskDescriptor.mapServerAddressToClosureBaseAddress[*base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, taskDescriptor.getCapacityVirtualQueue("allocator")));
-
                 // Log the successful initialization information of the allocation server with indentation
                 printf("        Initialized allocation server at address 0x%lx with length 0x%lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("allocator"));
-                // Log also the start and the end of the data address continuation_tasks_holder_addr and continuation_queue_addr
-                printf("        continuation_tasks_holder_addr address start: 0x%lx, end: 0x%lx\n", continuation_tasks_holder_addr, continuation_tasks_holder_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8);
+                printf("        continuation storage: %lu bank-local block(s), %lu entries\n",
+                       taskDescriptor.mapServerAddressToClosureBaseAddress[*base_address].size(),
+                       allocator_capacity);
                 printf("        continuation_queue_addr address start: 0x%lx, end: 0x%lx\n", continuation_queue_addr, continuation_queue_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8);
             }
 

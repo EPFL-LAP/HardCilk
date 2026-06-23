@@ -22,7 +22,7 @@
       "whileLoopMain_reentry0_cont0"
     ]
   },
-  "targetFrequency": 300,
+  "targetFrequency": 100,
   "watcherConfig": {
     "hdlPath": "../hls-kernel-output/triangleCountDecoupled/watcher",
     "moduleName": "watcher",

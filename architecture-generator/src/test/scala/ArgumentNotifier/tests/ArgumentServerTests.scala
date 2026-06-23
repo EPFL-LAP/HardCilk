@@ -131,8 +131,9 @@ class ArgumentServerTests
     private val rResp = mutable.ArrayBuffer.empty[(Int, BigInt, BigInt)]
     private var rIdx = -1
     private var rConsumed = false
-    private var capAr = (false, BigInt(0))
+    private var capAr = (false, BigInt(0), BigInt(0))
     var reads = 0
+    val readAddresses = mutable.ArrayBuffer.empty[BigInt]
 
     def beforeStep(): Unit = {
       t.ar.ready.poke(true.B)
@@ -145,13 +146,18 @@ class ArgumentServerTests
         t.r.bits.data.poke(0.U); t.r.bits.resp.poke(0.U); t.r.bits.last.poke(true.B)
       }
       val arF = t.ar.valid.peek().litToBoolean
-      capAr = (arF, if (arF) t.ar.bits.id.peek().litValue else 0)
+      capAr = (arF, if (arF) t.ar.bits.id.peek().litValue else 0,
+        if (arF) t.ar.bits.addr.peek().litValue else 0)
       rConsumed = rIdx >= 0 && t.r.ready.peek().litToBoolean
     }
     def afterStep(): Unit = {
       if (rConsumed) rResp.remove(rIdx)
       for (i <- rResp.indices) rResp(i) = (math.max(0, rResp(i)._1 - 1), rResp(i)._2, rResp(i)._3)
-      if (capAr._1) { reads += 1; rResp += ((latency, capAr._2, BigInt(0xABCD))) }
+      if (capAr._1) {
+        reads += 1
+        readAddresses += capAr._3
+        rResp += ((latency, capAr._2, BigInt(0xABCD)))
+      }
     }
   }
 
@@ -284,6 +290,61 @@ class ArgumentServerTests
   it should "fan-in start=100, short read + long writeback" in {
     test(new ArgumentServer(taskWidth, counterWidth, sysAddressWidth, tagBitsShift, wId)) { dut =>
       runFanIn(dut, counterStart = 100, readLatency = 2, writeLatency = 20, injectEveryCycle = true)
+    }
+  }
+
+  // triangleCountDecoupled creates many independent counter=2 joins. Two
+  // memReader completions target each address while hundreds of other joins are
+  // active, unlike BFS's one-address fan-in. Every address must re-inject once.
+  it should "complete many interleaved two-return joins exactly once" in {
+    test(new ArgumentServer(taskWidth, counterWidth, sysAddressWidth, tagBitsShift, wId)) { dut =>
+      dut.clock.setTimeout(0)
+      val cmem = new CounterAxi(dut, readLatency = 1, writeLatency = 12,
+        writeReady = cyc => cyc % 5 != 0)
+      val tmem = new TaskAxi(dut, latency = 3)
+      val joinCount = 512
+      val addrs = (0 until joinCount).map(i => counterAddr + i * 0x40)
+      addrs.foreach(a => cmem.mem(a) = 2)
+
+      // Interleave both returns within batches while keeping many unrelated
+      // counter RMWs in flight.
+      val requests = addrs.grouped(16).flatMap { batch =>
+        batch ++ batch.reverse
+      }.toVector
+
+      dut.io.connNetwork.valid.poke(false.B)
+      for (_ <- 0 until 8) {
+        cmem.beforeStep(); tmem.beforeStep(); driveStealNetwork(dut)
+        dut.clock.step(); cmem.afterStep(); tmem.afterStep()
+      }
+
+      var injected = 0
+      var reinjected = 0
+      var cycles = 0
+      var lastProgress = 0
+      while ((injected < requests.size || reinjected < joinCount) &&
+        cycles - lastProgress < 5000 && cycles < 200000) {
+        val valid = injected < requests.size
+        dut.io.connNetwork.valid.poke(valid.B)
+        dut.io.connNetwork.bits.poke(
+          (if (valid) requests(injected) else BigInt(0)).U)
+        cmem.beforeStep(); tmem.beforeStep()
+        val fired = valid && dut.io.connNetwork.ready.peek().litToBoolean
+        val r = driveStealNetwork(dut)
+        dut.clock.step(); cmem.afterStep(); tmem.afterStep()
+        cycles += 1
+        if (fired) { injected += 1; lastProgress = cycles }
+        if (r != 0) { reinjected += r; lastProgress = cycles }
+      }
+
+      scalaAssert(injected == requests.size,
+        s"paired joins stalled after $injected/${requests.size} returns")
+      scalaAssert(reinjected == joinCount,
+        s"expected $joinCount reinjections, got $reinjected")
+      val groupedReads = tmem.readAddresses.groupBy(identity).view.mapValues(_.size).toMap
+      val bad = addrs.filter(a => groupedReads.getOrElse(a, 0) != 1)
+      scalaAssert(bad.isEmpty,
+        s"continuations not re-injected exactly once: ${bad.take(16).mkString(",")}")
     }
   }
 

@@ -1,272 +1,271 @@
-# HardCilk telemetry trace (`.bin`) format
+# HardCilk telemetry trace format
 
-This document fully specifies the binary trace emitted by the **telemetry watcher**
-in the `triangleCountDecoupled` benchmark, so a viewer can be built from scratch.
+This document specifies the on-disk/on-HBM format produced by the **watcher**
+telemetry kernel (`hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp`)
+for the `triangleCountDecoupled` benchmark. It is self-contained: a fresh implementer
+should be able to write a useful viewer from this document alone.
 
-The host driver writes the trace to
-`/tmp/triangleCountDecoupled_telemetry_<YYYYMMDD_HHMMSS>.bin` at the end of a run
-(`dumpTelemetry` in `TriangleCountDecoupledDriver.h`).
-
----
-
-## 1. What the trace is
-
-A **free-running hardware "watcher"** kernel (HLS, `ap_ctrl_none`) snapshots the
-queue handshake status of every monitored processing element (PE) and writes one
-**record** to HBM **each time any monitored bit changes** (a state-change trace,
-not a periodic sample). Each record carries a full snapshot of all PEs plus an
-absolute cycle timestamp. Between two consecutive records, every PE's state is
-unchanged — i.e. the trace is a list of edges; hold-last-value to reconstruct a
-continuous timeline.
-
-The watcher source is
-`hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp` (function
-`watcher`).
+The viewer needs to show, over time:
+- when each PE is **ACTIVE** (consuming a task),
+- when each PE is **WAITING** (idle, no incoming task),
+- when each PE is **STALLED** (a task is available but it cannot accept it),
+- per-HBM-port **read and write bandwidth** (bytes/cycle, hence bytes/s).
 
 ---
 
-## 2. File layout
+## 1. Physical layout
 
-- The file is a contiguous array of fixed-size **64-byte records**, no header, no
-  footer, no padding between records.
-- `record_count = filesize / 64`.
-- All multi-byte integers are **little-endian**.
-- Records are in **emission order** (monotonic, increasing `cycle_count`).
+The watcher is a free-running hardware block that writes fixed-size records to HBM,
+into the telemetry region that starts at device address **`0x2_0000_0000`** (HBM
+bank 16). The host reserves this region and reads it back into a `.bin` file after
+the run. The viewer consumes that `.bin`.
 
-The host already trims the file to exactly the populated records (it locates the
-first populated record and writes the contiguous populated run — see §7 on the
-`write_idx` carry-over), so every record in the file is valid.
+- The stream is a flat sequence of **256-bit (32-byte) beats**, tightly packed,
+  starting at byte offset 0 of the dumped region.
+- The number of valid beats = `write_idx` (how many the watcher emitted). The host
+  dump may contain trailing zero/stale beats beyond that; see §6 (Reading procedure).
 
----
+### Beat = two 128-bit bundles
 
-## 3. Record layout (64 bytes)
-
-| Offset | Size | Field            | Notes                                             |
-|-------:|-----:|------------------|---------------------------------------------------|
-| 0      | 16   | `cont0[0..3]`    | 4 PEs × 4 bytes — see §4                           |
-| 16     | 16   | `memReader[0..3]`| 4 PEs × 4 bytes                                   |
-| 32     | 16   | `reentry0[0..3]` | 4 PEs × 4 bytes                                   |
-| 48     | 2    | `padding`        | always 0                                          |
-| 50     | 6    | (alignment hole) | always 0 (`cycle_count` is 8-byte aligned)        |
-| 56     | 8    | `cycle_count`    | `uint64` LE — absolute cycle timestamp (see §6)   |
-
-Each **PE occupies 4 consecutive bytes**, one byte per raw AXIS handshake bit
-(the bytes are 0x00 or 0x01). Within a PE:
-
-| PE byte | Field        | Side     | Meaning (1 = true)                                  |
-|--------:|--------------|----------|-----------------------------------------------------|
-| +0      | `in_valid`   | consumer | upstream is offering a task to this PE              |
-| +1      | `in_ready`   | consumer | this PE is ready to accept on its input             |
-| +2      | `out_valid`  | producer | this PE is offering a result on its output          |
-| +3      | `out_ready`  | producer | the downstream consumer is ready to accept          |
-
-These are the **raw `TVALID`/`TREADY`** of each PE's input and output AXIS. Note
-the perspective flips between the two queues: on the **input** queue the PE is the
-*consumer* (`in_ready` is the PE's own readiness; `in_valid` comes from upstream);
-on the **output** queue the PE is the *producer* (`out_valid` is the PE's own
-output; `out_ready` comes from downstream). A **transfer** on a queue happens on
-any cycle where `valid && ready`.
-
-> Why 4 bytes/PE and 64 bytes/record (not bit-packed)? The HLS struct uses
-> `ap_uint<1>` fields; the `#pragma HLS AGGREGATE compact=bit` only packs the
-> kernel's internal register — the **AXI store to HBM uses the struct's natural
-> layout**, so each `ap_uint<1>` lands in its own byte. This 64-byte layout is
-> verified against on-device traces; do not assume the 128-bit packed form.
-
-### PE indexing
-
-12 PEs total: **4 of each of 3 task types**, in this fixed order:
-
-- `cont0[0..3]`  — `whileLoopMain_reentry0_cont0` PEs (continuation: compares
-  `A[i]`/`B[j]`, updates the match count, advances `i`/`j`).
-- `memReader[0..3]` — `memReader` PEs (read `A[i]` and `B[j]` from HBM).
-- `reentry0[0..3]` — `whileLoopMain_reentry0` PEs (loop re-entry: spawns the next
-  `memReader`/`cont0` work or writes the final result).
-
-Each PE's **input** queue is fed by its scheduler; its **output** queue feeds the
-next stage in the task graph.
-
----
-
-## 4. Bit semantics (raw AXIS handshakes)
-
-The four bytes are the **raw `TVALID`/`TREADY`** of the PE's two AXIS queues,
-sampled coherently (see §7). Everything the viewer needs is derived from them:
+Each 32-byte beat holds **two independent 128-bit "bundles"**, little-endian:
 
 ```
-# input queue (PE is the CONSUMER):
-WAITING  = !in_valid                 # nothing offered -> idle
-STALLED  =  in_valid && !in_ready    # task offered, PE can't accept it (busy/blocked)
-ACTIVE   =  in_valid &&  in_ready    # a task is being accepted THIS cycle
-consumed =  in_valid &&  in_ready    # = a transfer in (one task taken)
-
-# output queue (PE is the PRODUCER):
-pushed       = out_valid &&  out_ready   # a transfer out (one result emitted)
-out_stalled  = out_valid && !out_ready   # PE has output but downstream not ready
-out_idle     = !out_valid                # PE offering nothing
+byte  0 ..15  : slot0  (bundle, bits [127:0]   of the beat)
+byte 16 ..31  : slot1  (bundle, bits [255:128] of the beat)
 ```
 
-Unlike `empty`/`full`, `valid` and `ready` are **independent** — both being 1 is
-the *normal* "transfer" case, not an anomaly.
+Read each bundle as a little-endian 128-bit unsigned integer. The two slots are
+**independent** — decode each on its own. A beat may carry any mix of bundle types,
+including one real bundle + one `NULL` (padding).
 
 ---
 
-## 5. The three PE states the viewer must show
+## 2. Bundle = 128-bit bit-packed, tagged union
 
-Derive each PE's state **from its input handshake** (`in_valid`, `in_ready`):
+Every bundle is bit-packed (NOT byte-per-field). The low byte is the type tag:
 
-| State        | Condition                      | Meaning                                                 |
-|--------------|--------------------------------|---------------------------------------------------------|
-| **WAITING**  | `in_valid == 0`                | idle — no incoming task to work on                      |
-| **STALLED**  | `in_valid == 1 && in_ready==0` | a task is available but the PE isn't accepting it (busy)|
-| **ACTIVE**   | `in_valid == 1 && in_ready==1` | a task is being accepted this cycle (PE consuming work) |
+```
+bits [7:0]  = header (bundle type)
+```
 
-These three are exhaustive and mutually exclusive (they partition the `in_valid`/
-`in_ready` space). Each `ACTIVE` cycle is also exactly a **task-consumed** event.
+| header | type      | meaning                                              |
+|-------:|-----------|------------------------------------------------------|
+| 0      | `NULL`    | empty padding slot — **skip it**                     |
+| 1      | `STATUS`  | a PE-handshake snapshot at a single cycle            |
+| 2      | `BW_READ` sub 0  | per-port avg **read** bytes/cycle, ports 0..14   |
+| 3      | `BW_READ` sub 1  | ports 15..29                                      |
+| 4      | `BW_READ` sub 2  | ports 30..44  (only port 30 used)                |
+| 5      | `BW_WRITE` sub 0 | per-port avg **write** bytes/cycle, ports 0..14  |
+| 6      | `BW_WRITE` sub 1 | ports 15..29                                      |
+| 7      | `BW_WRITE` sub 2 | ports 30..44                                      |
+| 8      | `BW_ADDR` | a rotating per-port address sample (see §5)          |
 
-The **output** handshake distinguishes *why* / what the PE is doing downstream:
-
-- `pushed` (`out_valid && out_ready`) → a result was handed off this cycle (mark
-  task-push events; count them for throughput).
-- `out_stalled` (`out_valid && !out_ready`) → the PE produced a result but the
-  **downstream is not ready** (backpressure). A PE that is `STALLED` on input while
-  `out_stalled` is set is blocked by downstream congestion, not its own compute.
-
-Suggested rendering: one horizontal timeline per PE (12 lanes, grouped by type),
-colored WAITING / ACTIVE / STALLED, with tick marks for `pushed` events and an
-overlaid sub-track for `out_stalled` (downstream backpressure).
+All other header values are reserved; a viewer should skip unknown headers.
 
 ---
 
-## 6. Time / reconstructing a continuous timeline
+## 3. `STATUS` bundle (header = 1)
 
-- `cycle_count` is an **absolute** free-running counter that starts at FPGA
-  program/reset time and ticks **every kernel clock** (kernel clock is 100 MHz in
-  the current build → 10 ns/tick).
-- It is **not** zero at the first record: its value is however many cycles elapsed
-  between program load and the first monitored state change (typically hundreds of
-  millions — host setup time). Treat the **first record's `cycle_count` as t0** and
-  subtract it for a run-relative timeline.
-- Each record is an **edge**: the state it describes holds from this record's
-  `cycle_count` until the next record's `cycle_count`. So a PE's state at time `t`
-  is the state in the most recent record with `cycle_count <= t`.
-- Duration of a state = `next.cycle_count - this.cycle_count` cycles. The last
-  record has no successor; treat it as the end of the trace.
+A snapshot of every monitored PE's input/output queue handshake at one cycle.
 
-Pseudocode to build per-PE intervals:
+```
+bits [7:0]    = 1
+bits [55:8]   = 48 status bits  (12 PEs x 4 bits)
+bits [127:56] = cycle_count     (72-bit unsigned)
+```
+
+### cycle_count
+Free-running cycle counter **relative to the start of compute** (it begins at 0 when
+the first task is dispatched by the scheduler — see §7). Multiply by the clock period
+to get wall-clock time. At 100 MHz, 1 cycle = 10 ns.
+
+### The 48 status bits
+12 monitored PEs, 4 bits each. PE `k` occupies status bits `[k*4 +: 4]`, i.e. bundle
+bits `[8 + k*4 +: 4]`. Within a PE's 4 bits (LSB first):
+
+```
+bit 0 : in_valid   (input queue: a task is being presented to the PE)
+bit 1 : in_ready   (input queue: the PE can accept a task this cycle)
+bit 2 : out_valid  (output queue: the PE is presenting a result)
+bit 3 : out_ready  (output queue: downstream can accept the result)
+```
+
+PE index → name (current `triangleCountDecoupled` design, 4 PEs per task):
+
+| k    | task / role                          |
+|------|--------------------------------------|
+| 0..3 | `whileLoopMain_reentry0_cont0[0..3]` (continuation PEs) |
+| 4..7 | `memReader[0..3]`                    (graph memory readers) |
+| 8..11| `whileLoopMain_reentry0[0..3]`       (re-entry PEs) |
+
+### Deriving the three viewer states (from the **input** handshake)
+For each PE, per STATUS sample:
+
+```
+WAITING  : in_valid == 0                  (no incoming task)
+STALLED  : in_valid == 1 && in_ready == 0 (task available, PE can't take it)
+ACTIVE   : in_valid == 1 && in_ready == 1 (task consumed this cycle)
+```
+
+Also useful: a **task consumed** event = `in_valid && in_ready`; a **result pushed**
+event = `out_valid && out_ready`.
+
+### Timing model
+STATUS bundles are **edge-triggered**: the watcher emits one only when the 48-bit
+status vector **changes**. So a STATUS sample at `cycle_count = T` means "this state
+held from T until the next STATUS sample's cycle_count". Render each PE's state as a
+piecewise-constant timeline: hold the state from one sample's cycle to the next.
+(The very first state change after the start gate is consumed silently — see §7 — so
+the timeline effectively begins at the first emitted STATUS sample.)
+
+---
+
+## 4. `BW_READ` / `BW_WRITE` bundles (headers 2–7)
+
+Per-HBM-port average bandwidth over the most recent **128-cycle window**. Emitted once
+per window (every 128 cycles). 31 ports are covered across 3 sub-bundles of 15 ports
+each; read and write are separate bundles.
+
+```
+bits [7:0]              = header (2/3/4 = read sub 0/1/2 ; 5/6/7 = write sub 0/1/2)
+bits [8 + slot*8 +: 8]  = port (sub*15 + slot) average, for slot = 0..14  (8-bit unsigned)
+```
+
+- `sub = header - 2` for reads, `header - 5` for writes; port index = `sub*15 + slot`,
+  `slot = 0..14`.
+- Each value is the **average bytes transferred per cycle** on that port over the
+  window: it is `(total bytes in the 128-cycle window) >> 7`, saturated to 255.
+  - **bytes/s = value × clock_frequency** (e.g. value × 100e6 at 100 MHz).
+  - Reads are counted at the address phase as `(ARLEN+1) << ARSIZE` (the exact bus
+    bytes of the burst); writes are counted at the data phase as `popcount(WSTRB)`
+    (exact bytes written). A single-byte access counts as 1 byte, not a full beat.
+- Ports are the exported HBM masters `m_axi_00 .. m_axi_27` (28 compute ports today;
+  indices 28..30 are reserved and read 0). Port byte-width varies by port, but the
+  value is already in **bytes**, so no per-port width conversion is needed.
+
+Port identity (current `triangleCountDecoupled` build; informational, may change):
+`m_axi_00..15` are 32-bit ports, `m_axi_16..24` are 512-bit, `m_axi_25..26` are
+256-bit, `m_axi_27` is 64-bit. The 512-bit ports (16..24) are the graph `memReader`
+data ports and will dominate read bandwidth.
+
+---
+
+## 5. `BW_ADDR` bundle (header = 8)
+
+A rotating per-port address sample. One port per window; the port index advances each
+window so all ports are covered over time. **Reserved for future address-range
+classification** (e.g. graph vs scheduler); a basic viewer can ignore it.
+
+```
+bits [7:0]    = 8
+bits [12:8]   = port index (0..30)
+bits [32:13]  = AW address bits [39:20] (most-recent write address on that port)
+bits [52:33]  = AR address bits [39:20] (most-recent read  address on that port)
+```
+
+The 20 captured bits are AXI address bits **`addr[39:20]`** — i.e. the address with the
+low 20 bits dropped (1 MB granularity). Reconstruct an approximate byte address as
+`captured << 20`. These bits (not the top `addr[63:44]`, which are always zero because
+HBM lives at `~0x1_0000_0000`) are what actually distinguishes regions (e.g. graph at
+`0x1_0000_0000` vs scheduler at `0x1_2000_0000`). Note these are the addresses **as seen
+at the exported port**, which may be permuted by the HBM address-transform stage —
+interpret as opaque region tags for now.
+
+---
+
+## 6. Reading procedure
 
 ```python
-prev_cycle = None
-state = [None]*12          # last known state per PE
-for rec in records:        # in file order
-    if prev_cycle is not None:
-        emit_intervals(prev_cycle, rec.cycle_count, state)  # close [prev,rec)
-    state = decode_states(rec)   # 12 states from the 12 PEs
-    prev_cycle = rec.cycle_count
-```
+import struct
 
----
-
-## 7. Gotchas a viewer/author must handle
-
-1. **`write_idx` persists across runs until the FPGA is reprogrammed.** The watcher
-   is free-running; its write index is a `static` that only resets when the device
-   is reprogrammed (XRT skips reprogramming if the same xclbin is reloaded). The
-   host trims the file to the current run's contiguous populated region, so the
-   **file itself always starts at the run's first record**. For a trace that begins
-   at the very start of HBM (and to avoid any ambiguity), run `xrt-smi reset
-   --device <bdf>` before the program; then the populated run starts at index 0.
-
-2. **Coherent sampling (no skew).** All status bits pass through a single uniform
-   register stage in the hardware (one `RegNext` in `connectWatcher`, identical
-   1-cycle delay on every bit), and each queue's 2 bits are read by the watcher in
-   a single atomic access — so within a record all bits are from the **same
-   cycle**. `valid`/`ready` are independent, so any combination is legitimate
-   (e.g. `valid && ready` = a transfer). No both-empty-and-full edge case exists in
-   this representation. (The whole record is delayed a fixed 1 cycle vs the PEs;
-   irrelevant for a state timeline.)
-
-3. **Workload determines which states appear.** `STALLED` (`in_valid && !in_ready`)
-   only occurs when tasks arrive faster than a PE consumes them. In light runs
-   (e.g. size=100) PEs are supply-bound: mostly WAITING, some ACTIVE, ~0% STALLED.
-   To exercise/observe stalls and backpressure, run a saturating workload — larger
-   `size` and/or many concurrent instances (the driver's `num_instances` arg).
-
-4. **`padding` and the alignment hole (bytes 48..55) are always 0.** Don't rely on
-   them for anything; they're not part of the signal.
-
-5. **Endianness / record size are fixed** (LE, 64 B). Validate `filesize % 64 == 0`.
-
----
-
-## 8. How to generate a trace
-
-```sh
-# one-time per power cycle, for a clean trace starting at index 0:
-xrt-smi reset --device 0000:01:00.1 --force
-
-# run: <xclbin> <size> <num_instances>
-#   size          = problem size per instance
-#   num_instances = independent root tasks launched concurrently (more PE activity)
-XCL_EMULATION_MODE= \
-  ./triangleCountDecoupled_xrt triangleCountDecoupled.xclbin 100 100
-# -> prints: [telemetry] wrote <N> bundles ... to: /tmp/...telemetry_<ts>.bin
-```
-
-For dense, multi-PE traces use a large `num_instances` (e.g. 100). Each record is
-a global snapshot, so all 12 PEs are always present in every record.
-
----
-
-## 9. Reference decoder (Python)
-
-```python
-import struct, sys
-
-REC = 64
-TYPES = [("cont0", 0), ("memReader", 16), ("reentry0", 32)]
-
-def decode(path):
+def decode(path, clock_hz=100_000_000):
     data = open(path, "rb").read()
-    assert len(data) % REC == 0, "file size must be a multiple of 64"
-    out = []
-    for off in range(0, len(data), REC):
-        rec = data[off:off+REC]
-        cyc = struct.unpack_from("<Q", rec, 56)[0]
-        pes = {}
-        for name, base in TYPES:
-            for i in range(4):
-                in_valid, in_ready, out_valid, out_ready = rec[base+i*4 : base+i*4+4]
-                if not in_valid:   st = "WAITING"
-                elif not in_ready: st = "STALLED"
-                else:              st = "ACTIVE"      # == task consumed this cycle
-                pes[f"{name}[{i}]"] = dict(
-                    state=st,
-                    in_valid=in_valid, in_ready=in_ready,
-                    out_valid=out_valid, out_ready=out_ready,
-                    consumed=bool(in_valid and in_ready),
-                    pushed=bool(out_valid and out_ready),
-                    out_stalled=bool(out_valid and not out_ready))
-        out.append(dict(cycle=cyc, pes=pes))
-    return out
-
-if __name__ == "__main__":
-    recs = decode(sys.argv[1])
-    t0 = recs[0]["cycle"]
-    for r in recs[:20]:
-        busy = [k for k, v in r["pes"].items() if v["state"] != "WAITING"]
-        print(f"t+{r['cycle']-t0:>8} active/stalled: {busy}")
+    for off in range(0, len(data) - 31, 32):
+        slot0 = int.from_bytes(data[off:off+16],    "little")
+        slot1 = int.from_bytes(data[off+16:off+32], "little")
+        for bundle in (slot0, slot1):
+            header = bundle & 0xFF
+            if header == 0:                      # NULL padding
+                continue
+            elif header == 1:                    # STATUS
+                status = (bundle >> 8)  & ((1 << 48) - 1)
+                cycle  = (bundle >> 56) & ((1 << 72) - 1)
+                pes = [(status >> (k*4)) & 0xF for k in range(12)]  # 4 bits each
+                # bit0=in_valid bit1=in_ready bit2=out_valid bit3=out_ready
+            elif 2 <= header <= 7:               # BW_READ / BW_WRITE
+                is_write = header >= 5
+                sub = header - (5 if is_write else 2)
+                for slot in range(15):
+                    avg  = (bundle >> (8 + slot*8)) & 0xFF       # bytes/cycle
+                    port = sub*15 + slot
+                    # bytes_per_sec = avg * clock_hz
+            elif header == 8:                    # BW_ADDR (optional)
+                port = (bundle >> 8)  & 0x1F
+                aw   = (bundle >> 13) & ((1 << 20) - 1)
+                ar   = (bundle >> 33) & ((1 << 20) - 1)
 ```
+
+### Finding the valid region
+**If the FPGA was reset (`xrt-smi reset` / reprogram) before the run** — the normal
+workflow — then `write_idx` is 0 and the trace **starts at byte offset 0**; just read
+beats until the first all-zero beat. This is the common case.
+
+`write_idx` only resets on FPGA reset, not between host runs that share one
+programming. So if you run **without** resetting, runs are appended back-to-back (no
+clean gap) and the dump may begin with stale beats from earlier runs. As a safety net,
+the host decoder scans for the first non-zero beat and dumps the contiguous populated
+run from there; the reference host decoder (`TriangleCountDecoupledDriver.h`) is the
+source of truth. Within a run, the start gate guarantees the first STATUS beat carries
+a small `cycle_count` (it starts at 0 at compute start, not the ~hundreds-of-millions
+offset of FPGA-programming time), so a small monotonically-increasing `cycle_count` is
+a clean marker of a run's beginning.
 
 ---
 
-## 10. Source-of-truth references
+## 7. Semantics / gotchas
 
-- Watcher kernel + bundle struct: `hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp`
-- Host record mirror + readback: `TelemetryBundleHost` and `dumpTelemetry` in
-  `software/triangleCountDecoupled/include/TriangleCountDecoupledDriver.h`
-- PE→watcher tap wiring (drives the raw `TVALID`/`TREADY` taps + the uniform
-  RegNext stage): `architecture-generator/src/main/scala/HardCilk.scala`
-  (`connectWatcher`)
-- Telemetry HBM region: reserved on `HBM[16:31]` (base `0x2_0000_0000`); compute
-  uses `HBM[0:15]`.
+- **Start gate.** The watcher stays completely idle after reset and writes nothing
+  until the spawn scheduler dispatches its first task. From that instant `cycle_count`
+  and the bandwidth windows start counting from 0, so timestamps are relative to
+  compute start, not to FPGA programming (which can be hundreds of millions of cycles
+  earlier). The gate latches and only re-arms on FPGA reset; it does **not** reset
+  `write_idx` between host runs (see §6).
+- **`write_idx` / offset 0.** When the start gate opens (first task dispatch after an
+  FPGA reset), the watcher explicitly zeroes `write_idx` (the beat write pointer),
+  `cycle_count`, the window counter and the bandwidth accumulators. So after an FPGA
+  reset the trace deterministically starts at **byte offset 0**. The gate latches, so
+  repeated host runs that share one FPGA programming keep the gate open and **append**
+  (no per-run reset) — `xrt-smi reset` before a run is what gives a fresh offset-0
+  trace.
+- **Prime skip.** The very first beat the watcher would emit is consumed silently (a
+  one-time hardware-pipeline prime). At most one STATUS sample is lost, right at the
+  start.
+- **Beat packing.** Each cycle the watcher emits at most one 256-bit beat. A STATUS
+  bundle (emitted on a status change) takes slot0; bandwidth bundles fill the remaining
+  slot(s). So a beat is `{STATUS, BW}`, `{BW, BW}`, `{STATUS, NULL}`, or `{BW, NULL}`.
+  Bandwidth bundles for a window are guaranteed to be flushed within a few beats of the
+  window boundary (well inside the next 128-cycle window).
+- **Bundle order is the stream order.** Do not assume the 7 bandwidth bundles of a
+  window are contiguous or in a fixed slot; each bundle is fully self-describing via its
+  header. Reassemble per-port read/write vectors by header (read sub 0/1/2, write sub
+  0/1/2). A complete window's bandwidth = the 6 BW bundles with headers 2..7 that appear
+  together (interleaved with at most a handful of STATUS bundles).
+- **Clock.** The current HW build runs at **100 MHz**. Use the actual build clock to
+  convert cycles → time and bandwidth averages → bytes/s.
+
+---
+
+## 8. Quick reference
+
+```
+Beat   : 32 bytes = slot0 (bytes 0..15), slot1 (bytes 16..31), each a 128-bit bundle.
+Bundle : [7:0] header.
+  1 STATUS : [55:8] 48 status bits (PE k -> [8+k*4 +:4] = in_v,in_r,out_v,out_r),
+             [127:56] cycle_count (72b, since start gate).
+  2..4 BW_READ  sub 0..2 : [8+slot*8 +:8] avg read  bytes/cycle, port = sub*15+slot.
+  5..7 BW_WRITE sub 0..2 : [8+slot*8 +:8] avg write bytes/cycle, port = sub*15+slot.
+  8 BW_ADDR : [12:8] port, [32:13] AW addr[39:20], [52:33] AR addr[39:20] (<<20 = byte addr).
+  0 NULL   : skip.
+PE state (input handshake): WAITING=!in_valid, STALLED=in_valid&!in_ready, ACTIVE=in_valid&in_ready.
+bytes/s = bw_value * clock_hz.  window = 128 cycles.
+```

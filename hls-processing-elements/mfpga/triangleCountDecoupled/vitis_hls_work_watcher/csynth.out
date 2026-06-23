@@ -3,12 +3,12 @@
   **** SW Build 5069499 on May 21 2024
   **** IP Build 5075265 on Wed May 22 21:45:21 MDT 2024
   **** SharedData Build 5076995 on Wed May 22 18:29:18 MDT 2024
-  **** Start of session at: Fri Jun 19 19:53:03 2026
+  **** Start of session at: Mon Jun 22 11:17:34 2026
     ** Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
     ** Copyright 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
 
 source /alpha/tools/Xilinx/Vitis_HLS/2024.1/scripts/vitis_hls/hls.tcl -notrace
-INFO: [HLS 200-10] For user 'bradely' on host 'lap-inf133' (Linux_x86_64 version 6.8.12) on Fri Jun 19 19:53:04 CEST 2026
+INFO: [HLS 200-10] For user 'bradely' on host 'lap-inf133' (Linux_x86_64 version 6.8.12) on Mon Jun 22 11:17:35 CEST 2026
 INFO: [HLS 200-10] On os Ubuntu 24.04.3 LTS
 INFO: [HLS 200-10] In directory '/beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher'
 WARNING: [HLS 200-2053] The vitis_hls executable is deprecated. Consider using vitis-run --mode hls --tcl
@@ -33,102 +33,176 @@ INFO: [HLS 200-1510] Running: config_interface -m_axi_addr64
 INFO: [HLS 200-1510] Running: config_interface -m_axi_num_read_outstanding 32 
 INFO: [HLS 200-1510] Running: config_interface -m_axi_num_write_outstanding 32 
 INFO: [HLS 200-1510] Running: csynth_design 
-INFO: [HLS 200-111] Finished File checks and directory preparation: CPU user time: 0.02 seconds. CPU system time: 0 seconds. Elapsed time: 0.03 seconds; current allocated memory: 260.164 MB.
+INFO: [HLS 200-111] Finished File checks and directory preparation: CPU user time: 0.03 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.03 seconds; current allocated memory: 263.137 MB.
 INFO: [HLS 200-10] Analyzing design file '../memAccess.cpp' ... 
-WARNING: [HLS 207-4827] equality comparison with extraneous parentheses (../memAccess.cpp:229:17)
-INFO: [HLS 207-4186] remove extraneous parentheses around the comparison to silence this warning (../memAccess.cpp:229:17)
-INFO: [HLS 207-4187] use '=' to turn this equality comparison into an assignment (../memAccess.cpp:229:17)
-INFO: [HLS 200-111] Finished Source Code Analysis and Preprocessing: CPU user time: 1.12 seconds. CPU system time: 0.24 seconds. Elapsed time: 1.35 seconds; current allocated memory: 262.973 MB.
+WARNING: [HLS 207-4827] equality comparison with extraneous parentheses (../memAccess.cpp:341:17)
+INFO: [HLS 207-4186] remove extraneous parentheses around the comparison to silence this warning (../memAccess.cpp:341:17)
+INFO: [HLS 207-4187] use '=' to turn this equality comparison into an assignment (../memAccess.cpp:341:17)
+INFO: [HLS 200-111] Finished Source Code Analysis and Preprocessing: CPU user time: 1.25 seconds. CPU system time: 0.25 seconds. Elapsed time: 1.51 seconds; current allocated memory: 266.262 MB.
 INFO: [HLS 200-777] Using interface defaults for 'Vivado' flow target.
-INFO: [HLS 200-1995] There were 780 instructions in the design after the 'Compile/Link' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 848 instructions in the design after the 'Unroll/Inline (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 546 instructions in the design after the 'Unroll/Inline (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 546 instructions in the design after the 'Unroll/Inline (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 546 instructions in the design after the 'Unroll/Inline (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 708 instructions in the design after the 'Array/Struct (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 564 instructions in the design after the 'Array/Struct (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 1,357 instructions in the design after the 'Array/Struct (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 990 instructions in the design after the 'Array/Struct (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 876 instructions in the design after the 'Array/Struct (step 5)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 673 instructions in the design after the 'Performance (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 672 instructions in the design after the 'Performance (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 672 instructions in the design after the 'Performance (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 672 instructions in the design after the 'Performance (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 723 instructions in the design after the 'HW Transforms (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-INFO: [HLS 200-1995] There were 883 instructions in the design after the 'HW Transforms (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
-WARNING: [HLS 214-386] A depth specification is required for MAXI interface port 'mem' for cosimulation. (../memAccess.cpp:67:0)
-INFO: [HLS 214-210] Disaggregating variable 'cont0_status' (../memAccess.cpp:67:0)
-Resolution: For help on HLS 214-210 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=214-210.html
-INFO: [HLS 214-210] Disaggregating variable 'memReader_status' (../memAccess.cpp:67:0)
-Resolution: For help on HLS 214-210 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=214-210.html
-INFO: [HLS 214-210] Disaggregating variable 'reentry0_status' (../memAccess.cpp:67:0)
-Resolution: For help on HLS 214-210 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=214-210.html
-INFO: [HLS 214-291] Loop 'VITIS_LOOP_134_2' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:134:23)
-INFO: [HLS 214-291] Loop 'VITIS_LOOP_152_3' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:152:23)
-INFO: [HLS 214-291] Loop 'VITIS_LOOP_170_4' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:170:23)
-INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_134_2' (../memAccess.cpp:134:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:67:0)
-INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_152_3' (../memAccess.cpp:152:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:67:0)
-INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_170_4' (../memAccess.cpp:170:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:67:0)
-INFO: [HLS 214-248] Applying array_partition to 'cont0_status.0': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
-INFO: [HLS 214-248] Applying array_partition to 'cont0_status.1': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
-INFO: [HLS 214-248] Applying array_partition to 'memReader_status.0': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
-INFO: [HLS 214-248] Applying array_partition to 'memReader_status.1': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
-INFO: [HLS 214-248] Applying array_partition to 'reentry0_status.0': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
-INFO: [HLS 214-248] Applying array_partition to 'reentry0_status.1': Complete partitioning on dimension 1. (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_out_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'reentry0_status_in_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_out_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'memReader_status_in_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_out_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_3' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_2' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_1' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'cont0_status_in_0' with compact=bit mode in 2-bits (../memAccess.cpp:67:0)
-INFO: [HLS 214-241] Aggregating scalar variable 'currentStatus' with compact=bit mode in 128-bits (../memAccess.cpp:111:21)
-INFO: [HLS 214-241] Aggregating scalar variable 'watcher(TelemetryBundle*, unsigned long, PEStatus*, PEStatus*, PEStatus*)::lastStatus' with compact=bit mode in 128-bits (../memAccess.cpp:87:0)
-INFO: [HLS 200-111] Finished Compiling Optimization and Transform: CPU user time: 1.43 seconds. CPU system time: 0.2 seconds. Elapsed time: 6.28 seconds; current allocated memory: 272.719 MB.
-INFO: [HLS 200-111] Finished Checking Pragmas: CPU user time: 0 seconds. CPU system time: 0 seconds. Elapsed time: 0 seconds; current allocated memory: 272.719 MB.
+INFO: [HLS 200-1995] There were 3,928 instructions in the design after the 'Compile/Link' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 2,641 instructions in the design after the 'Unroll/Inline (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,665 instructions in the design after the 'Unroll/Inline (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,624 instructions in the design after the 'Unroll/Inline (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,624 instructions in the design after the 'Unroll/Inline (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,439 instructions in the design after the 'Array/Struct (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,435 instructions in the design after the 'Array/Struct (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,435 instructions in the design after the 'Array/Struct (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,435 instructions in the design after the 'Array/Struct (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,433 instructions in the design after the 'Array/Struct (step 5)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,433 instructions in the design after the 'Performance (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,433 instructions in the design after the 'Performance (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,433 instructions in the design after the 'Performance (step 3)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,433 instructions in the design after the 'Performance (step 4)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,588 instructions in the design after the 'HW Transforms (step 1)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+INFO: [HLS 200-1995] There were 1,593 instructions in the design after the 'HW Transforms (step 2)' phase of compilation. See the Design Size Report for more details: /beta/bradley/HardCilk/hls-processing-elements/mfpga/triangleCountDecoupled/vitis_hls_work_watcher/watcher_proj/solution1/syn/report/csynth_design_size.rpt
+WARNING: [HLS 214-386] A depth specification is required for MAXI interface port 'mem' for cosimulation. (../memAccess.cpp:82:0)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_133_1' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:133:21)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_152_2' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:152:27)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_180_3' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:180:23)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_188_4' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:188:23)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_196_5' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:196:23)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_212_6' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:212:20)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_235_7' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:235:25)
+INFO: [HLS 214-291] Loop 'VITIS_LOOP_241_8' is marked as complete unroll implied by the pipeline pragma (../memAccess.cpp:241:27)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_152_2' (../memAccess.cpp:152:27) in function 'watcher' completely with a factor of 31 (../memAccess.cpp:82:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_180_3' (../memAccess.cpp:180:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:82:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_188_4' (../memAccess.cpp:188:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:82:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_196_5' (../memAccess.cpp:196:23) in function 'watcher' completely with a factor of 4 (../memAccess.cpp:82:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_212_6' (../memAccess.cpp:212:20) in function 'watcher' completely with a factor of 31 (../memAccess.cpp:82:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_235_7' (../memAccess.cpp:235:25) in function 'watcher' completely with a factor of 3 (../memAccess.cpp:82:0)
+INFO: [HLS 214-186] Unrolling loop 'VITIS_LOOP_241_8' (../memAccess.cpp:241:27) in function 'watcher' completely with a factor of 15 (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to '_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20EES9_bE3bwq': Complete partitioning on dimension 1. (../memAccess.cpp:125:0)
+INFO: [HLS 214-248] Applying array_partition to '_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20EES9_bE9write_acc': Complete partitioning on dimension 1. (../memAccess.cpp:120:0)
+INFO: [HLS 214-248] Applying array_partition to '_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20EES9_bE8read_acc': Complete partitioning on dimension 1. (../memAccess.cpp:119:0)
+WARNING: [HLS 214-358] Array transformation on index using bit extension logic may lead to poor performance. Please use int or long for array index computation to benefit from optimizations. (../memAccess.cpp:304:15)
+WARNING: [HLS 214-358] Array transformation on index using bit extension logic may lead to poor performance. Please use int or long for array index computation to benefit from optimizations. (../memAccess.cpp:297:15)
+INFO: [HLS 214-248] Applying array_partition to 'cont0_status_in': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'cont0_status_out': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'memReader_status_in': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'memReader_status_out': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'reentry0_status_in': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'reentry0_status_out': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'bw_wbytes': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'bw_rbytes': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'bw_awaddr': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+INFO: [HLS 214-248] Applying array_partition to 'bw_araddr': Complete partitioning on dimension 1. (../memAccess.cpp:82:0)
+WARNING: [HLS 214-358] Array transformation on index using bit extension logic may lead to poor performance. Please use int or long for array index computation to benefit from optimizations. (../memAccess.cpp:255:31)
+WARNING: [HLS 214-187] Cannot unroll loop 'VITIS_LOOP_133_1' (../memAccess.cpp:133:21) in function 'watcher' as it has a variable trip count (../memAccess.cpp:133:21)
+INFO: [HLS 200-111] Finished Compiling Optimization and Transform: CPU user time: 2.03 seconds. CPU system time: 0.19 seconds. Elapsed time: 6.38 seconds; current allocated memory: 275.625 MB.
+INFO: [HLS 200-111] Finished Checking Pragmas: CPU user time: 0 seconds. CPU system time: 0 seconds. Elapsed time: 0 seconds; current allocated memory: 275.625 MB.
 INFO: [HLS 200-10] Starting code transformations ...
-INFO: [HLS 200-111] Finished Standard Transforms: CPU user time: 0.01 seconds. CPU system time: 0 seconds. Elapsed time: 0.02 seconds; current allocated memory: 273.723 MB.
+INFO: [HLS 200-111] Finished Standard Transforms: CPU user time: 0.05 seconds. CPU system time: 0 seconds. Elapsed time: 0.05 seconds; current allocated memory: 278.301 MB.
 INFO: [HLS 200-10] Checking synthesizability ...
-INFO: [HLS 200-111] Finished Checking Synthesizability: CPU user time: 0.02 seconds. CPU system time: 0 seconds. Elapsed time: 0.02 seconds; current allocated memory: 274.352 MB.
-INFO: [XFORM 203-11] Balancing expressions in function 'watcher' (../memAccess.cpp:61:21)...113 expression(s) balanced.
-INFO: [HLS 200-111] Finished Loop, function and other optimizations: CPU user time: 0.08 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.09 seconds; current allocated memory: 299.863 MB.
-WARNING: [XFORM 203-561] 'VITIS_LOOP_104_1' (../memAccess.cpp:104:21) in function 'watcher' is an infinite loop.
-INFO: [HLS 200-111] Finished Architecture Synthesis: CPU user time: 0.07 seconds. CPU system time: 0 seconds. Elapsed time: 0.07 seconds; current allocated memory: 299.863 MB.
+INFO: [HLS 200-111] Finished Checking Synthesizability: CPU user time: 0.04 seconds. CPU system time: 0 seconds. Elapsed time: 0.04 seconds; current allocated memory: 279.246 MB.
+INFO: [HLS 200-111] Finished Loop, function and other optimizations: CPU user time: 0.2 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.21 seconds; current allocated memory: 306.281 MB.
+WARNING: [XFORM 203-561] 'VITIS_LOOP_133_1' (../memAccess.cpp:133:21) in function 'watcher' is an infinite loop.
+INFO: [HLS 200-111] Finished Architecture Synthesis: CPU user time: 0.15 seconds. CPU system time: 0 seconds. Elapsed time: 0.15 seconds; current allocated memory: 309.926 MB.
 INFO: [HLS 200-10] Starting hardware synthesis ...
 INFO: [HLS 200-10] Synthesizing 'watcher' ...
 INFO: [HLS 200-10] ----------------------------------------------------------------
-INFO: [HLS 200-42] -- Implementing module 'watcher' 
+INFO: [HLS 200-42] -- Implementing module 'watcher_Pipeline_VITIS_LOOP_133_1' 
 INFO: [HLS 200-10] ----------------------------------------------------------------
 INFO: [SCHED 204-11] Starting scheduling ...
-INFO: [SCHED 204-61] Pipelining loop 'VITIS_LOOP_104_1'.
-WARNING: [HLS 200-880] The II Violation in module 'watcher' (loop 'VITIS_LOOP_104_1'): Unable to enforce a carried dependence constraint (II = 1, distance = 1, offset = 1) between wire read operation ('cont0_status_in_0_read_1', ../memAccess.cpp:138) on port 'cont0_status_in_0' (../memAccess.cpp:138) and wire read operation ('cont0_status_in_0_read', ../memAccess.cpp:137) on port 'cont0_status_in_0' (../memAccess.cpp:137).
-Resolution: For help on HLS 200-880 see docs.xilinx.com/access/sources/dita/topic?Doc_Version=2024.1%20English&url=ug1448-hls-guidance&resourceid=200-880.html
-INFO: [HLS 200-1470] Pipelining result : Target II = 1, Final II = 2, Depth = 12, loop 'VITIS_LOOP_104_1'
+INFO: [SCHED 204-61] Pipelining loop 'VITIS_LOOP_133_1'.
+INFO: [HLS 200-1470] Pipelining result : Target II = 1, Final II = 1, Depth = 9, loop 'VITIS_LOOP_133_1'
 INFO: [SCHED 204-11] Finished scheduling.
-INFO: [HLS 200-111] Finished Scheduling: CPU user time: 0.08 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.09 seconds; current allocated memory: 299.863 MB.
+INFO: [HLS 200-111] Finished Scheduling: CPU user time: 0.29 seconds. CPU system time: 0.02 seconds. Elapsed time: 0.3 seconds; current allocated memory: 320.793 MB.
 INFO: [BIND 205-100] Starting micro-architecture generation ...
 INFO: [BIND 205-101] Performing variable lifetime analysis.
 INFO: [BIND 205-101] Exploring resource sharing.
 INFO: [BIND 205-101] Binding ...
 INFO: [BIND 205-100] Finished micro-architecture generation.
-INFO: [HLS 200-111] Finished Binding: CPU user time: 0.02 seconds. CPU system time: 0 seconds. Elapsed time: 0.03 seconds; current allocated memory: 299.863 MB.
+INFO: [HLS 200-111] Finished Binding: CPU user time: 0.06 seconds. CPU system time: 0 seconds. Elapsed time: 0.06 seconds; current allocated memory: 320.793 MB.
+INFO: [HLS 200-10] ----------------------------------------------------------------
+INFO: [HLS 200-42] -- Implementing module 'watcher' 
+INFO: [HLS 200-10] ----------------------------------------------------------------
+INFO: [SCHED 204-11] Starting scheduling ...
+INFO: [SCHED 204-11] Finished scheduling.
+INFO: [HLS 200-111] Finished Scheduling: CPU user time: 0.07 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.08 seconds; current allocated memory: 320.793 MB.
+INFO: [BIND 205-100] Starting micro-architecture generation ...
+INFO: [BIND 205-101] Performing variable lifetime analysis.
+INFO: [BIND 205-101] Exploring resource sharing.
+INFO: [BIND 205-101] Binding ...
+INFO: [BIND 205-100] Finished micro-architecture generation.
+INFO: [HLS 200-111] Finished Binding: CPU user time: 0.02 seconds. CPU system time: 0 seconds. Elapsed time: 0.02 seconds; current allocated memory: 320.793 MB.
+INFO: [HLS 200-10] ----------------------------------------------------------------
+INFO: [HLS 200-10] -- Generating RTL for module 'watcher_Pipeline_VITIS_LOOP_133_1' 
+INFO: [HLS 200-10] ----------------------------------------------------------------
+WARNING: [RTGEN 206-101] Register 'running' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'primed' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_19' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_18' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_17' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_16' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_15' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_14' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_13' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_12' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_11' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_10' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_41' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_40' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_39' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_38' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_37' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_36' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_35' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_34' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_33' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_32' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_31' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_30' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_29' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_28' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_27' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_26' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_25' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_24' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_23' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_22' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_21' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_9' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_8' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_7' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_6' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_5' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_4' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_3' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_2' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_1' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_20' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_19' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_18' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_17' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_16' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_15' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_14' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_13' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_12' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_11' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_10' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_9' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_8' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_7' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_6' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_5' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_4' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_3' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_2' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20_1' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'p_ZZ7watcherP7ap_uintILi256EEmPS_ILi2EES3_S3_S3_S3_S3_PS_ILi8EEPS_ILi16EEPS_ILi20' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'addr_rot' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'bwq_head' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'bwq_count' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'lastStatus' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'write_idx' is power-on initialization.
+INFO: [HLS 200-1030] Apply Unified Pipeline Control on module 'watcher_Pipeline_VITIS_LOOP_133_1' pipeline 'VITIS_LOOP_133_1' pipeline type 'loop pipeline'
+INFO: [RTGEN 206-100] Generating core module 'sparsemux_17_3_128_1_1': 2 instance(s).
+INFO: [RTGEN 206-100] Generating core module 'sparsemux_63_5_20_1_1': 2 instance(s).
+INFO: [RTGEN 206-100] Finished creating RTL model for 'watcher_Pipeline_VITIS_LOOP_133_1'.
+INFO: [HLS 200-111] Finished Creating RTL model: CPU user time: 0.12 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.13 seconds; current allocated memory: 326.703 MB.
 INFO: [HLS 200-10] ----------------------------------------------------------------
 INFO: [HLS 200-10] -- Generating RTL for module 'watcher' 
 INFO: [HLS 200-10] ----------------------------------------------------------------
@@ -160,19 +234,147 @@ INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_ou
 INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_out_1' to 'ap_none'.
 INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_out_2' to 'ap_none'.
 INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/reentry0_status_out_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_4' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_5' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_6' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_7' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_8' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_9' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_10' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_11' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_12' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_13' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_14' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_15' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_16' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_17' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_18' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_19' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_20' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_21' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_22' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_23' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_24' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_25' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_26' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_27' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_28' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_29' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_wbytes_30' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_4' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_5' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_6' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_7' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_8' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_9' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_10' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_11' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_12' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_13' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_14' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_15' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_16' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_17' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_18' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_19' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_20' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_21' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_22' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_23' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_24' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_25' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_26' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_27' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_28' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_29' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_rbytes_30' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_4' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_5' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_6' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_7' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_8' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_9' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_10' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_11' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_12' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_13' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_14' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_15' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_16' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_17' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_18' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_19' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_20' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_21' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_22' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_23' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_24' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_25' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_26' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_27' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_28' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_29' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_awaddr_30' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_0' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_1' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_2' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_3' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_4' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_5' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_6' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_7' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_8' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_9' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_10' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_11' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_12' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_13' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_14' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_15' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_16' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_17' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_18' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_19' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_20' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_21' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_22' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_23' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_24' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_25' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_26' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_27' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_28' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_29' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/bw_araddr_30' to 'ap_none'.
+INFO: [RTGEN 206-500] Setting interface mode on port 'watcher/start_gate' to 'ap_none'.
 INFO: [RTGEN 206-500] Setting interface mode on function 'watcher' to 'ap_ctrl_none'.
-WARNING: [RTGEN 206-101] Register 'absolute_cycle_count' is power-on initialization.
-WARNING: [RTGEN 206-101] Register 'lastStatus' is power-on initialization.
-WARNING: [RTGEN 206-101] Register 'primed' is power-on initialization.
-WARNING: [RTGEN 206-101] Register 'write_idx' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_26' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_23' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_25' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_22' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_24' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_21' is power-on initialization.
+WARNING: [RTGEN 206-101] Register 'watcher_ap_uint_unsigned_long_ap_uint_ap_uint_ap_uint_ap_uint_ap_uint_ap_u_20' is power-on initialization.
 INFO: [RTGEN 206-100] Finished creating RTL model for 'watcher'.
-INFO: [HLS 200-111] Finished Creating RTL model: CPU user time: 0.05 seconds. CPU system time: 0 seconds. Elapsed time: 0.05 seconds; current allocated memory: 299.863 MB.
-INFO: [HLS 200-111] Finished Generating all RTL models: CPU user time: 0.13 seconds. CPU system time: 0 seconds. Elapsed time: 0.13 seconds; current allocated memory: 304.012 MB.
-INFO: [HLS 200-111] Finished Updating report files: CPU user time: 0.26 seconds. CPU system time: 0 seconds. Elapsed time: 0.27 seconds; current allocated memory: 308.758 MB.
+INFO: [HLS 200-111] Finished Creating RTL model: CPU user time: 0.25 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.27 seconds; current allocated memory: 345.414 MB.
+INFO: [HLS 200-111] Finished Generating all RTL models: CPU user time: 0.09 seconds. CPU system time: 0.01 seconds. Elapsed time: 0.1 seconds; current allocated memory: 350.609 MB.
+INFO: [HLS 200-111] Finished Updating report files: CPU user time: 1.26 seconds. CPU system time: 0.01 seconds. Elapsed time: 1.27 seconds; current allocated memory: 363.801 MB.
 INFO: [VHDL 208-304] Generating VHDL RTL for watcher.
 INFO: [VLOG 209-307] Generating Verilog RTL for watcher.
-INFO: [HLS 200-790] **** Loop Constraint Status: All loop constraints were NOT satisfied.
+INFO: [HLS 200-790] **** Loop Constraint Status: All loop constraints were satisfied.
 INFO: [HLS 200-789] **** Estimated Fmax: 411.00 MHz
-INFO: [HLS 200-2161] Finished Command csynth_design Elapsed time: 00:00:08; Allocated memory: 48.719 MB.
+INFO: [HLS 200-2161] Finished Command csynth_design Elapsed time: 00:00:10; Allocated memory: 100.664 MB.
 INFO: [HLS 200-1510] Running: close_project 
-INFO: [HLS 200-112] Total CPU user time: 4.51 seconds. Total CPU system time: 0.57 seconds. Total elapsed time: 9.62 seconds; peak allocated memory: 308.883 MB.
+INFO: [HLS 200-112] Total CPU user time: 7.14 seconds. Total CPU system time: 0.62 seconds. Total elapsed time: 11.83 seconds; peak allocated memory: 363.801 MB.

@@ -140,7 +140,27 @@ void read_vertices(void *mem, hls::stream<uint32_t> &output_vertices, sparse_edg
     output_vertices.write(STREAM_END);
 }
 
-void load_vertices(void *mem_0, void *mem_1, void *mem_2, hls::stream<uint32_t> &input_vertices, hls::stream<vertex_output> &output_vertices, sparse_edgemap_helper_args &task)
+// Carries a frontier vertex and its (already fetched) graph bulk entry from the
+// relaxed-clear stage to the distance-read stage.
+typedef struct
+{
+    uint32_t vertex;
+    addr_t neighbor_address;
+    uint64_t degree;
+} vertex_bulk;
+
+// load_vertices is split into two dataflow stages on purpose. Clearing
+// relaxed[vertex] and reading distance[vertex] live on different m_axi bundles,
+// so when they sat in one pipelined loop HLS issued them with no ordering and
+// the clear's posted write could land AFTER the distance read. A concurrent
+// neighbor relaxing this same vertex would then see relaxed[vertex] still set
+// and skip re-enqueueing it, stranding the improved distance (every FPGA
+// distance ends up >= the optimum). Splitting forces the clear to be issued in
+// stage 1, with stage 1's graph (bulk) read latency + the FIFO sitting between
+// it and the distance read in stage 2, so the clear is globally visible before
+// the read -- which is exactly the ordering the "read-after-update => no
+// re-enqueue" optimization relies on.
+void clear_relaxed_load_bulk(void *mem_graph, void *mem_relaxed, hls::stream<uint32_t> &input_vertices, hls::stream<vertex_bulk> &output_bulk, sparse_edgemap_helper_args &task)
 {
     while (true)
     {
@@ -150,15 +170,41 @@ void load_vertices(void *mem_0, void *mem_1, void *mem_2, hls::stream<uint32_t> 
         {
             break;
         }
-        vertex_output output;
-        ap_uint<128> bulk = MEM_IN(mem_0, task.graph + ((addr_t)vertex << 4), ap_uint<128>);
-        // Reset relaxed just BEFORE we read the distance
-        MEM_ARR_OUT(mem_1, task.relaxed, vertex, uint8_t, 0);
-        // TODO: Could speed this up by storing distances and relaxed in the graph, that way they could all be fetched in one pull. But, because reading neighbors should be the true bottleneck, this is not a priority
-        uint32_t distance = MEM_ARR_IN(mem_2, task.distance, vertex, uint32_t);
+        ap_uint<128> bulk = MEM_IN(mem_graph, task.graph + ((addr_t)vertex << 4), ap_uint<128>);
+        // Reset relaxed for this vertex. The distance read that the "no
+        // re-enqueue needed" rule depends on happens in the next stage, after
+        // this write has had the bulk-read + FIFO latency to commit.
+        MEM_ARR_OUT(mem_relaxed, task.relaxed, vertex, uint8_t, 0);
 
-        output.neighbor_address = bulk.range(63, 0);
-        output.degree = bulk.range(127, 64);
+        vertex_bulk out;
+        out.vertex = vertex;
+        out.neighbor_address = bulk.range(63, 0);
+        out.degree = bulk.range(127, 64);
+        output_bulk.write(out);
+    }
+    vertex_bulk sentinel;
+    sentinel.vertex = STREAM_END;
+    sentinel.neighbor_address = 0xFFFFFFFF;
+    sentinel.degree = 0;
+    output_bulk.write(sentinel);
+}
+
+void read_distance(void *mem_distance, hls::stream<vertex_bulk> &input_bulk, hls::stream<vertex_output> &output_vertices, sparse_edgemap_helper_args &task)
+{
+    while (true)
+    {
+#pragma HLS pipeline II = 1
+        vertex_bulk vb = input_bulk.read();
+        if (vb.vertex & STREAM_END)
+        {
+            break;
+        }
+        // TODO: Could speed this up by storing distances and relaxed in the graph, that way they could all be fetched in one pull. But, because reading neighbors should be the true bottleneck, this is not a priority
+        uint32_t distance = MEM_ARR_IN(mem_distance, task.distance, vb.vertex, uint32_t);
+
+        vertex_output output;
+        output.neighbor_address = vb.neighbor_address;
+        output.degree = vb.degree;
         output.distance = *((float *)&distance);
         output_vertices.write(output);
     }
@@ -402,6 +448,7 @@ void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3, v
     auto task = taskIn.read();
 
     hls::stream<uint32_t> read_vertices_out("read_vertices_out");
+    hls::stream<vertex_bulk> loaded_bulk("loaded_bulk");
     hls::stream<vertex_output> output_vertices("output_vertices");
     hls::stream<output_neighbors_type> output_neighbors("output_neighbors");
     hls::stream<closer_neighbor_type> output_closer_neighbors("output_closer_neighbors");
@@ -411,6 +458,7 @@ void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3, v
 
     // Setting deep FIFOs to mask latency and prevent lock server deadlocks
 #pragma HLS STREAM variable = read_vertices_out depth = 64
+#pragma HLS STREAM variable = loaded_bulk depth = 64
 #pragma HLS STREAM variable = output_vertices depth = 64
 #pragma HLS STREAM variable = output_neighbors depth = 256
 #pragma HLS STREAM variable = output_closer_neighbors depth = 256
@@ -424,7 +472,10 @@ void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3, v
     //   2. relaxed dedup    : test-and-set on relaxed[]  (toLock1 / fromLock1)
     //   3. frontier slot    : add-N on nextFChar         (toLock2 / fromLock2)
     read_vertices(mem_0, read_vertices_out, task);
-    load_vertices(mem_1, mem_2, mem_3, read_vertices_out, output_vertices, task);
+    // load_vertices split in two so the relaxed[] clear (stage 1) is ordered
+    // before the distance[] read (stage 2) -- see comment on the functions.
+    clear_relaxed_load_bulk(mem_1, mem_2, read_vertices_out, loaded_bulk, task);
+    read_distance(mem_3, loaded_bulk, output_vertices, task);
     read_neighbors(mem_4, output_vertices, output_neighbors, task);
     neighbor_visited_check(mem_5, output_neighbors, output_closer_neighbors, task);
     attempt_priority_write(output_closer_neighbors, pw_awaiting_response, task, toLock0);
