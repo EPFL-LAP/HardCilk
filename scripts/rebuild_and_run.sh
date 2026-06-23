@@ -83,7 +83,7 @@ default_run_args() {
       echo "${GRAPH:-/beta/bradley/Graphs/tinyGraph.txt} ${MAX_COLORS:-64} ${SEED:-1} ${WATCHDOG}"
       ;;
     triangleCountDecoupled)
-      echo "${SIZE:-100} ${WATCHDOG}"
+      echo "${SIZE:-10} ${INSTANCES:-10} ${WATCHDOG}"
       ;;
     *)
       echo "Unknown benchmark '$BENCHMARK'" >&2

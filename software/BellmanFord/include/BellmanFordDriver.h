@@ -2,8 +2,10 @@
 
 #include <GraphBenchmarkCommon.h>
 #include <benchmarks/GeneralWeightSSSP/BellmanFord/BellmanFord.h>
+#include <memIO_xrt.h> // XRTMemory + whole-HBM clear helper
 
 #include <cstddef>
+#include <cstdlib>
 #include <iomanip>
 
 struct BellmanFord_args
@@ -112,12 +114,23 @@ public:
               << " max_depth=" << (max_depth_ == 0 ? "unlimited" : std::to_string(max_depth_))
               << " format=weighted_csv(src,dst,weight)\n";
 
+    // Physically zero the full 16 GiB of HBM before staging any inputs, so a
+    // fresh run never reads stale data left in device memory by a previous run
+    // (an xrt-smi reset does NOT clear HBM). Mirrors triangleCountDecoupled's
+    // clearComputeHBM, but BellmanFord maps its masters across all 32 banks
+    // (HBM[0:31]) and has no telemetry banks to spare, so clear the whole range.
+    clearHBM();
+
     Addr edges_base = 0;
     Addr graph_base = writeWeightedCsrToHbm(memory_, G, edges_base);
     Addr distance_base =
         memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(float), 512);
+    // relaxed[] now stores, per vertex, the last round it was enqueued for (a
+    // 4-byte round stamp advanced atomically by SET_IF_GREATER), not a 1-byte
+    // flag -- so it needs sizeof(uint32_t) per vertex.
     Addr relaxed_base =
-        memory_->allocateMemFPGA((uint64_t)G.num_vertices, 512);
+        memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(uint32_t),
+                                 512);
     Addr frontier0_base =
         memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(uint32_t),
                                  512);
@@ -129,10 +142,10 @@ public:
 
     std::vector<float> init_dist(G.num_vertices,
                                  std::numeric_limits<float>::infinity());
-    std::vector<uint8_t> zeros8(G.num_vertices, 0);
+    std::vector<uint32_t> zeros_relaxed(G.num_vertices, 0);
     uint64_t zero64 = 0;
     copyVectorToDevice(memory_, distance_base, init_dist);
-    copyVectorToDevice(memory_, relaxed_base, zeros8);
+    copyVectorToDevice(memory_, relaxed_base, zeros_relaxed);
     copyBytesToDevice(memory_, nextFChar_base, &zero64, sizeof(zero64));
 
     BellmanFord_args root{};
@@ -208,6 +221,37 @@ public:
   }
 
 private:
+  bool isEmulation() const
+  {
+    const char *emuMode = std::getenv("XCL_EMULATION_MODE");
+    return emuMode != nullptr && emuMode[0] != '\0';
+  }
+
+  // Physically zero every HBM bank (banks 0-31 = 16 GiB) so a fresh run never
+  // reads stale device contents. No-op (with a warning) if the backing memory
+  // is not an XRTMemory (e.g. a software model).
+  void clearHBM()
+  {
+    // Under emulation HBM is already zero-initialized and a full clear is
+    // ruinously slow, so skip it entirely. The clear only matters on real
+    // hardware, where a previous run can leave stale device contents behind.
+    if (isEmulation())
+    {
+      std::cout << "[BellmanFord] emulation: skipping HBM clear (already 0)\n";
+      return;
+    }
+    XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
+    if (xrtMem == nullptr)
+    {
+      std::cerr << "[BellmanFord] memory is not XRTMemory; full HBM clear "
+                   "skipped\n";
+      return;
+    }
+    std::cout << "[BellmanFord] clearing 16 GiB HBM (banks 0-31)\n";
+    xrtMem->clearHBMBankRange(0, 31);
+    std::cout << "[BellmanFord] HBM clear complete\n";
+  }
+
   // Build the subgraph induced by the set of vertices reachable from `source`
   // within `max_depth` hops (unweighted BFS levels). Vertex ids and
   // num_vertices are preserved (so distance[] indexing is unchanged); only
@@ -333,7 +377,24 @@ private:
                &hardcilkDoneConditionStub, 0, 0, false);
     const auto start = std::chrono::high_resolution_clock::now();
     const auto deadline = start + std::chrono::duration<double>(watchdog_s_);
-    auto next_progress = start;
+
+    // Stall detection: if the kernel makes no observable forward progress for
+    // STALL_WINDOW seconds, bail out immediately so a hang is easy to debug
+    // (rather than waiting out the full watchdog). "Progress" is any change in
+    // the continuation's counters or in the number of finalized distances. This
+    // is a debug aid, so it is disabled in fast_mode (no per-poll reads) and
+    // relaxed heavily under emulation, where wall-clock time is meaningless.
+    const double stall_window_s = isEmulation() ? 120.0 : 1.0;
+    const auto sample_period = std::chrono::milliseconds(250);
+    auto next_sample = start;
+    auto last_change = start;
+    // Signature of the last observed progress: (counter, round, frontier_length,
+    // active, visited). Seed with a sentinel so the first sample always counts
+    // as progress and arms the stall timer from a real baseline.
+    bool have_signature = false;
+    uint32_t last_counter = 0, last_round = 0, last_frontier = 0, last_active = 0;
+    size_t last_visited = 0;
+
     uint64_t iters = 0;
     startSystem();
 
@@ -378,10 +439,42 @@ private:
       }
 
       auto now = std::chrono::high_resolution_clock::now();
-      if (!fast_mode_ && now >= next_progress)
+      if (!fast_mode_ && now >= next_sample)
       {
+        next_sample = now + sample_period;
+
+        BellmanFord_args cont{};
+        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&cont), cont_base,
+                                sizeof(cont));
+        size_t visited = countVisited(distance_base, vertex_count);
         printProgress(cont_base, distance_base, vertex_count, start);
-        next_progress = now + std::chrono::microseconds(10);
+
+        bool changed = !have_signature || cont.counter != last_counter ||
+                       cont.round != last_round ||
+                       cont.frontier_length != last_frontier ||
+                       cont.active != last_active || visited != last_visited;
+        if (changed)
+        {
+          have_signature = true;
+          last_counter = cont.counter;
+          last_round = cont.round;
+          last_frontier = cont.frontier_length;
+          last_active = cont.active;
+          last_visited = visited;
+          last_change = now;
+        }
+        else if (std::chrono::duration<double>(now - last_change).count() >=
+                 stall_window_s)
+        {
+          t_kernel_done_ = now;
+          std::cerr << "[BellmanFord] STALL: no progress for " << stall_window_s
+                    << "s (round=" << cont.round
+                    << " frontier=" << cont.frontier_length
+                    << " active=" << cont.active << " visited=" << visited
+                    << "/" << vertex_count
+                    << "). Exiting early for debug.\n";
+          return -1;
+        }
       }
       if (now > deadline)
       {

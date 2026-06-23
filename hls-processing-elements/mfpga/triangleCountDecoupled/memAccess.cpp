@@ -382,63 +382,28 @@ void whileLoopMain_exit0(
 
   argOut.write(args._cont);
 }
-
-static void memReaderLoad(
-    void *mem,
-    hls::stream<memReader_task> &taskIn,
-    hls::stream<uint32_t_arg_out> &writePackages)
-{
-#pragma HLS INLINE off
-  while (true)
-  {
-#pragma HLS PIPELINE II = 1 style = flp
-    memReader_task args = taskIn.read();
-
-    uint32_t_arg_out a0;
-    a0.addr = args._cont;
-    a0.data = MEM_ARR_IN(mem, args.mem, args.idx, int);
-    a0.size = 2;
-    a0.allow = 1;
-    writePackages.write(a0);
-  }
-}
-
-static void memReaderForwardOutputs(
-    hls::stream<uint32_t_arg_out> &writePackages,
-    hls::stream<uint64_t> &argOut,
-    hls::stream<uint32_t_arg_out> &argDataOut)
-{
-#pragma HLS INLINE off
-  while (true)
-  {
-#pragma HLS PIPELINE II = 1 style = flp
-    uint32_t_arg_out a0 = writePackages.read();
-    {
-#pragma HLS PROTOCOL floating
-      argOut.write(a0.addr);
-      argDataOut.write(a0);
-    }
-  }
-}
-
 void memReader(
     void *mem,
     hls::stream<memReader_task> &taskIn,
     hls::stream<uint64_t> &argOut,
     hls::stream<uint32_t_arg_out> &argDataOut)
 {
+
 #pragma HLS INTERFACE mode = axis port = taskIn
 #pragma HLS INTERFACE mode = axis port = argOut
-#pragma HLS INTERFACE mode = axis port = argDataOut
+#pragma HLS INTERFACE mode = axis register_mode = off port = argDataOut
 #pragma HLS INTERFACE mode = m_axi port = mem
 #pragma HLS INTERFACE ap_ctrl_none port = return
-#pragma HLS DATAFLOW
+#pragma HLS PIPELINE II = 1 style = flp
 
-  hls::stream<uint32_t_arg_out> writePackages("writePackages");
-#pragma HLS STREAM variable = writePackages depth = 16
-
-  memReaderLoad(mem, taskIn, writePackages);
-  memReaderForwardOutputs(writePackages, argOut, argDataOut);
+  memReader_task args = taskIn.read();
+  uint32_t_arg_out a0;
+  a0.addr = args._cont;
+  a0.data = MEM_ARR_IN(mem, args.mem, args.idx, int);
+  a0.size = 2;
+  a0.allow = 1;
+  argDataOut.write(a0);
+  argOut.write(args._cont);
 }
 
 void whileLoopMain(
