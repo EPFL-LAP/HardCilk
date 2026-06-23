@@ -81,6 +81,16 @@ static const addr_t VISITED_SLOT_BYTES = 1;
 #define VERTICES_PER_TASK 64
 #endif
 
+// Each peeling round runs as two barrier-separated waves so that every
+// classification decision in a round sees one frozen snapshot of D[] (BKV12 is
+// a bulk-synchronous peel). The phase flag in the task tells the orchestrator
+// and helper which wave they are running.
+enum ApproxDenseSubPhase : uint32_t
+{
+  PHASE_CLASSIFY = 0,  // read D[] (frozen), split frontier into kept / removed
+  PHASE_DECREMENT = 1, // apply removed vertices' decrements to D[] in place
+};
+
 struct ApproxDenseSub_args
 {
   uint32_t counter;
@@ -101,7 +111,9 @@ struct ApproxDenseSub_args
   addr_t best_frontier;
   density_t best_density;
   uint32_t best_length;
-  uint8_t _padding[20];
+  uint32_t phase;        // 108  PHASE_CLASSIFY / PHASE_DECREMENT
+  addr_t removed_list;   // 112  vertices removed in the current round
+  addr_t removedChar;    // 120  atomic counter for removed_list length
 };
 
 static_assert(sizeof(ApproxDenseSub_args) == 128,
@@ -119,12 +131,16 @@ struct vertex_subset_helper_args
   uint32_t round;             // 52
   uint32_t vertex_count;      // 56  total vertices in the graph
   uint32_t task_vertex_count; // 60  # vertices in THIS chunk
-  density_t threshold;        // 64  2(1+epsilon)D(S)
+  density_t threshold;        // 64  (1+epsilon)D(S)
+  uint32_t phase;             // 72  PHASE_CLASSIFY / PHASE_DECREMENT
+  uint32_t _pad0;             // 76  (align removed_list to 8 bytes)
+  addr_t removed_list;        // 80  removed-vertex buffer (write in classify,
+                              //     read in decrement)
+  addr_t removedChar;         // 88  atomic counter for removed_list length
   // The scheduler's PE-facing AXIS width and backing-queue entry size are both
-  // driven by the descriptor's widthTask, which must be a power of two. The real
-  // payload is 72 bytes; pad to 128 bytes (1024 bits) so it matches
-  // widthTask=1024 in the task descriptor.
-  uint8_t _pad[56]; // 72..127
+  // driven by the descriptor's widthTask, which must be a power of two. Pad to
+  // 128 bytes (1024 bits) so it matches widthTask=1024 in the task descriptor.
+  uint8_t _pad[32]; // 96..127
 };
 static_assert(sizeof(vertex_subset_helper_args) == 128,
               "vertex_subset_helper_args must be 1024 bits (widthTask=1024)");

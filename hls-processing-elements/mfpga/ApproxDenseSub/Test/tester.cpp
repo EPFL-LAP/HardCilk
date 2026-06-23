@@ -109,16 +109,19 @@ static bool loadUndirected(const std::string &path, Graph &G)
   return true;
 }
 
+// GBBS density definition: degree_sum / |S| (both directions counted),
+// threshold (1 + epsilon) * density. Matches the kernel's compute_density /
+// compute_threshold.
 static density_t densityFromDegreeSum(uint64_t degree_sum, uint32_t vertices)
 {
   if (vertices == 0)
     return 0;
-  return ((density_t)degree_sum) / ((density_t)vertices * 2);
+  return ((density_t)degree_sum) / ((density_t)vertices);
 }
 
 static density_t thresholdFor(density_t density, epsilon_t epsilon)
 {
-  return 2 * ((density_t)1 + (density_t)epsilon) * density;
+  return ((density_t)1 + (density_t)epsilon) * density;
 }
 
 static epsilon_t parseEpsilon(const char *text)
@@ -346,6 +349,8 @@ int main(int argc, char **argv)
   Addr frontier1_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr frontier2_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr nextFChar_base = hbm.alloc(sizeof(uint64_t));
+  Addr removed_list_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
+  Addr removedChar_base = hbm.alloc(sizeof(uint64_t));
   Addr cont_base = hbm.alloc(sizeof(ApproxDenseSub_args));
 
   for (uint32_t v = 0; v < n; v++)
@@ -372,6 +377,9 @@ int main(int argc, char **argv)
   root.best_frontier = 0;
   root.best_length = 0;
   root.best_density = 0;
+  root.phase = PHASE_CLASSIFY;
+  root.removed_list = removed_list_base;
+  root.removedChar = removedChar_base;
   std::memcpy(hbm.ptr<uint8_t>(cont_base), &root, sizeof(root));
 
   hls::stream<ApproxDenseSub_args> ads_in("ads_in");

@@ -28,182 +28,294 @@ struct PEStatus
   QueueStatus out; // PE OUTPUT queue (producer side)
 };
 
-// One PE's captured raw handshake bits (4 x 1 byte in the natural layout). From
-// these the viewer derives: empty=!valid, full=valid&&!ready, consumed=
-// in_valid&&in_ready, pushed=out_valid&&out_ready.
-struct PackedPEStatus
-{
-  ap_uint<1> in_valid;
-  ap_uint<1> in_ready;
-  ap_uint<1> out_valid;
-  ap_uint<1> out_ready;
-};
+// ====================================================================
+// Telemetry bundle format -- BIT-PACKED 128-bit words (NOT natural layout)
+// ====================================================================
+// One 256-bit AXI beat carries TWO 128-bit bundles: beat = {slot1, slot0}.
+// write_idx counts 256-bit beats (one store/cycle => II=1; the spare slot is a
+// NULL bundle the host skips). Each 128-bit bundle is [7:0] = header (type):
+//   H_NULL   (0)        empty slot, host skips
+//   H_STATUS (1)        [55:8]  = 48 PE status bits (12 PEs x 4: in_v,in_r,out_v,out_r)
+//                       [127:56]= 72-bit cycle_count (since the start gate)
+//   H_BW_R+s (2,3,4)    read  avg bytes/cycle, sub-bundle s: [127:8] = 15 x 8-bit
+//   H_BW_W+s (5,6,7)    write avg bytes/cycle, sub-bundle s: [127:8] = 15 x 8-bit
+//                       port p -> sub (p/15), slot (p%15) at bits [8 + slot*8 +: 8]
+//   H_BW_ADDR(8)        [12:8]=port idx, [32:13]=AW top20, [52:33]=AR top20 (rotating)
+// BW averages are accumulated byte-accurately and divided by the window (a
+// power-of-2 => free >>WIN_SHIFT shift, no HLS divider in the II=1 loop).
+#define MAX_HBM_PORTS 31
+#define WINDOW 128 // power of 2 => avg = total >> WIN_SHIFT
+#define WIN_SHIFT 7
+#define PORTS_PER_BW 15 // 15 x 8-bit + 8-bit header = 128 bits
+#define N_BW_SUB 3      // ceil(MAX_HBM_PORTS / PORTS_PER_BW)
+#define BWQ_DEPTH 8     // 2*N_BW_SUB + 1 (addr) = 7 bundles/window, fits 8
 
-// 128-bit payload to be written to memory
-struct TelemetryBundle
-{
-  // 48 bits of actual PE status data
-  PackedPEStatus cont0[N_whileLoopMain_reentry0_cont0]; // 16 bits
-  PackedPEStatus memReader[N_memReader];                // 16 bits
-  PackedPEStatus reentry0[N_whileLoopMain_reentry0];    // 16 bits
-
-  // 16 bits of explicit padding to ensure perfect AXI alignment
-  ap_uint<16> padding;
-
-  // 64-bit absolute cycle counter (Will practically never overflow)
-  ap_uint<64> cycle_count;
-};
+#define H_NULL 0
+#define H_STATUS 1
+#define H_BW_R 2 // 2,3,4
+#define H_BW_W 5 // 5,6,7
+#define H_BW_ADDR 8
 
 // --------------------------------------------------------
 // WATCHER KERNEL
 // --------------------------------------------------------
 
 void watcher(
-    TelemetryBundle *mem, // 128-bit aligned AXI Master pointer
-    uint64_t start_addr,  // Assuming this is a byte offset provided by the host
-    PEStatus cont0_status[N_whileLoopMain_reentry0_cont0],
-    PEStatus memReader_status[N_memReader],
-    PEStatus reentry0_status[N_whileLoopMain_reentry0])
+    ap_uint<256> *mem,   // 256-bit AXI beat = two 128-bit bundle slots {slot1,slot0}
+    uint64_t start_addr, // byte offset provided by the host
+    // Status: each queue is ONE 2-bit port {bit0=valid,bit1=ready}, read ONCE per
+    // iteration via a DIRECT volatile pointer (not a struct member). Reading a port
+    // twice (per-field) creates a loop-carried volatile dependence => II=2; reading
+    // through a direct volatile pointer keeps the read fresh (no hoist) at II=1.
+    ap_uint<2> cont0_status_in[N_whileLoopMain_reentry0_cont0],
+    ap_uint<2> cont0_status_out[N_whileLoopMain_reentry0_cont0],
+    ap_uint<2> memReader_status_in[N_memReader],
+    ap_uint<2> memReader_status_out[N_memReader],
+    ap_uint<2> reentry0_status_in[N_whileLoopMain_reentry0],
+    ap_uint<2> reentry0_status_out[N_whileLoopMain_reentry0],
+    // --- per-HBM-port bandwidth taps (already byte-accurate, computed in Chisel) ---
+    ap_uint<8> bw_wbytes[MAX_HBM_PORTS],  // write bytes this cycle (PopCount WSTRB)
+    ap_uint<16> bw_rbytes[MAX_HBM_PORTS], // read  bytes this cycle ((ARLEN+1)<<ARSIZE)
+    ap_uint<20> bw_awaddr[MAX_HBM_PORTS], // most-recent AW top-20 addr bits (tapped, future)
+    ap_uint<20> bw_araddr[MAX_HBM_PORTS], // most-recent AR top-20 addr bits (tapped, future)
+    bool start_gate)                      // first-task-dispatch from the spawn scheduler
 {
-// Memory Write Port: AXI4 Master
+// Memory Write Port: AXI4 Master (256-bit beats)
 #pragma HLS INTERFACE mode = m_axi port = mem offset = direct
 #pragma HLS INTERFACE mode = ap_none port = start_addr
 #pragma HLS INTERFACE ap_ctrl_none port = return
 
-// Shred array into discrete hardware pins
-#pragma HLS ARRAY_PARTITION variable = cont0_status complete dim = 1
-#pragma HLS DISAGGREGATE variable = cont0_status
-#pragma HLS INTERFACE mode = ap_none port = cont0_status
+// Status: one discrete 2-bit ap_none pin per queue (<prefix>_in_<i>/<prefix>_out_<i>)
+#pragma HLS ARRAY_PARTITION variable = cont0_status_in complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = cont0_status_in
+#pragma HLS ARRAY_PARTITION variable = cont0_status_out complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = cont0_status_out
+#pragma HLS ARRAY_PARTITION variable = memReader_status_in complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = memReader_status_in
+#pragma HLS ARRAY_PARTITION variable = memReader_status_out complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = memReader_status_out
+#pragma HLS ARRAY_PARTITION variable = reentry0_status_in complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = reentry0_status_in
+#pragma HLS ARRAY_PARTITION variable = reentry0_status_out complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = reentry0_status_out
 
-#pragma HLS ARRAY_PARTITION variable = memReader_status complete dim = 1
-#pragma HLS DISAGGREGATE variable = memReader_status
-#pragma HLS INTERFACE mode = ap_none port = memReader_status
+// Bandwidth + address taps: one discrete ap_none input pin per port
+#pragma HLS ARRAY_PARTITION variable = bw_wbytes complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = bw_wbytes
+#pragma HLS ARRAY_PARTITION variable = bw_rbytes complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = bw_rbytes
+#pragma HLS ARRAY_PARTITION variable = bw_awaddr complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = bw_awaddr
+#pragma HLS ARRAY_PARTITION variable = bw_araddr complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = bw_araddr
+#pragma HLS INTERFACE mode = ap_none port = start_gate
 
-#pragma HLS ARRAY_PARTITION variable = reentry0_status complete dim = 1
-#pragma HLS DISAGGREGATE variable = reentry0_status
-#pragma HLS INTERFACE mode = ap_none port = reentry0_status
+  // -------- persistent state (reset-initialized to 0 / false) --------
+  static bool running = false;       // start-gate latch
+  static bool primed = false;        // first-write prime guard (X-address avoidance)
+  static uint64_t write_idx = 0;     // counts 256-bit beats
+  static uint64_t cycle_count = 0;   // cycles since the start gate opened
+  static ap_uint<48> lastStatus = 0; // last 48 status bits (change detection)
+  static ap_uint<24> read_acc[MAX_HBM_PORTS] = {0};
+  static ap_uint<24> write_acc[MAX_HBM_PORTS] = {0};
+#pragma HLS ARRAY_PARTITION variable = read_acc complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = write_acc complete dim = 1
+  static ap_uint<8> win_cnt = 0;      // window cycle counter (0..WINDOW-1)
+  static ap_uint<5> addr_rot = 0;     // rotating port for the address sample
+  static ap_uint<128> bwq[BWQ_DEPTH]; // pending bundle queue (empty each window)
+#pragma HLS ARRAY_PARTITION variable = bwq complete dim = 1
+  static ap_uint<4> bwq_head = 0;
+  static ap_uint<4> bwq_count = 0;
 
-  // Internal states
-  static TelemetryBundle lastStatus;
-  static uint64_t write_idx = 0;
-  static uint64_t absolute_cycle_count = 0;
-  // Prime guard: the VERY FIRST state-change after reset would issue an AXI
-  // write before the m_axi write-address pipeline register has ever been loaded,
-  // driving an X (undefined) address with no aligned data. That beat is accepted
-  // on AW but never completes on W, desyncing the AW/W channels and permanently
-  // wedging the AXI write engine (so NO telemetry is ever written). Fix: consume
-  // the first detected change as a "prime" (update lastStatus, do NOT write); by
-  // the second change the address register has been loaded (it loads every loop
-  // iteration) so the address is valid. This is timing-independent -- it skips
-  // exactly one telemetry sample regardless of clock/run length.
-  static bool primed = false;
-
-  // Convert byte-address to 128-bit word index
-  uint64_t base_idx = start_addr / sizeof(TelemetryBundle);
+  // 256-bit (32-byte) beat index
+  uint64_t base_idx = start_addr / 32;
 
   while (true)
   {
 #pragma HLS pipeline II = 1
 
-    // This ticks every clock cycle and ignores pipeline backpressure
-    absolute_cycle_count++;
+    // ---- start gate: stay fully idle until the first task is dispatched, then
+    // reset all write state so the trace deterministically begins at beat 0 with
+    // cycle 0 (independent of any pre-gate static value). ----
+    if (!running)
+    {
+      if (start_gate)
+      {
+        running = true;
+        write_idx = 0;
+        cycle_count = 0;
+        win_cnt = 0;
+        bwq_head = 0;
+        bwq_count = 0;
+        addr_rot = 0;
+        primed = false;
+        for (int p = 0; p < MAX_HBM_PORTS; p++)
+        {
+#pragma HLS unroll
+          read_acc[p] = 0;
+          write_acc[p] = 0;
+        }
+      }
+      else
+        continue;
+    }
 
-    TelemetryBundle currentStatus;
+    cycle_count++;
 
-    // Force bit-level packing into 128-bit registers
-#pragma HLS AGGREGATE variable = currentStatus compact = bit
-#pragma HLS AGGREGATE variable = lastStatus compact = bit
+    // ---- volatile views: fresh read every iteration (avoids HLS hoisting) ----
+    volatile ap_uint<2> *c0in_v = cont0_status_in;
+    volatile ap_uint<2> *c0out_v = cont0_status_out;
+    volatile ap_uint<2> *mrin_v = memReader_status_in;
+    volatile ap_uint<2> *mrout_v = memReader_status_out;
+    volatile ap_uint<2> *r0in_v = reentry0_status_in;
+    volatile ap_uint<2> *r0out_v = reentry0_status_out;
+    volatile ap_uint<8> *wbytes_v = bw_wbytes;
+    volatile ap_uint<16> *rbytes_v = bw_rbytes;
+    volatile ap_uint<20> *awaddr_v = bw_awaddr;
+    volatile ap_uint<20> *araddr_v = bw_araddr;
 
-    // Clear padding explicitly to prevent uninitialized memory issues
-    currentStatus.padding = 0;
-
-    bool state_changed = false;
-
-    // Read the ap_none status ports through VOLATILE pointers so HLS performs a
-    // fresh read every iteration (without volatile HLS treats the reads as
-    // loop-invariant and hoists them into the loop preheader, sampling status
-    // exactly ONCE at startup -> state_changed never fires). Per-field SCALAR
-    // volatile reads (below) are not hoisted; an aggregate ap_uint<2> volatile
-    // read IS hoisted by HLS, which silently breaks change detection. Bit-level
-    // coherence comes from the single uniform RegNext stage in connectWatcher.
-    volatile PEStatus *cont0_v = cont0_status;
-    volatile PEStatus *memReader_v = memReader_status;
-    volatile PEStatus *reentry0_v = reentry0_status;
-
-    // Pack and Compare cont0
+    // ---- pack the 48 PE status bits: PE k at [k*4 +: 4] = {in_v,in_r,out_v,out_r} ----
+    // Each queue port is read EXACTLY ONCE (single 2-bit read) so the loop stays II=1.
+    ap_uint<48> curStatus = 0;
     for (int i = 0; i < N_whileLoopMain_reentry0_cont0; i++)
     {
 #pragma HLS unroll
-      currentStatus.cont0[i].in_valid = cont0_v[i].in.valid;
-      currentStatus.cont0[i].in_ready = cont0_v[i].in.ready;
-      currentStatus.cont0[i].out_valid = cont0_v[i].out.valid;
-      currentStatus.cont0[i].out_ready = cont0_v[i].out.ready;
-
-      if (currentStatus.cont0[i].in_valid != lastStatus.cont0[i].in_valid ||
-          currentStatus.cont0[i].in_ready != lastStatus.cont0[i].in_ready ||
-          currentStatus.cont0[i].out_valid != lastStatus.cont0[i].out_valid ||
-          currentStatus.cont0[i].out_ready != lastStatus.cont0[i].out_ready)
-      {
-        state_changed = true;
-      }
+      ap_uint<2> in_raw = c0in_v[i];
+      ap_uint<2> out_raw = c0out_v[i];
+      curStatus(i * 4 + 1, i * 4 + 0) = in_raw;
+      curStatus(i * 4 + 3, i * 4 + 2) = out_raw;
     }
-
-    // Pack and Compare memReader
     for (int i = 0; i < N_memReader; i++)
     {
 #pragma HLS unroll
-      currentStatus.memReader[i].in_valid = memReader_v[i].in.valid;
-      currentStatus.memReader[i].in_ready = memReader_v[i].in.ready;
-      currentStatus.memReader[i].out_valid = memReader_v[i].out.valid;
-      currentStatus.memReader[i].out_ready = memReader_v[i].out.ready;
-
-      if (currentStatus.memReader[i].in_valid != lastStatus.memReader[i].in_valid ||
-          currentStatus.memReader[i].in_ready != lastStatus.memReader[i].in_ready ||
-          currentStatus.memReader[i].out_valid != lastStatus.memReader[i].out_valid ||
-          currentStatus.memReader[i].out_ready != lastStatus.memReader[i].out_ready)
-      {
-        state_changed = true;
-      }
+      ap_uint<2> in_raw = mrin_v[i];
+      ap_uint<2> out_raw = mrout_v[i];
+      curStatus((4 + i) * 4 + 1, (4 + i) * 4 + 0) = in_raw;
+      curStatus((4 + i) * 4 + 3, (4 + i) * 4 + 2) = out_raw;
     }
-
-    // Pack and Compare reentry0
     for (int i = 0; i < N_whileLoopMain_reentry0; i++)
     {
 #pragma HLS unroll
-      currentStatus.reentry0[i].in_valid = reentry0_v[i].in.valid;
-      currentStatus.reentry0[i].in_ready = reentry0_v[i].in.ready;
-      currentStatus.reentry0[i].out_valid = reentry0_v[i].out.valid;
-      currentStatus.reentry0[i].out_ready = reentry0_v[i].out.ready;
+      ap_uint<2> in_raw = r0in_v[i];
+      ap_uint<2> out_raw = r0out_v[i];
+      curStatus((8 + i) * 4 + 1, (8 + i) * 4 + 0) = in_raw;
+      curStatus((8 + i) * 4 + 3, (8 + i) * 4 + 2) = out_raw;
+    }
+    bool state_changed = (curStatus != lastStatus);
 
-      if (currentStatus.reentry0[i].in_valid != lastStatus.reentry0[i].in_valid ||
-          currentStatus.reentry0[i].in_ready != lastStatus.reentry0[i].in_ready ||
-          currentStatus.reentry0[i].out_valid != lastStatus.reentry0[i].out_valid ||
-          currentStatus.reentry0[i].out_ready != lastStatus.reentry0[i].out_ready)
+    // ---- byte-accurate per-port accumulation + window averaging ----
+    bool window = (win_cnt == (WINDOW - 1));
+    ap_uint<8> avg_r[MAX_HBM_PORTS];
+    ap_uint<8> avg_w[MAX_HBM_PORTS];
+#pragma HLS ARRAY_PARTITION variable = avg_r complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = avg_w complete dim = 1
+    for (int p = 0; p < MAX_HBM_PORTS; p++)
+    {
+#pragma HLS unroll
+      ap_uint<24> r_old = read_acc[p];
+      ap_uint<24> w_old = write_acc[p];
+      ap_uint<16> r_inc = rbytes_v[p];
+      ap_uint<8> w_inc = wbytes_v[p];
+      // average over the window uses the OLD accumulator (before this cycle)
+      ap_uint<24> r_avg = r_old >> WIN_SHIFT;
+      ap_uint<24> w_avg = w_old >> WIN_SHIFT;
+      avg_r[p] = (r_avg > 255) ? (ap_uint<8>)255 : (ap_uint<8>)r_avg;
+      avg_w[p] = (w_avg > 255) ? (ap_uint<8>)255 : (ap_uint<8>)w_avg;
+      // reset to this cycle's bytes at the window boundary, else accumulate
+      read_acc[p] = window ? (ap_uint<24>)r_inc : (ap_uint<24>)(r_old + r_inc);
+      write_acc[p] = window ? (ap_uint<24>)w_inc : (ap_uint<24>)(w_old + w_inc);
+    }
+    win_cnt = window ? (ap_uint<8>)0 : (ap_uint<8>)(win_cnt + 1);
+
+    // ---- window boundary: build the 7 BW bundles into the (empty) queue ----
+    // The previous window's <=7 bundles flushed within <=7 cycles, far inside
+    // the 128-cycle window, so the queue is always empty here.
+    if (window)
+    {
+      for (int s = 0; s < N_BW_SUB; s++)
       {
-        state_changed = true;
+#pragma HLS unroll
+        ap_uint<128> rb = 0, wb = 0;
+        rb(7, 0) = H_BW_R + s;
+        wb(7, 0) = H_BW_W + s;
+        for (int k = 0; k < PORTS_PER_BW; k++)
+        {
+#pragma HLS unroll
+          int p = s * PORTS_PER_BW + k;
+          ap_uint<8> ra = (p < MAX_HBM_PORTS) ? avg_r[p] : (ap_uint<8>)0;
+          ap_uint<8> wa = (p < MAX_HBM_PORTS) ? avg_w[p] : (ap_uint<8>)0;
+          rb(8 + k * 8 + 7, 8 + k * 8) = ra;
+          wb(8 + k * 8 + 7, 8 + k * 8) = wa;
+        }
+        bwq[s] = rb;
+        bwq[N_BW_SUB + s] = wb;
       }
+      // rotating address sample bundle (keeps the tapped address ports alive)
+      ap_uint<128> ab = 0;
+      ap_uint<20> aw_sample = awaddr_v[addr_rot];
+      ap_uint<20> ar_sample = araddr_v[addr_rot];
+      ab(7, 0) = H_BW_ADDR;
+      ab(12, 8) = addr_rot;
+      ab(32, 13) = aw_sample;
+      ab(52, 33) = ar_sample;
+      bwq[2 * N_BW_SUB] = ab;
+      bwq_head = 0;
+      bwq_count = 2 * N_BW_SUB + 1; // 7
+      addr_rot = (addr_rot + 1 >= MAX_HBM_PORTS) ? (ap_uint<5>)0 : (ap_uint<5>)(addr_rot + 1);
     }
 
-    // Execute AXI Write only if the hardware state has actually changed.
-    if (state_changed)
+    // ---- prime guard: consume the first would-be write without emitting it ----
+    if (!primed)
     {
-      if (primed)
+      if (state_changed)
       {
-        // Attach the absolute timestamp right before writing
-        currentStatus.cycle_count = absolute_cycle_count;
-
-        // Standard pointer arithmetic maps directly to AXI burst/write logic
-        mem[base_idx + write_idx] = currentStatus;
-
-        write_idx++; // Increment to next 128-bit slot
-      }
-      else
-      {
-        // Consume the first change as the prime: skip the write (avoids the
-        // X-address beat that wedges the engine), just record the new state.
+        lastStatus = curStatus;
         primed = true;
       }
-      lastStatus = currentStatus;
+      continue; // do not write or drain the queue until primed
+    }
+
+    // ---- assemble one beat: slot0 = status (if changed) else BW; slot1 = BW ----
+    ap_uint<128> slot0 = 0; // header 0 = NULL
+    ap_uint<128> slot1 = 0;
+    bool wrote = false;
+    ap_uint<4> head = bwq_head;
+    ap_uint<4> cnt = bwq_count;
+
+    if (state_changed)
+    {
+      ap_uint<128> st = 0;
+      st(7, 0) = H_STATUS;
+      st(55, 8) = curStatus;
+      st(127, 56) = (ap_uint<72>)cycle_count;
+      slot0 = st;
+      wrote = true;
+      lastStatus = curStatus;
+    }
+    else if (cnt > 0)
+    {
+      slot0 = bwq[head];
+      head = head + 1;
+      cnt = cnt - 1;
+      wrote = true;
+    }
+    if (cnt > 0)
+    {
+      slot1 = bwq[head];
+      head = head + 1;
+      cnt = cnt - 1;
+      wrote = true;
+    }
+    bwq_head = head;
+    bwq_count = cnt;
+
+    if (wrote)
+    {
+      ap_uint<256> beat;
+      beat(127, 0) = slot0;
+      beat(255, 128) = slot1;
+      mem[base_idx + write_idx] = beat;
+      write_idx++;
     }
   }
 }
@@ -271,29 +383,62 @@ void whileLoopMain_exit0(
   argOut.write(args._cont);
 }
 
+static void memReaderLoad(
+    void *mem,
+    hls::stream<memReader_task> &taskIn,
+    hls::stream<uint32_t_arg_out> &writePackages)
+{
+#pragma HLS INLINE off
+  while (true)
+  {
+#pragma HLS PIPELINE II = 1 style = flp
+    memReader_task args = taskIn.read();
+
+    uint32_t_arg_out a0;
+    a0.addr = args._cont;
+    a0.data = MEM_ARR_IN(mem, args.mem, args.idx, int);
+    a0.size = 2;
+    a0.allow = 1;
+    writePackages.write(a0);
+  }
+}
+
+static void memReaderForwardOutputs(
+    hls::stream<uint32_t_arg_out> &writePackages,
+    hls::stream<uint64_t> &argOut,
+    hls::stream<uint32_t_arg_out> &argDataOut)
+{
+#pragma HLS INLINE off
+  while (true)
+  {
+#pragma HLS PIPELINE II = 1 style = flp
+    uint32_t_arg_out a0 = writePackages.read();
+    {
+#pragma HLS PROTOCOL floating
+      argOut.write(a0.addr);
+      argDataOut.write(a0);
+    }
+  }
+}
+
 void memReader(
     void *mem,
     hls::stream<memReader_task> &taskIn,
     hls::stream<uint64_t> &argOut,
     hls::stream<uint32_t_arg_out> &argDataOut)
 {
-
 #pragma HLS INTERFACE mode = axis port = taskIn
 #pragma HLS INTERFACE mode = axis port = argOut
 #pragma HLS INTERFACE mode = axis port = argDataOut
 #pragma HLS INTERFACE mode = m_axi port = mem
 #pragma HLS INTERFACE ap_ctrl_none port = return
-#pragma HLS PIPELINE II = 1 style = flp
+#pragma HLS DATAFLOW
 
-  memReader_task args = taskIn.read();
+  hls::stream<uint32_t_arg_out> writePackages("writePackages");
+#pragma HLS STREAM variable = writePackages depth = 16
 
-  argOut.write(args._cont);
-  uint32_t_arg_out a0;
-  a0.addr = args._cont;
-  a0.data = MEM_ARR_IN(mem, args.mem, args.idx, int);
-  a0.size = 2;
-  a0.allow = 1;
-  argDataOut.write(a0);
+  memReaderLoad(mem, taskIn, writePackages);
+  memReaderForwardOutputs(writePackages, argOut, argDataOut);
 }
 
 void whileLoopMain(

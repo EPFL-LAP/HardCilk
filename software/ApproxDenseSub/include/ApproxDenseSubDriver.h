@@ -26,10 +26,38 @@ struct ApproxDenseSubHost_args
   Addr best_frontier;
   uint64_t best_density_bits;
   uint32_t best_length;
-  uint8_t _padding[20];
+  uint32_t phase; // PHASE_CLASSIFY (0) / PHASE_DECREMENT (1)
+  Addr removed_list;
+  Addr removedChar;
 };
 static_assert(sizeof(ApproxDenseSubHost_args) == 128,
               "ApproxDenseSubHost_args must be 128 bytes");
+
+// Speed baseline: the *actual* GBBS WorkEfficientDensestSubgraph (BKV12), used
+// only for timing. Accuracy is still validated against the GBBS-style exposed
+// reference. Note GBBS reports density in the both-directions convention
+// (~2x the exposed reference's edges/|S| density), so its returned value is a
+// speed artifact only and is not compared for correctness.
+struct RealGbbsDenseSubTiming
+{
+  double density = 0.0;
+  double seconds = 0.0;
+};
+
+inline RealGbbsDenseSubTiming
+runRealGbbsDensestSubgraph(const UnweightedGraph &G, double epsilon)
+{
+  // Graph construction is excluded from the timer to match how the FPGA kernel
+  // and the exposed reference report algorithm time only.
+  auto gbbs_graph = buildGbbsUnweightedGraph(G);
+  auto t0 = std::chrono::high_resolution_clock::now();
+  double density = gbbs::WorkEfficientDensestSubgraph(gbbs_graph, epsilon);
+  auto t1 = std::chrono::high_resolution_clock::now();
+  RealGbbsDenseSubTiming out;
+  out.density = density;
+  out.seconds = std::chrono::duration<double>(t1 - t0).count();
+  return out;
+}
 
 class ApproxDenseSubDriver : public BenchmarkDriverBase
 {
@@ -56,6 +84,12 @@ public:
               << " rounds=" << ref.rounds
               << " final_frontier=" << ref.final_length
               << " execution time: " << ref.seconds << "s\n";
+    const double epsilon_quantized = (double)fixedU16_16(epsilon) / 65536.0;
+    RealGbbsDenseSubTiming gbbs =
+        runRealGbbsDensestSubgraph(G, epsilon_quantized);
+    std::cout << "[ApproxDenseSub-GBBS] real-GBBS execution time: "
+              << gbbs.seconds << "s density=" << gbbs.density
+              << " (both-directions convention, speed baseline only)\n";
     return 0;
   }
 
@@ -89,6 +123,10 @@ public:
         memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(uint32_t),
                                  512);
     Addr nextFChar_base = memory_->allocateMemFPGA(sizeof(uint64_t), 512);
+    Addr removed_list_base =
+        memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(uint32_t),
+                                 512);
+    Addr removedChar_base = memory_->allocateMemFPGA(sizeof(uint64_t), 512);
     Addr cont_base =
         memory_->allocateMemFPGA(sizeof(ApproxDenseSubHost_args), 512);
 
@@ -103,6 +141,7 @@ public:
     copyVectorToDevice(memory_, degree_base, degree);
     copyVectorToDevice(memory_, frontier0_base, frontier);
     copyBytesToDevice(memory_, nextFChar_base, &zero64, sizeof(zero64));
+    copyBytesToDevice(memory_, removedChar_base, &zero64, sizeof(zero64));
 
     ApproxDenseSubHost_args root{};
     root.vertex_count = G.num_vertices;
@@ -115,6 +154,9 @@ public:
     root.frontier2 = frontier2_base;
     root.nextFChar = nextFChar_base;
     root.cont = cont_base;
+    root.phase = 0; // PHASE_CLASSIFY
+    root.removed_list = removed_list_base;
+    root.removedChar = removedChar_base;
     copyBytesToDevice(memory_, cont_base, &root, sizeof(root));
 
     tuneSchedulerQueueCapacities("ApproxDenseSub", G.num_vertices);
@@ -143,9 +185,15 @@ public:
     bool density_match = std::fabs(fpga_density - ref.best_density) <= 1e-6;
     bool set_match = best_kernel == ref.best_set;
 
-    std::cout << "[ApproxDenseSub-FPGA] execution time: "
-              << std::chrono::duration<double>(t_kernel_done - t_kernel_start)
-                     .count()
+    // Speed baseline only: time the real GBBS implementation at the same
+    // (quantized) epsilon the kernel/reference use. Does not affect PASS/FAIL.
+    const double epsilon_quantized = (double)fixedU16_16(epsilon_) / 65536.0;
+    RealGbbsDenseSubTiming gbbs =
+        runRealGbbsDensestSubgraph(G, epsilon_quantized);
+    double kernel_seconds =
+        std::chrono::duration<double>(t_kernel_done - t_kernel_start).count();
+
+    std::cout << "[ApproxDenseSub-FPGA] execution time: " << kernel_seconds
               << "s\n";
     std::cout << "[ApproxDenseSub-FPGA] end-to-end time: "
               << std::chrono::duration<double>(t_result - t0).count() << "s\n";
@@ -159,6 +207,13 @@ public:
               << " rounds=" << ref.rounds
               << " final_frontier=" << ref.final_length
               << " execution time: " << ref.seconds << "s\n";
+    std::cout << "[ApproxDenseSub-GBBS] real-GBBS execution time: "
+              << gbbs.seconds << "s density=" << gbbs.density
+              << " (both-directions convention, speed baseline only)\n";
+    if (kernel_seconds > 0.0 && gbbs.seconds > 0.0)
+      std::cout << "[ApproxDenseSub] speedup FPGA vs real-GBBS: "
+                << (gbbs.seconds / kernel_seconds) << "x (kernel "
+                << kernel_seconds << "s vs GBBS " << gbbs.seconds << "s)\n";
 
     if (rc == 0 && density_match && set_match)
     {

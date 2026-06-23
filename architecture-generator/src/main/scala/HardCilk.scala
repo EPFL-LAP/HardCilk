@@ -557,14 +557,19 @@ class HardCilk(
       (mon.statusPrefix, pes.length)
     }
 
-    // Fixed AXI config matching the synthesized watcher.v gmem master: 512b data
-    // (HLS widened the 128b bundle bus), 1-bit id, 64b address, 1-bit user on every
-    // channel, full AXI4 (ARLEN=8 => axi3Compat off, qos/prot/cache/region/lock on).
-    // The platform HBM adapter does the 512->256 width step.
+    // Number of per-HBM-port bandwidth/address pin groups on the watcher (matches
+    // the kernel MAX_HBM_PORTS). The actual exported compute masters are wired below;
+    // any remaining pins are tied to 0.
+    val maxHbmPorts = 31
+
+    // Fixed AXI config matching the synthesized watcher.v gmem master: 256b data
+    // (a 256-bit beat = two 128-bit telemetry bundles), 1-bit id, 64b address, 1-bit
+    // user on every channel, full AXI4 (ARLEN=8 => axi3Compat off, qos/prot/cache/
+    // region/lock on). Must match watcher.v C_M_AXI_GMEM_DATA_WIDTH.
     val gmemCfg = axi4.Config(
       wId = 1,
       wAddr = 64,
-      wData = 512,
+      wData = 256,
       wUserAR = 1,
       wUserR = 1,
       wUserAW = 1,
@@ -583,7 +588,8 @@ class HardCilk(
         moduleName = wc.moduleName,
         gmemCfg = gmemCfg,
         addrWidth = 64,
-        monitored = monitoredCounts
+        monitored = monitoredCounts,
+        maxHbmPorts = maxHbmPorts
       )
     )
 
@@ -632,6 +638,54 @@ class HardCilk(
           RegNext(chisel3.util.Cat(inReady, inValid), 0.U(2.W))
         watcher.getPort(watcher.outPinName(mon.statusPrefix, i)) :=
           RegNext(chisel3.util.Cat(outReady, outValid), 0.U(2.W))
+      }
+    }
+
+    // --- Start gate: the watcher stays idle until the spawn scheduler dispatches its
+    // first task (the first fire of any scheduler's taskOut). This anchors the
+    // telemetry timeline to compute start instead of FPGA programming. Latched + one
+    // RegNext (same uniform delay as the status taps). All watcher-scoped: no effect
+    // on benchmarks without a watcherConfig.
+    val firstDispatch =
+      schedulerMap.values
+        .flatMap(s => s.io_export.taskOut.map(t => t.TVALID.asBool && t.TREADY.asBool))
+        .toSeq
+        .reduceOption(_ || _)
+        .getOrElse(false.B)
+    val startedLatch = RegInit(false.B)
+    when(firstDispatch) { startedLatch := true.B }
+    watcher.getPort("start_gate") := RegNext(startedLatch, false.B).asUInt
+
+    // --- Per-HBM-port bandwidth + address taps ---
+    // For each exported compute master we register, with reset-init 0 (same X-startup
+    // hazard avoidance as the status taps): the per-cycle write bytes (popcount WSTRB),
+    // the per-cycle read bytes ((ARLEN+1)<<ARSIZE of an issued burst), and the most-
+    // recent AW/AR address bits [39:20] (1 MB granularity, tapped now, used later for
+    // region stats). NB: HBM addresses live at ~0x1_0000_0000.. so the *top* 20 bits
+    // [63:44] are always zero -- bits [39:20] are the ones that actually distinguish
+    // regions (graph vs scheduler) while still covering the full 16 GB map. This
+    // only READS axiOuts (the exported masters) and never drives them, so the compute
+    // datapath is untouched. axiOuts already holds the compute masters here (the
+    // watcher's own port is appended afterwards). Pins beyond the exported count are 0.
+    val nCompute = numHbmPortExports
+    for (p <- 0 until maxHbmPorts) {
+      if (p < nCompute) {
+        val m = axiOuts(p).asFull
+        val wb = Wire(UInt(8.W))
+        wb := Mux(m.w.fire, chisel3.util.PopCount(m.w.bits.strb), 0.U)
+        watcher.getPort(watcher.wbytesPin(p)) := RegNext(wb, 0.U(8.W))
+        val rb = Wire(UInt(16.W))
+        rb := Mux(m.ar.fire, (m.ar.bits.len +& 1.U) << m.ar.bits.size, 0.U)
+        watcher.getPort(watcher.rbytesPin(p)) := RegNext(rb, 0.U(16.W))
+        watcher.getPort(watcher.awaddrPin(p)) :=
+          chisel3.util.RegEnable(m.aw.bits.addr(39, 20), 0.U(20.W), m.aw.fire)
+        watcher.getPort(watcher.araddrPin(p)) :=
+          chisel3.util.RegEnable(m.ar.bits.addr(39, 20), 0.U(20.W), m.ar.fire)
+      } else {
+        watcher.getPort(watcher.wbytesPin(p)) := 0.U
+        watcher.getPort(watcher.rbytesPin(p)) := 0.U
+        watcher.getPort(watcher.awaddrPin(p)) := 0.U
+        watcher.getPort(watcher.araddrPin(p)) := 0.U
       }
     }
 

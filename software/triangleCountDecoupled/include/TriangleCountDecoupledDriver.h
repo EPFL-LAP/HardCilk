@@ -18,38 +18,13 @@
 
 using Addr = uint64_t;
 
-// Host-side mirror of the HLS watcher's TelemetryBundle as it actually lands in
-// HBM (hls-processing-elements/.../triangleCountDecoupled/memAccess.cpp). NOTE:
-// the `compact=bit` pragma only packs the kernel's internal register -- the AXI
-// store uses the struct's NATURAL ap_uint layout, so each ap_uint<1> occupies a
-// full byte and the record is 64 bytes (NOT the 128-bit packed form). Verified
-// against on-device traces. Layout:
-//   bytes  0..15  cont0[0..3]      (4 bytes/PE)
-//   bytes 16..31  memReader[0..3]
-//   bytes 32..47  reentry0[0..3]
-//   bytes 48..49  padding (uint16, 0)
-//   bytes 50..55  alignment hole (0)   <- cycle_count is 8-byte aligned
-//   bytes 56..63  cycle_count (uint64, little-endian)
-struct __attribute__((packed)) TelemetryPEStatusHost
-{
-  uint8_t in_empty;  // 1 = input queue empty  -> PE WAITING (no incoming task)
-  uint8_t in_full;   // 1 = input task present but PE !ready -> PE STALLED
-  uint8_t out_empty; // 1 = output queue empty
-  uint8_t out_full;  // 1 = output produced but downstream !ready -> output STALLED
-};
-static_assert(sizeof(TelemetryPEStatusHost) == 4, "PE status must be 4 bytes");
-
-struct __attribute__((packed)) TelemetryBundleHost
-{
-  TelemetryPEStatusHost cont0[4];     // bytes  0..15
-  TelemetryPEStatusHost memReader[4]; // bytes 16..31
-  TelemetryPEStatusHost reentry0[4];  // bytes 32..47
-  uint16_t padding;                   // bytes 48..49
-  uint8_t _reserved[6];               // bytes 50..55 (cycle_count 8B alignment)
-  uint64_t cycle_count;               // bytes 56..63
-};
-static_assert(sizeof(TelemetryBundleHost) == 64,
-              "TelemetryBundleHost must match the 64-byte HLS watcher record");
+// The watcher emits a flat stream of 256-bit (32-byte) AXI "beats" to HBM. Each
+// beat carries two independent 128-bit bit-packed "bundles" (slot0 = bytes 0..15,
+// slot1 = bytes 16..31), each a tagged union (NULL / STATUS / BW_READ / BW_WRITE /
+// BW_ADDR). The full bit-level format is documented in HardCilk/traceViewer/format.md
+// and decoded by the viewer, not here. The host only locates the populated beat-run
+// in the readback window and dumps it verbatim for the viewer.
+static constexpr size_t TELEMETRY_BEAT_BYTES = 32;
 
 struct __attribute__((packed)) TriangleCountDecoupledRootTask
 {
@@ -109,6 +84,8 @@ public:
     const int32_t expected = referenceCount(A, B);
     const uint64_t array_bytes = (uint64_t)size_ * sizeof(int32_t);
 
+    clearComputeHBM();
+
     // The watcher is mapped to HBM[16:31], while every compute/server master is
     // mapped to HBM[0:15]. Keep telemetry and compute buffers in those disjoint
     // ranges explicitly; the default XRT allocator can otherwise spill small
@@ -116,15 +93,25 @@ public:
     Addr telemetry_base = reserveTelemetry();
     configureComputeBankRange();
 
+    // Aggregate each per-instance buffer type into one BO. Thousands of tiny BOs
+    // get distributed across every bank by XRT and leave no completely free,
+    // adjacent banks for the large continuation pool allocated by initSystem.
+    const uint64_t all_array_bytes = array_bytes * N;
+    Addr all_A_addr = allocateComputeMem(all_array_bytes, 512);
+    Addr all_B_addr = allocateComputeMem(all_array_bytes, 512);
+    Addr all_count_addr = allocateComputeMem((uint64_t)N * 2 * sizeof(int32_t),
+                                             512);
+
     // Build N non-overlapping instances and one root task each.
     std::vector<TriangleCountDecoupledRootTask> roots(N);
     std::vector<Addr> count_addrs(N), done_addrs(N);
     int32_t count_state[2] = {0, 0};
     for (uint32_t k = 0; k < N; ++k)
     {
-      Addr A_addr = allocateComputeMem(array_bytes, 512);
-      Addr B_addr = allocateComputeMem(array_bytes, 512);
-      Addr count_addr = allocateComputeMem(2 * sizeof(int32_t), 512);
+      Addr A_addr = all_A_addr + (uint64_t)k * array_bytes;
+      Addr B_addr = all_B_addr + (uint64_t)k * array_bytes;
+      Addr count_addr = all_count_addr +
+                        (uint64_t)k * 2 * sizeof(int32_t);
       Addr done_addr = count_addr + sizeof(int32_t);
       memory_->copyToDevice(A_addr, reinterpret_cast<const uint8_t *>(A.data()),
                             array_bytes);
@@ -152,11 +139,12 @@ public:
 
     // initSystem writes the whole vector to the root scheduler and sets
     // fifoTail=N, so all N root tasks are live concurrently.
+    configureInitialQueueCapacities();
     initSystem(roots, &triangleCountDecoupledDoneCondition, 0, 0, false);
 
     auto t_kernel_start = std::chrono::high_resolution_clock::now();
     startSystem();
-    int rc = pollAllDone(done_addrs, t_kernel_start);
+    int rc = pollAllDone(count_addrs, t_kernel_start);
     auto t_kernel_done = std::chrono::high_resolution_clock::now();
 
     // Validate every instance's result.
@@ -215,6 +203,7 @@ private:
   static constexpr int COMPUTE_FIRST_BANK = 0;
   static constexpr int COMPUTE_LAST_BANK = 15;
   static constexpr Addr TELEMETRY_GLOBAL_BASE = 0x200000000ULL;
+  static constexpr int INITIAL_SCHEDULER_VIRTUAL_CAPACITY = 32768;
   bool isEmulation() const
   {
     const char *emuMode = std::getenv("XCL_EMULATION_MODE");
@@ -239,6 +228,52 @@ private:
     return xrtMem->allocateMemFPGAInBankRange(size, alignment,
                                               COMPUTE_FIRST_BANK,
                                               COMPUTE_LAST_BANK);
+  }
+
+  void clearComputeHBM()
+  {
+    XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
+    if (xrtMem == nullptr)
+    {
+      std::cerr << "[triangleCountDecoupled] memory is not XRTMemory; "
+                   "full HBM clear skipped\n";
+      return;
+    }
+
+    std::cout << "[triangleCountDecoupled] clearing 8 GiB compute HBM "
+                 "(banks 0-15)\n";
+    xrtMem->clearHBMBankRange(COMPUTE_FIRST_BANK, COMPUTE_LAST_BANK);
+    std::cout << "[triangleCountDecoupled] compute HBM clear complete\n";
+  }
+
+  void configureInitialQueueCapacities()
+  {
+    // Each loop iteration allocates one continuation. Those slots are reclaimed
+    // only by host management, so provision the whole run up front to keep the
+    // timed execution independent of the management/refill path.
+    const uint64_t continuationsNeeded =
+        ((uint64_t)size_ * 2 + 1) * num_instances_;
+    const uint64_t allocatorCapacity = std::max<uint64_t>(
+        INITIAL_SCHEDULER_VIRTUAL_CAPACITY, continuationsNeeded);
+
+    for (auto &task : descriptor.taskDescriptors)
+    {
+      for (auto &config : task.sidesConfigs)
+      {
+        if (config.sideType == "scheduler")
+          config.capacityVirtualQueue = std::max(
+              config.capacityVirtualQueue,
+              INITIAL_SCHEDULER_VIRTUAL_CAPACITY);
+        else if (config.sideType == "allocator")
+          config.capacityVirtualQueue = std::max<uint64_t>(
+              config.capacityVirtualQueue, allocatorCapacity);
+      }
+    }
+    // initSystem doubles capacityVirtualQueue when allocating the backing BO.
+    std::cout << "[triangleCountDecoupled] initial scheduler backing capacity: "
+              << (2 * INITIAL_SCHEDULER_VIRTUAL_CAPACITY)
+              << " entries per server; continuation allocator capacity: "
+              << allocatorCapacity << " entries\n";
   }
 
   void configureComputeBankRange()
@@ -327,22 +362,25 @@ private:
       return;
     }
 
-    const size_t stride = sizeof(TelemetryBundleHost);
+    const size_t stride = TELEMETRY_BEAT_BYTES;
     const size_t maxBundles = buf.size() / stride;
 
-    // A record is "unwritten" iff its cycle_count is 0: the watcher stamps every
-    // emitted record with the (always non-zero) free-running cycle counter, and
-    // reserveTelemetry zero-fills the window beforehand.
+    // A beat is "unwritten" iff all 32 bytes are 0: the watcher only ever stores a
+    // beat that has at least one non-NULL bundle (a non-zero header byte), and
+    // reserveTelemetry zero-fills the window beforehand. So an all-zero beat is
+    // unwritten padding.
     auto bundleIsZero = [&](size_t idx) {
-      const TelemetryBundleHost *b = reinterpret_cast<const TelemetryBundleHost *>(
-          buf.data() + idx * stride);
-      return b->cycle_count == 0;
+      const uint8_t *b = buf.data() + idx * stride;
+      for (size_t k = 0; k < stride; ++k)
+        if (b[k] != 0)
+          return false;
+      return true;
     };
 
     // The watcher's write_idx is a static in a free-running (ap_ctrl_none) kernel,
     // so it persists across host runs until the FPGA is reprogrammed -- the
     // populated run does NOT necessarily start at offset 0. Find the first
-    // populated bundle, then count the contiguous populated run from there.
+    // populated beat, then count the contiguous populated run from there.
     size_t firstBundle = 0;
     while (firstBundle < maxBundles && bundleIsZero(firstBundle))
       ++firstBundle;
@@ -356,7 +394,7 @@ private:
                    "base+window); if this is a repeat run, reprogram the FPGA to "
                    "reset the watcher write index)\n";
     else if (firstBundle != 0)
-      std::cout << "[telemetry] populated run starts at bundle " << firstBundle
+      std::cout << "[telemetry] populated run starts at beat " << firstBundle
                 << " (byte offset " << byteOffset
                 << ") -- watcher write_idx carried over from a prior run\n";
 
@@ -376,7 +414,7 @@ private:
               static_cast<std::streamsize>(written * stride));
     out.close();
 
-    std::cout << "[telemetry] wrote " << written << " bundles ("
+    std::cout << "[telemetry] wrote " << written << " beats ("
               << (written * stride) << " bytes) to:\n"
               << "[telemetry] " << path << "\n";
   }
@@ -462,29 +500,83 @@ private:
     }
   }
 
-  // Wait until EVERY instance's continuation has fired (all done flags non-zero).
-  // Each instance writes its own done flag, so completion is detected per-instance
-  // and we stop re-reading an instance once it is done.
-  int pollAllDone(const std::vector<Addr> &done_addrs,
+  uint64_t allocatorAvailable() const
+  {
+    for (const auto &task : descriptor.taskDescriptors)
+      if (task.name == "whileLoopMain_reentry0_cont0" &&
+          !task.mgmtBaseAddresses.allocationServersBaseAddresses.empty())
+        return memory_->readReg64(
+            task.mgmtBaseAddresses.allocationServersBaseAddresses.front() +
+            alloc_server_availableSize_shift);
+    return 0;
+  }
+
+  uint64_t allocatorCapacity() const
+  {
+    for (const auto &task : descriptor.taskDescriptors)
+      if (task.name == "whileLoopMain_reentry0_cont0")
+        return task.getCapacityVirtualQueue("allocator");
+    return 0;
+  }
+
+  void dumpStallState(const std::vector<char> &done,
+                      const std::vector<int32_t> &states)
+  {
+    std::cout << "[triangleCountDecoupled-STALL] unfinished instances:";
+    size_t shown = 0;
+    for (size_t k = 0; k < done.size() && shown < 16; ++k)
+      if (!done[k])
+      {
+        std::cout << " " << k << "(count=" << states[2 * k] << ")";
+        ++shown;
+      }
+    std::cout << "\n";
+
+    for (const auto &task : descriptor.taskDescriptors)
+      for (uint64_t base : task.mgmtBaseAddresses.schedulerServersBaseAddresses)
+        std::cout << "[triangleCountDecoupled-SCHED] task=" << task.name
+                  << " base=0x" << std::hex << base << std::dec
+                  << " currLen="
+                  << memory_->readReg64(base + scheduler_server_currLen_shift)
+                  << " head="
+                  << memory_->readReg64(base + scheduler_server_fifoHeadReg_shift)
+                  << " tail="
+                  << memory_->readReg64(base + scheduler_server_fifoTailReg_shift)
+                  << " maxLen="
+                  << memory_->readReg64(base + scheduler_server_maxLength_shift)
+                  << " rpause="
+                  << memory_->readReg64(base + scheduler_server_rpause_shift)
+                  << "\n";
+  }
+
+  // Wait until every instance is done. Count/done records are contiguous, so a
+  // single DMA read replaces thousands of tiny reads on every poll.
+  int pollAllDone(const std::vector<Addr> &count_addrs,
                   std::chrono::high_resolution_clock::time_point start)
   {
     const auto deadline = start + std::chrono::duration<double>(watchdog_s_);
-    std::vector<char> done(done_addrs.size(), 0);
-    size_t remaining = done_addrs.size();
+    std::vector<char> done(count_addrs.size(), 0);
+    std::vector<int32_t> states(count_addrs.size() * 2, 0);
+    size_t remaining = count_addrs.size();
+    const uint64_t initialAllocatorCapacity = allocatorCapacity();
+    auto nextProgress = start;
+    uint64_t lastIssued = 0;
+    size_t lastRemaining = remaining;
+    unsigned stagnantReports = 0;
     uint64_t polls = 0;
     while (remaining > 0)
     {
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 
-      for (size_t k = 0; k < done_addrs.size(); ++k)
+      memory_->copyFromDevice(reinterpret_cast<uint8_t *>(states.data()),
+                              count_addrs.front(),
+                              states.size() * sizeof(int32_t));
+      for (size_t k = 0; k < count_addrs.size(); ++k)
       {
         if (done[k])
           continue;
-        int32_t d = 0;
-        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&d), done_addrs[k],
-                                sizeof(d));
-        if (d != 0)
+        if (states[2 * k + 1] != 0)
         {
           done[k] = 1;
           --remaining;
@@ -493,23 +585,64 @@ private:
 
       if (remaining == 0)
       {
-        std::cout << "[triangleCountDecoupled] all " << done_addrs.size()
+        std::cout << "[triangleCountDecoupled] all " << count_addrs.size()
                   << " instances done after " << polls << " polls"
                   << (fast_mode_ ? " (fast mode)" : "") << "\n";
         return 0;
       }
 
-      if (std::chrono::high_resolution_clock::now() > deadline)
+      auto now = std::chrono::high_resolution_clock::now();
+      if (now >= nextProgress)
+      {
+        uint64_t available = allocatorAvailable();
+        uint64_t issued = initialAllocatorCapacity > available
+                              ? initialAllocatorCapacity - available
+                              : 0;
+        double avgIterations = count_addrs.empty()
+                                   ? 0.0
+                                   : (double)issued / count_addrs.size();
+        double progress = size_ == 0
+                              ? 0.0
+                              : std::min(100.0,
+                                         100.0 * avgIterations / size_);
+        int64_t matches = 0;
+        for (size_t k = 0; k < count_addrs.size(); ++k)
+          matches += states[2 * k];
+        double avgMatches = count_addrs.empty()
+                                ? 0.0
+                                : (double)matches / count_addrs.size();
+        double elapsed = std::chrono::duration<double>(now - start).count();
+        std::cout << "[triangleCountDecoupled] progress: done="
+                  << (count_addrs.size() - remaining) << "/"
+                  << count_addrs.size() << " avg_iterations="
+                  << avgIterations << "/" << size_ << " (" << progress
+                  << "%) avg_matches=" << avgMatches
+                  << " allocator_available=" << available << "/"
+                  << initialAllocatorCapacity << " elapsed=" << elapsed
+                  << "s\n";
+        if (issued == lastIssued && remaining == lastRemaining)
+        {
+          ++stagnantReports;
+          if (stagnantReports == 2)
+            dumpStallState(done, states);
+        }
+        else
+          stagnantReports = 0;
+        lastIssued = issued;
+        lastRemaining = remaining;
+        nextProgress = now + std::chrono::seconds(1);
+      }
+
+      if (now > deadline)
       {
         std::cerr << "[triangleCountDecoupled] WATCHDOG: " << watchdog_s_
-                  << "s elapsed; " << remaining << "/" << done_addrs.size()
+                  << "s elapsed; " << remaining << "/" << count_addrs.size()
                   << " instances NOT done\n";
         return -1;
       }
 
       polls++;
-      std::this_thread::sleep_for(fast_mode_ ? std::chrono::milliseconds(10)
-                                             : std::chrono::microseconds(200));
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return 0;
   }
