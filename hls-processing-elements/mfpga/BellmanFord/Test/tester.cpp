@@ -407,7 +407,9 @@ int main(int argc, char **argv)
   }
 
   Addr distance_base = hbm.alloc((uint64_t)n * sizeof(float));
-  Addr relaxed_base = hbm.alloc((uint64_t)n * VISITED_SLOT_BYTES);
+  // relaxed[] holds a 4-byte per-vertex round stamp (last round enqueued),
+  // advanced atomically by SET_IF_GREATER -- not a 1-byte flag.
+  Addr relaxed_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr frontier0_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr frontier1_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr nextFChar_base = hbm.alloc(sizeof(uint64_t));
