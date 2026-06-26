@@ -62,7 +62,7 @@ declare -A REDUCE_AXI=(
   [ApproxDenseSub]=30
   [MaximalIndependentSet]=30
   [GraphColoring]=30
-  [triangleCountDecoupled]=30
+  [triangleCountDecoupled]=16
 )
 
 default_run_args() {
@@ -164,7 +164,10 @@ if (( START_STEP <= 4 )); then
   source /alpha/tools/Xilinx/Vivado/2024.1/settings64.sh
   source /opt/xilinx/xrt/setup.sh
   cd "$WORKSPACE_DIR"
-  make cleanall
+  # `make clean` (per-target) instead of `make cleanall`: cleanall also wipes
+  # xclbin-backups/ (it is meant as the explicit "nuke everything" target), so
+  # using it for routine rebuilds destroyed saved bitstreams. clean is enough.
+  make clean TARGET=hw_emu
   make TARGET=hw_emu
   make emconfig TARGET=hw_emu
 fi

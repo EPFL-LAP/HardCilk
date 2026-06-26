@@ -22,6 +22,12 @@ TEMP_DIR         := _x_temp.$(TARGET).$(PLATFORM_NAME)
 BUILD_DIR        := build_dir.$(TARGET).$(PLATFORM_NAME)
 BUILD_REPORT_DIR := $(CUR_DIR)/reports/_build.$(TARGET).$(PLATFORM_NAME)
 
+#--- xclbin backups ---
+# Every successful link drops a timestamped copy of the xclbin (and its matching
+# hbmports.json descriptor, for telemetry decoding) here. Survives `make clean`
+# (which only wipes the working build dirs); wiped by `make cleanall`.
+BACKUP_DIR       := $(CUR_DIR)/xclbin-backups
+
 #--- Tools ---
 VPP    := v++
 VIVADO := $(XILINX_VIVADO)/bin/vivado
@@ -83,6 +89,14 @@ $(XCLBIN): $(KERNEL_OBJS) $(SRC_CFG)
 	    --report_dir $(BUILD_REPORT_DIR)/generator_collector \
 	    $(VPP_LDFLAGS)         \
 	    -o $@ $(KERNEL_OBJS)
+	@mkdir -p $(BACKUP_DIR)
+	@ts=$$(date +%Y%m%d_%H%M%S); \
+	  cp $@ $(BACKUP_DIR)/triangleCountDecoupled.$(TARGET).$$ts.xclbin; \
+	  if [ -f $(CUR_DIR)/triangleCountDecoupled.hbmports.json ]; then \
+	    cp $(CUR_DIR)/triangleCountDecoupled.hbmports.json \
+	       $(BACKUP_DIR)/triangleCountDecoupled.$(TARGET).$$ts.hbmports.json; \
+	  fi; \
+	  echo "[backup] saved $(BACKUP_DIR)/triangleCountDecoupled.$(TARGET).$$ts.xclbin"
 
 # ============================================================
 # Emulation config (hw_emu only)
@@ -108,3 +122,4 @@ cleanall: clean
 	-rm -rf packaged_kernel_*
 	-rm -rf tmp_kernel_pack_*
 	-rm -rf emconfig.json
+	-rm -rf $(BACKUP_DIR)

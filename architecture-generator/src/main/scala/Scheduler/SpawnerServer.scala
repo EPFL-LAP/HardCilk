@@ -128,8 +128,25 @@ class SpawnerServer(
   private val fifoHeadReg = RegInit(0.U(64.W))
   private val currLen = RegInit(0.U(64.W))
   private val procInterrupt = RegInit(0.U(64.W))
-  private val addrShift = RegInit((log2Ceil(taskWidth / 8)).U)  
-  
+  private val addrShift = RegInit((log2Ceil(taskWidth / 8)).U)
+
+  // AXI4 forbids an INCR burst from crossing a 4KB address boundary. The spawner
+  // ring has (taskWidth/8) B slots and bursts up to queueDepth beats, so a burst
+  // starting within (queueDepth-1) slots of a 4KB line would straddle it -> the
+  // HBM/smartconnect mishandles the post-boundary beats and reads/writes the
+  // WRONG ring slots (stale/lost spawned tasks; only bites once bursts are long,
+  // i.e. at large sizes). Cap the burst at the next 4KB line AND the ring end;
+  // the remaining queue items are handled by the next transaction, which resumes
+  // from the advanced pointer. byteAddr is the ABSOLUTE device address so the
+  // boundary is in device space; the result is >= 1 (never a zero-length burst).
+  private def capBurstBeats(requested: UInt, ptr: UInt): UInt = {
+    val slotsToFifoEnd = maxLength - ptr
+    val byteAddr       = rAddr + (ptr << addrShift)
+    val slotsToPageEnd = (4096.U(13.W) - byteAddr(11, 0)) >> addrShift
+    val afterFifoCap   = Mux(slotsToFifoEnd < requested, slotsToFifoEnd, requested)
+    Mux(slotsToPageEnd < afterFifoCap, slotsToPageEnd, afterFifoCap)
+  }
+
   regBlock.base(0x00)
   regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
   regBlock.reg(rAddr, read = true, write = true, desc = "Base address of virtual FIFO")
@@ -164,15 +181,16 @@ class SpawnerServer(
       io.m_axi.asFull.aw.valid := true.B
       io.m_axi.asFull.aw.bits.addr := rAddr + (fifoTailReg << addrShift)
       
-      writeTasksCounterWriting := queue_write.io.count
-      writeTasksCounterBvalid := queue_write.io.count
+      // requested = min(available, queueDepth), then capped at 4KB + ring end.
+      // The W phase, b-side fifoTail advance and currLen update all use this same
+      // capped count, so a split leaves the remainder in queue_write for the next
+      // transaction (which re-issues from the advanced fifoTailReg).
+      val wRequested = Mux(queue_write.io.count < queueDepth.U, queue_write.io.count, queueDepth.U)
+      val wBurst     = capBurstBeats(wRequested, fifoTailReg)
+      writeTasksCounterWriting := wBurst
+      writeTasksCounterBvalid := wBurst
 
-      io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
-      when(queue_write.io.count  < queueDepth.U){
-        io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
-      }.otherwise{
-        io.m_axi.asFull.aw.bits.len := (queueDepth.U) - 1.U
-      }
+      io.m_axi.asFull.aw.bits.len := wBurst - 1.U
 
       when(io.m_axi.asFull.aw.ready){
         writeAddressDone := true.B
@@ -210,11 +228,10 @@ class SpawnerServer(
       io.m_axi.asFull.ar.bits.addr := rAddr + (fifoHeadReg << addrShift)
 
 
-      when(currLen < queueDepth.U){
-        io.m_axi.asFull.ar.bits.len := currLen - 1.U
-      }.otherwise{
-        io.m_axi.asFull.ar.bits.len := (queueDepth.U) - 1.U
-      }
+      // A capped read simply fetches fewer this round; fifoHeadReg advances per
+      // beat and the next read resumes from the now boundary-aligned head.
+      val rRequested = Mux(currLen < queueDepth.U, currLen, queueDepth.U)
+      io.m_axi.asFull.ar.bits.len := capBurstBeats(rRequested, fifoHeadReg) - 1.U
 
       
       when(io.m_axi.asFull.ar.ready){

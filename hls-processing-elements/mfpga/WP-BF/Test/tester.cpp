@@ -350,7 +350,7 @@ int main(int argc, char **argv)
       std::max<uint64_t>((uint64_t)G.edges.size() * sizeof(uint64_t),
                          sizeof(uint64_t));
   uint64_t cap = edgeBytes + 2ull * n * sizeof(uint64_t) +
-                 2ull * n * sizeof(float) + (uint64_t)n +
+                 2ull * n * sizeof(float) + (uint64_t)n * sizeof(uint32_t) +
                  2ull * n * sizeof(uint32_t) + sizeof(uint64_t) +
                  sizeof(BFS_args);
   cap = cap * 2 + (1u << 20);
@@ -373,7 +373,9 @@ int main(int argc, char **argv)
   }
 
   Addr distance_base = hbm.alloc((uint64_t)n * sizeof(float));
-  Addr relaxed_base = hbm.alloc((uint64_t)n * VISITED_SLOT_BYTES);
+  // relaxed[] holds a 4-byte per-vertex round stamp (last round enqueued),
+  // advanced atomically by SET_IF_GREATER -- not a 1-byte flag.
+  Addr relaxed_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr frontier0_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr frontier1_base = hbm.alloc((uint64_t)n * sizeof(uint32_t));
   Addr nextFChar_base = hbm.alloc(sizeof(uint64_t));
