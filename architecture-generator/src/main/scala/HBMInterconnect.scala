@@ -41,6 +41,11 @@ trait HasHBMInterconnect extends Module {
   // This is an "output" var that this trait will update
   var numHbmPortExports: Int
 
+  // Output: JSON mapping each exported HBM port (m_axi_NN, compacted index ==
+  // watcher bandwidth-tap index) to the module masters attached to it. Built in
+  // buildAndConnectHBM and written to <name>.hbmports.json by CleanHardCilk.
+  var hbmPortMappingJson: String = "{}"
+
   /**
    * This method is now part of the trait. It contains the exact logic
    * moved from CleanHardCilk.scala.
@@ -58,20 +63,36 @@ trait HasHBMInterconnect extends Module {
 
     // [This is the code block from CleanHardCilk.scala, line 316 to 512]
 
-    case class HbmInterfaceGroup(name: String, interfaces: Seq[axi4.full.Interface]) {
+    // A group bundles the HBM masters owned by one module (PE / write buffer /
+    // server). `roles` (parallel to `interfaces`) names each master's function
+    // ("main" = the kernel's m_axi_gmem compute port, "argOut"/"spawnNext" = the
+    // argument / continuation write-buffer ports); when absent the role falls
+    // back to the interface index so the descriptor is always populated.
+    case class HbmInterfaceGroup(
+        name: String,
+        interfaces: Seq[axi4.full.Interface],
+        roles: Seq[String] = Seq.empty
+    ) {
       def size: Int = interfaces.length
+      def roleAt(i: Int): String =
+        if (roles.length == interfaces.length) roles(i) else i.toString
     }
 
-    def peOwnedPorts(pe: VitisWriteBufferModule, task: TaskDescriptor): Seq[axi4.full.Interface] = {
-      val ports = new ArrayBuffer[axi4.full.Interface]()
+    // Returns each of a PE's HBM masters tagged with its role name, in a stable
+    // order (spawnNext, argOut, then the main m_axi_gmem compute port).
+    def peOwnedPorts(
+        pe: VitisWriteBufferModule,
+        task: TaskDescriptor
+    ): Seq[(String, axi4.full.Interface)] = {
+      val ports = new ArrayBuffer[(String, axi4.full.Interface)]()
       pe.io.elements
         .get("m_axi_spawnNext")
-        .foreach(p => ports.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
+        .foreach(p => ports.addOne(("spawnNext", p.asInstanceOf[axi4.RawInterface].asFull)))
       pe.io.elements
         .get("m_axi_argOut")
-        .foreach(p => ports.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
+        .foreach(p => ports.addOne(("argOut", p.asInstanceOf[axi4.RawInterface].asFull)))
       if (task.hasAXI) {
-        ports.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
+        ports.addOne(("main", pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull))
       }
       ports.toSeq
     }
@@ -81,9 +102,15 @@ trait HasHBMInterconnect extends Module {
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       peMap.get(task.name).foreach { peArray =>
         peArray.zipWithIndex.foreach { case (pe, peIndex) =>
-          val ports = peOwnedPorts(pe, task)
-          if (ports.nonEmpty) {
-            peInterfaceGroups.addOne(HbmInterfaceGroup(s"pe:${task.name}:$peIndex", ports))
+          val rolePorts = peOwnedPorts(pe, task)
+          if (rolePorts.nonEmpty) {
+            peInterfaceGroups.addOne(
+              HbmInterfaceGroup(
+                s"pe:${task.name}:$peIndex",
+                rolePorts.map(_._2),
+                rolePorts.map(_._1)
+              )
+            )
           }
         }
       }
@@ -95,7 +122,8 @@ trait HasHBMInterconnect extends Module {
           peInterfaceGroups.addOne(
             HbmInterfaceGroup(
               s"spawnNextWB:${task.name}:$wbIndex",
-              Seq(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+              Seq(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull),
+              Seq("spawnNext")
             )
           )
         }
@@ -105,7 +133,8 @@ trait HasHBMInterconnect extends Module {
           peInterfaceGroups.addOne(
             HbmInterfaceGroup(
               s"sendArgumentWB:${task.name}:$wbIndex",
-              Seq(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull)
+              Seq(wb.m_axi.asInstanceOf[axi4.RawInterface].asFull),
+              Seq("argDataOut")
             )
           )
         }
@@ -117,13 +146,13 @@ trait HasHBMInterconnect extends Module {
       schedulerMap.get(task.name).foreach { scheduler =>
         scheduler.io_internal.vss_axi_full.zipWithIndex.foreach { case (port, portIndex) =>
           schedulerInterfaceGroups.addOne(
-            HbmInterfaceGroup(s"scheduler:${task.name}:vss:$portIndex", Seq(port))
+            HbmInterfaceGroup(s"scheduler:${task.name}:vss:$portIndex", Seq(port), Seq("ring"))
           )
         }
         scheduler.spawnerServerAXI.foreach { ports =>
           ports.zipWithIndex.foreach { case (port, portIndex) =>
             schedulerInterfaceGroups.addOne(
-              HbmInterfaceGroup(s"scheduler:${task.name}:spawner:$portIndex", Seq(port))
+              HbmInterfaceGroup(s"scheduler:${task.name}:spawner:$portIndex", Seq(port), Seq("spawner"))
             )
           }
         }
@@ -406,6 +435,99 @@ trait HasHBMInterconnect extends Module {
       println(red + bar + reset)
       body.foreach(l => println(red + "# " + l.padTo(w, ' ') + " #" + reset))
       println(red + bar + reset)
+    }
+
+    // ---- HBM port -> owner descriptor (for the telemetry viewer) ------------
+    // Map every exported m_axi_NN (the COMPACTED index used by the export loop and
+    // therefore by the watcher's bandwidth taps, axiOuts(p)) to the module masters
+    // attached to it, using the same group names printed in the per-port summary.
+    // Owner lookup is by reference identity (the same interface objects live in
+    // both the groups and hbmSlaves).
+    locally {
+      val ownerOf = new java.util.IdentityHashMap[axi4.full.Interface, String]()
+      val roleOf = new java.util.IdentityHashMap[axi4.full.Interface, String]()
+      def regOwners(groups: Seq[HbmInterfaceGroup]): Unit = groups.foreach { g =>
+        g.interfaces.zipWithIndex.foreach { case (iface, gi) =>
+          val role = g.roleAt(gi)
+          ownerOf.put(iface, if (g.interfaces.size > 1) s"${g.name}#$role" else g.name)
+          roleOf.put(iface, role)
+        }
+      }
+      regOwners(peInterfaceGroups.toSeq)
+      regOwners(schedulerInterfaceGroups.toSeq)
+      regOwners(memoryAllocatorGroups.toSeq)
+      regOwners(closureAllocatorGroups.toSeq)
+      regOwners(argumentNotifierGroups.toSeq)
+      regOwners(remoteMemAccessGroups.toSeq)
+
+      // ---- STATUS PE# table -------------------------------------------------
+      // The STATUS bundle numbers PEs 0..(N-1) in the watcher's MONITORED ORDER,
+      // peCount PEs per monitored task, consecutively (cont0:0..3, memReader:4..7,
+      // reentry0:8..11, ...). Reproduce that here so a port master can be tied back
+      // to the exact PE# whose handshakes appear in the STATUS stream.
+      val monitored: Seq[(String, String)] =
+        fullSysGenDescriptor.watcherConfig.toSeq
+          .flatMap(_.monitored.map(m => (m.taskName, m.statusPrefix)))
+      val peBase = scala.collection.mutable.LinkedHashMap[String, Int]()
+      val pesEntries = scala.collection.mutable.ArrayBuffer[String]()
+      var peCursor = 0
+      monitored.foreach { case (taskName, statusPrefix) =>
+        val peCount = peMap.get(taskName).map(_.length).getOrElse(0)
+        peBase(taskName) = peCursor
+        for (i <- 0 until peCount)
+          pesEntries += s"""    {"peNumber": ${peCursor + i}, "task": "$taskName", "statusPrefix": "$statusPrefix", "indexInTask": $i}"""
+        peCursor += peCount
+      }
+      val pesJson = pesEntries.mkString(",\n")
+
+      // Map a port master's owner string to the STATUS PE# it belongs to, or None
+      // for shared servers (scheduler/allocator/argumentNotifier) that are not a
+      // single monitored PE. Per-PE kinds carry the PE instance index as the 3rd
+      // colon field (before any '#interface' suffix).
+      val perPeKinds = Set("pe", "spawnNextWB", "sendArgumentWB")
+      def peNumberOf(owner: String): Option[Int] = {
+        val parts = owner.split(":")
+        if (parts.length >= 3 && perPeKinds.contains(parts(0))) {
+          val task   = parts(1)
+          val idxStr = parts(2).takeWhile(_ != '#')
+          (peBase.get(task), scala.util.Try(idxStr.toInt).toOption) match {
+            case (Some(base), Some(idx))
+                if idx < peMap.get(task).map(_.length).getOrElse(0) =>
+              Some(base + idx)
+            case _ => None
+          }
+        } else None
+      }
+
+      val portsJson = hbmSlaves.filter(_.nonEmpty).zipWithIndex.map { case (buf, i) =>
+        val mastersJson = buf.toSeq.map { iface =>
+          val owner = Option(ownerOf.get(iface)).getOrElse("xdma_or_external")
+          val role = Option(roleOf.get(iface)).getOrElse("unknown")
+          val peNum = peNumberOf(owner).map(_.toString).getOrElse("null")
+          s"""        {"owner": "$owner", "role": "$role", "peNumber": $peNum, "wData": ${iface.cfg.wData}, "wId": ${iface.cfg.wId}}"""
+        }.mkString(",\n")
+        s"""    {
+      "port": $i,
+      "portName": "m_axi_${"%02d".format(i)}",
+      "masters": [
+$mastersJson
+      ]
+    }"""
+      }.mkString(",\n")
+
+      hbmPortMappingJson =
+        s"""{
+  "design": "${fullSysGenDescriptor.name}",
+  "numComputePorts": ${hbmSlaves.count(_.nonEmpty)},
+  "note": "'pes' is the STATUS PE# table (watcher monitored order; the STATUS bundle numbers PEs the same way). Each port master carries 'role' (main = the m_axi_gmem compute port; argOut/argDataOut/spawnNext = argument/continuation write-buffer ports; ring/spawner = scheduler ports) and 'peNumber' = the STATUS PE# that owns it, or null for shared servers (scheduler/allocator/argumentNotifier). port index == watcher BW_READ/BW_WRITE tap index. owner = '<kind>:<task>:<index>[#<role>]'.",
+  "pes": [
+$pesJson
+  ],
+  "ports": [
+$portsJson
+  ]
+}
+"""
     }
 
     hbmSlaves.filter(_.nonEmpty).zipWithIndex.foreach {

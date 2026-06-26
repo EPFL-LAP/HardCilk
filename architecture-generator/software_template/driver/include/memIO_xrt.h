@@ -7,6 +7,7 @@
 #include <memory>
 #include <stdexcept>
 #include <stdlib.h>
+#include <iostream>
 #include <vector>
 
 #include <xrt/xrt_bo.h>
@@ -42,6 +43,11 @@ struct XRTMemory : Memory{
       std::fill(availableBytes.begin(), availableBytes.end(), BANK_SIZE);
       dev_ = dev;
       hardCilk_ip_ = hardCilk_ip;
+    }
+
+    bool isEmulation() const {
+      const char *emu_mode = std::getenv("XCL_EMULATION_MODE");
+      return emu_mode != nullptr && *emu_mode != '\0';
     }
 
     void writeReg32(uint64_t addr, uint32_t value){
@@ -234,6 +240,17 @@ struct XRTMemory : Memory{
         uint64_t chunk = std::min<uint64_t>(left, located->second.size - page_offset);
 
         page_buffer.write(src, static_cast<size_t>(chunk), static_cast<size_t>(page_offset));
+        if (!isEmulation()) {
+          try {
+            page_buffer.sync(XCL_BO_SYNC_BO_TO_DEVICE, static_cast<size_t>(chunk),
+                             static_cast<size_t>(page_offset));
+          } catch (const std::exception &e) {
+            std::cerr << "[XRTMemory] WARNING: sync-to-device failed at 0x"
+                      << std::hex << current_addr << "+" << page_offset
+                      << " size=0x" << chunk << std::dec << ": " << e.what()
+                      << "\n";
+          }
+        }
 
         left -= chunk;
         src += chunk;
@@ -258,6 +275,17 @@ struct XRTMemory : Memory{
         uint64_t page_offset = current_addr - located->first;
         uint64_t chunk = std::min<uint64_t>(left, located->second.size - page_offset);
 
+        if (!isEmulation()) {
+          try {
+            page_buffer.sync(XCL_BO_SYNC_BO_FROM_DEVICE, static_cast<size_t>(chunk),
+                             static_cast<size_t>(page_offset));
+          } catch (const std::exception &e) {
+            std::cerr << "[XRTMemory] WARNING: sync-from-device failed at 0x"
+                      << std::hex << current_addr << "+" << page_offset
+                      << " size=0x" << chunk << std::dec << ": " << e.what()
+                      << "\n";
+          }
+        }
         page_buffer.read(dest, static_cast<size_t>(chunk), static_cast<size_t>(page_offset));
 
         dest += chunk;

@@ -140,7 +140,11 @@ void read_vertices(void *mem, hls::stream<uint32_t> &output_vertices, sparse_edg
     output_vertices.write(STREAM_END);
 }
 
-void load_vertices(void *mem_0, void *mem_1, void *mem_2, hls::stream<uint32_t> &input_vertices, hls::stream<vertex_output> &output_vertices, sparse_edgemap_helper_args &task)
+// relaxed[] is a per-vertex round stamp, not a byte flag cleared by readers.
+// Clearing it here races with the lock-served enqueue path across AXI masters.
+// The enqueue path advances relaxed[v] to round+1 atomically, so this stage only
+// reads graph metadata and the current distance for each frontier vertex.
+void load_vertices(void *mem_graph, void *mem_distance, hls::stream<uint32_t> &input_vertices, hls::stream<vertex_output> &output_vertices, sparse_edgemap_helper_args &task)
 {
     while (true)
     {
@@ -150,13 +154,11 @@ void load_vertices(void *mem_0, void *mem_1, void *mem_2, hls::stream<uint32_t> 
         {
             break;
         }
-        vertex_output output;
-        ap_uint<128> bulk = MEM_IN(mem_0, task.graph + ((addr_t)vertex << 4), ap_uint<128>);
-        // Reset relaxed just BEFORE we read the distance
-        MEM_ARR_OUT(mem_1, task.relaxed, vertex, uint8_t, 0);
+        ap_uint<128> bulk = MEM_IN(mem_graph, task.graph + ((addr_t)vertex << 4), ap_uint<128>);
         // TODO: Could speed this up by storing distances and relaxed in the graph, that way they could all be fetched in one pull. But, because reading neighbors should be the true bottleneck, this is not a priority
-        uint32_t distance = MEM_ARR_IN(mem_2, task.distance, vertex, uint32_t);
+        uint32_t distance = MEM_ARR_IN(mem_distance, task.distance, vertex, uint32_t);
 
+        vertex_output output;
         output.neighbor_address = bulk.range(63, 0);
         output.degree = bulk.range(127, 64);
         output.distance = *((float *)&distance);
@@ -281,8 +283,11 @@ void listen_priority_write_response(hls::stream<uint32_t> &pw_awaiting_response,
         {
             uint32_t neighbor = (tag - task.distance) >> 2;
             successful_pw.write(neighbor);
-            // Now we test and set
-            lock_req req = make_lock_req(task.relaxed + neighbor, 1, LOCK_OP_SET_AND_RETURN_CURRENT, false, ATOMIC_MODE_BYTE);
+            // Stamp relaxed[neighbor] with the round it is being enqueued for
+            // (round+1). Only the first enqueuer this round advances the stamp,
+            // so write_occurred later means this vertex belongs in the next
+            // frontier exactly once.
+            lock_req req = make_lock_req(task.relaxed + ((addr_t)neighbor << 2), task.round + 1, LOCK_OP_SET_IF_GREATER_AND_RETURN_CURRENT, false, ATOMIC_MODE_WORD);
             toLock.write(req);
         }
     }
@@ -301,12 +306,12 @@ void recieve_test_and_set_responses(void *mem, hls::stream<uint32_t> &successful
         }
         // Responses may arrive out of order, so recover which neighbor this is
         // from the echoed tag instead of pairing by FIFO order. The lock address
-        // was task.relaxed + neighbor (relaxed is a byte array, one byte per
-        // slot), so subtract the base to get the index.
+        // was task.relaxed + (neighbor << 2) (relaxed is a 4-byte round-stamp
+        // array), so subtract the base and shift back down to get the index.
         lock_resp resp = fromLock.read();
         ap_uint<64> tag = lock_resp_tag(resp);
-        uint32_t neighbor = (uint32_t)(tag - (ap_uint<64>)task.relaxed);
-        if (lock_resp_success(resp) && lock_resp_current_byte(resp) == 0)
+        uint32_t neighbor = (uint32_t)((tag - (ap_uint<64>)task.relaxed) >> 2);
+        if (lock_resp_success(resp) && lock_resp_write_occurred(resp))
         {
             successful_ts.write(neighbor);
             lock_req req = make_lock_req(task.nextFChar, 1, LOCK_OP_ADD_N_RETURN_CURRENT, true, ATOMIC_MODE_DOUBLEWORD);
@@ -421,10 +426,10 @@ void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3, v
 #pragma HLS DATAFLOW
     // Per-neighbor pipeline. Three lock round-trips, one per lock channel:
     //   1. priority write  : SET_IF_GREATER on distance[]  (toLock0 / fromLock0)
-    //   2. relaxed dedup    : test-and-set on relaxed[]  (toLock1 / fromLock1)
+    //   2. relaxed dedup    : round-stamp on relaxed[]  (toLock1 / fromLock1)
     //   3. frontier slot    : add-N on nextFChar         (toLock2 / fromLock2)
     read_vertices(mem_0, read_vertices_out, task);
-    load_vertices(mem_1, mem_2, mem_3, read_vertices_out, output_vertices, task);
+    load_vertices(mem_1, mem_3, read_vertices_out, output_vertices, task);
     read_neighbors(mem_4, output_vertices, output_neighbors, task);
     neighbor_visited_check(mem_5, output_neighbors, output_closer_neighbors, task);
     attempt_priority_write(output_closer_neighbors, pw_awaiting_response, task, toLock0);

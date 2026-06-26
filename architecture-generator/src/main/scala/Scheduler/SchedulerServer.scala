@@ -90,7 +90,21 @@ class SchedulerServer(
 
   private def capBurstAtFifoEnd(requestedBeats: UInt, ptr: UInt): UInt = {
     val slotsToEnd = maxLength - ptr
-    Mux(slotsToEnd < requestedBeats, slotsToEnd(4, 0), requestedBeats)
+    val afterFifoCap = Mux(slotsToEnd < requestedBeats, slotsToEnd(4, 0), requestedBeats)
+    // AXI4 forbids an INCR burst from crossing a 4KB address boundary. Ring slots
+    // are (taskWidth/8) B and a burst is up to nBeats long, so a burst that starts
+    // within (nBeats-1) slots of a 4KB line would straddle it -> illegal burst ->
+    // the HBM/smartconnect mishandles the post-boundary beats and reads/writes the
+    // WRONG ring slots (stale/lost tasks; only shows up once bursts are long, i.e.
+    // at large sizes). Cap at the next 4KB line too. byteAddr is the ABSOLUTE
+    // device address (rAddr + ptr<<addrShift) so the boundary is in device space;
+    // slotsToPageEnd is always >= 1 (== nBeats/page when ptr is page-aligned), so
+    // the burst never collapses to length 0. The push split-continuation
+    // (splitPushPending = burst < requested) carries the remainder; a capped pop
+    // simply reads fewer this round and resumes from the now page-aligned head.
+    val byteAddr = (ptr << addrShift) + rAddr
+    val slotsToPageEnd = (4096.U(13.W) - byteAddr(11, 0)) >> addrShift
+    Mux(slotsToPageEnd < afterFifoCap, slotsToPageEnd(4, 0), afterFifoCap)
   }
 
   private val pushRequestedBeats = Mux(splitPushPending, taskQueueBuffer.io.count, nBeatsUInt)

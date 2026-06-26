@@ -203,36 +203,41 @@ class Scheduler(
       .ntwDataUnitOccupancyVSS(i)
   }
 
-  val vssRvm = Seq.fill(schedulerServersNumber)(
-    Module(new RVtoAXIBridge(taskWidth, addrWidth, varBurst = true))
+  // Plain in-order AXI adapter (no chext.elastic) replacing RVtoAXIBridge +
+  // AxiWriteBuffer on the scheduler's HBM ring port. The elastic Arrival/
+  // SinkBuffer write path was the suspected source of the memReader wrap
+  // corruption (read-after-write settling margin had zero effect on HW, ruling
+  // out a read-side cause).
+  val vssAdapter = Seq.fill(schedulerServersNumber)(
+    Module(new SchedulerAXIAdapter(taskWidth, addrWidth))
   )
 
-  val axiFullPorts = vssRvm.map(_.axi)
+  val axiFullPorts = vssAdapter.map(_.axi)
 
   for (i <- 0 until schedulerServersNumber) {
-    vssRvm(i).io.read.get.address <> schedulerServers(i).io.read_address
-    vssRvm(i).io.read.get.data <> schedulerServers(i).io.read_data
-    vssRvm(i).io.write.get.address <> schedulerServers(i).io.write_address
-    vssRvm(i).io.write.get.data <> schedulerServers(i).io.write_data
-    vssRvm(i).io.readBurst.get.len := schedulerServers(i).io.read_burst_len
-    vssRvm(i).io.writeBurst.get.len := schedulerServers(i).io.write_burst_len
-    vssRvm(i).io.writeBurst.get.last := schedulerServers(i).io.write_last
-    schedulerServers(i).io.write_idle := vssRvm(i).io.writeIdle
+    vssAdapter(i).io.read_address <> schedulerServers(i).io.read_address
+    vssAdapter(i).io.read_data <> schedulerServers(i).io.read_data
+    vssAdapter(i).io.write_address <> schedulerServers(i).io.write_address
+    vssAdapter(i).io.write_data <> schedulerServers(i).io.write_data
+    vssAdapter(i).io.read_burst_len := schedulerServers(i).io.read_burst_len
+    vssAdapter(i).io.write_burst_len := schedulerServers(i).io.write_burst_len
+    vssAdapter(i).io.write_last := schedulerServers(i).io.write_last
+    schedulerServers(i).io.write_idle := vssAdapter(i).io.write_idle
     schedulerServers(i).io.connNetwork <> stealNW_TQ.io.connVSS(i)
 
     // DEBUG
     if (debug) {
-      when(vssRvm(i).axi.w.fire) {
-        logTask("VssAxiFull_w", i, vssRvm(i).axi.w.bits.data.asUInt)
+      when(vssAdapter(i).axi.w.fire) {
+        logTask("VssAxiFull_w", i, vssAdapter(i).axi.w.bits.data.asUInt)
       }
-      when(vssRvm(i).axi.r.fire) {
-        logTask("VssAxiFull_r", i, vssRvm(i).axi.r.bits.data.asUInt)
+      when(vssAdapter(i).axi.r.fire) {
+        logTask("VssAxiFull_r", i, vssAdapter(i).axi.r.bits.data.asUInt)
       }
     }
     // DEBUG
   }
 
-  axiFullPorts.zip(io_internal.vss_axi_full).foreach { case (vss, s_axi) => AxiWriteBuffer(vss) :=> s_axi }
+  axiFullPorts.zip(io_internal.vss_axi_full).foreach { case (a, s_axi) => a :=> s_axi }
 
   // DEBUG
   if (debug) {
