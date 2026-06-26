@@ -15,11 +15,11 @@ import scala.collection.immutable.SeqMap
   *
   * Observed `watcher.v` interface:
   *   - ap_clk, ap_rst_n
-  *   - mem        [63:0]  input  -- m_axi base pointer (HLS offset=direct)
+  *   - mem_0..7   [63:0]  input  -- m_axi base pointers (HLS offset=direct)
   *   - start_addr [63:0]  input  -- byte offset added inside the kernel
   *   - start_gate [0:0]   input  -- 1 once the spawn scheduler dispatches its first
   *                                  task; the watcher stays idle until then
-  *   - m_axi_gmem         master -- wId=1, wAddr=64, wData=256, wUser*=1, full AXI4
+  *   - m_axi_gmem         master -- wId=3, wAddr=64, wData=256, wUser*=1, full AXI4
   *                                  (256-bit beat = two 128-bit telemetry bundles)
   *   - <statusPrefix>_in_<i>  [1:0] input  -- {bit1=ready, bit0=valid} of the in queue
   *   - <statusPrefix>_out_<i> [1:0] input  -- {bit1=ready, bit0=valid} of the out queue
@@ -49,6 +49,7 @@ class WatcherBlackBox(
 
   def inPinName(statusPrefix: String, i: Int): String = s"${statusPrefix}_in_${i}"
   def outPinName(statusPrefix: String, i: Int): String = s"${statusPrefix}_out_${i}"
+  def memBasePin(channel: Int): String = s"mem_${channel}"
 
   def wbytesPin(p: Int): String = s"bw_wbytes_${p}"
   def rbytesPin(p: Int): String = s"bw_rbytes_${p}"
@@ -70,11 +71,11 @@ class WatcherBlackBox(
       Seq(
         "ap_clk" -> Input(Clock()),
         "ap_rst_n" -> Input(Bool()),
-        "mem" -> Input(UInt(addrWidth.W)),
         "start_addr" -> Input(UInt(addrWidth.W)),
         "start_gate" -> Input(UInt(1.W)),
         "m_axi_gmem" -> axi4.Master(gmemCfg)
       )
+        ++ (0 until 8).map(i => memBasePin(i) -> Input(UInt(addrWidth.W)))
         ++ statusPins.map(p => p -> Input(UInt(2.W)))
         ++ (0 until maxHbmPorts).map(p => wbytesPin(p) -> Input(UInt(wbytesWidth.W)))
         ++ (0 until maxHbmPorts).map(p => rbytesPin(p) -> Input(UInt(rbytesWidth.W)))

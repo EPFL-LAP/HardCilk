@@ -9,9 +9,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -25,6 +27,7 @@ using Addr = uint64_t;
 // and decoded by the viewer, not here. The host only locates the populated beat-run
 // in the readback window and dumps it verbatim for the viewer.
 static constexpr size_t TELEMETRY_BEAT_BYTES = 32;
+static constexpr uint64_t TELEMETRY_IO_CHUNK_BYTES = 64ULL << 20;
 
 struct __attribute__((packed)) TriangleCountDecoupledRootTask
 {
@@ -102,10 +105,27 @@ public:
     Addr all_count_addr = allocateComputeMem((uint64_t)N * 2 * sizeof(int32_t),
                                              512);
 
+    std::vector<int32_t> all_A((uint64_t)N * size_);
+    std::vector<int32_t> all_B((uint64_t)N * size_);
+    std::vector<int32_t> all_count((uint64_t)N * 2, 0);
+    for (uint32_t k = 0; k < N; ++k)
+    {
+      std::copy(A.begin(), A.end(), all_A.begin() + (uint64_t)k * size_);
+      std::copy(B.begin(), B.end(), all_B.begin() + (uint64_t)k * size_);
+    }
+    memory_->copyToDevice(all_A_addr,
+                          reinterpret_cast<const uint8_t *>(all_A.data()),
+                          all_array_bytes);
+    memory_->copyToDevice(all_B_addr,
+                          reinterpret_cast<const uint8_t *>(all_B.data()),
+                          all_array_bytes);
+    memory_->copyToDevice(all_count_addr,
+                          reinterpret_cast<const uint8_t *>(all_count.data()),
+                          all_count.size() * sizeof(int32_t));
+
     // Build N non-overlapping instances and one root task each.
     std::vector<TriangleCountDecoupledRootTask> roots(N);
     std::vector<Addr> count_addrs(N), done_addrs(N);
-    int32_t count_state[2] = {0, 0};
     for (uint32_t k = 0; k < N; ++k)
     {
       Addr A_addr = all_A_addr + (uint64_t)k * array_bytes;
@@ -113,13 +133,6 @@ public:
       Addr count_addr = all_count_addr +
                         (uint64_t)k * 2 * sizeof(int32_t);
       Addr done_addr = count_addr + sizeof(int32_t);
-      memory_->copyToDevice(A_addr, reinterpret_cast<const uint8_t *>(A.data()),
-                            array_bytes);
-      memory_->copyToDevice(B_addr, reinterpret_cast<const uint8_t *>(B.data()),
-                            array_bytes);
-      memory_->copyToDevice(count_addr,
-                            reinterpret_cast<const uint8_t *>(count_state),
-                            sizeof(count_state));
       TriangleCountDecoupledRootTask &r = roots[k];
       r.cont = done_addr;
       r.A = A_addr;
@@ -217,7 +230,7 @@ private:
 
   uint64_t getTelemetryWindowBytes() const
   {
-    return isEmulation() ? (4ULL << 20) : (64ULL << 20);
+    return getTelemetryReserveBytes();
   }
 
   Addr allocateComputeMem(uint64_t size, uint64_t alignment)
@@ -305,15 +318,21 @@ private:
                   << " != expected 0x" << TELEMETRY_GLOBAL_BASE << std::dec
                   << " (watcher start_addr tie-off assumes the expected base)\n";
       }
-      std::vector<uint8_t> zeros(windowBytes, 0);
-      memory_->copyToDevice(base, zeros.data(), zeros.size());
-      // Push the zeroed window down to device memory so stale device contents
-      // can't masquerade as bundles, and so the watcher overwrites a known-0 region.
-      if (auto *xm = dynamic_cast<XRTMemory *>(memory_))
+      std::vector<uint8_t> zeros(
+          static_cast<size_t>(std::min<uint64_t>(TELEMETRY_IO_CHUNK_BYTES, windowBytes)),
+          0);
+      for (uint64_t off = 0; off < windowBytes; off += zeros.size())
       {
-        try { xm->syncRegionToDevice(base, zeros.size()); }
-        catch (const std::exception &e)
-        { std::cerr << "[telemetry] zero-fill sync threw: " << e.what() << "\n"; }
+        const uint64_t n = std::min<uint64_t>(zeros.size(), windowBytes - off);
+        memory_->copyToDevice(base + off, zeros.data(), n);
+        // Push the zeroed window down to device memory so stale device contents
+        // can't masquerade as bundles, and so the watcher overwrites a known-0 region.
+        if (auto *xm = dynamic_cast<XRTMemory *>(memory_))
+        {
+          try { xm->syncRegionToDevice(base + off, n); }
+          catch (const std::exception &e)
+          { std::cerr << "[telemetry] zero-fill sync threw: " << e.what() << "\n"; }
+        }
       }
       std::cout << "[telemetry] reserved " << (reserveBytes >> 20)
                 << " MB at 0x" << std::hex << base << std::dec
@@ -328,12 +347,318 @@ private:
     }
   }
 
+  struct StatusConservation
+  {
+    static constexpr int NPE = 12;
+    uint64_t accepts[NPE] = {};
+    uint64_t outputs[NPE] = {};
+    bool havePrev = false;
+    uint64_t prevCycle = 0;
+    uint64_t prevStatus = 0;
+    size_t statusSamples = 0;
+
+    void consumeSample(uint64_t cycle, uint64_t status48)
+    {
+      if (havePrev && cycle >= prevCycle)
+      {
+        uint64_t dt = cycle - prevCycle;
+        for (int k = 0; k < NPE; ++k)
+        {
+          uint32_t nib = (prevStatus >> (k * 4)) & 0xF;
+          bool in_v = nib & 1, in_r = (nib >> 1) & 1;
+          bool out_v = (nib >> 2) & 1, out_r = (nib >> 3) & 1;
+          if (in_v && in_r) accepts[k] += dt;
+          if (out_v && out_r) outputs[k] += dt;
+        }
+      }
+      havePrev = true;
+      prevCycle = cycle;
+      prevStatus = status48;
+      ++statusSamples;
+    }
+
+    void consumeTraceBytes(const uint8_t *data, size_t bytes)
+    {
+      const size_t stride = TELEMETRY_BEAT_BYTES;
+      for (size_t idx = 0; idx + stride <= bytes; idx += stride)
+      {
+        const uint8_t *beat = data + idx;
+        for (int slot = 0; slot < 2; ++slot)
+        {
+          const uint8_t *b = beat + slot * 16;
+          uint64_t lo = 0, hi = 0;
+          for (int i = 0; i < 8; ++i)
+          {
+            lo |= (uint64_t)b[i] << (8 * i);
+            hi |= (uint64_t)b[8 + i] << (8 * i);
+          }
+          if ((lo & 0xFF) != 1) // STATUS header == 1
+            continue;
+          uint64_t status48 = (lo >> 8) & 0xFFFFFFFFFFFFULL;
+          uint64_t cycle = (lo >> 56) | (hi << 8);
+          consumeSample(cycle, status48);
+        }
+      }
+    }
+
+    void report() const
+    {
+      if (statusSamples < 2)
+        return;
+
+      auto label = [](int k) -> const char * {
+        if (k < 4) return "cont0";
+        if (k < 8) return "memReader";
+        return "reentry0";
+      };
+      std::cout << "[telemetry] STATUS conservation (handshake-cycles; memReader is "
+                   "strictly 1-in/1-out, so its delta should be 0):\n";
+      long long memReaderImbalance = 0;
+      for (int k = 0; k < NPE; ++k)
+      {
+        long long d = (long long)outputs[k] - (long long)accepts[k];
+        std::cout << "[telemetry]   PE " << k << " " << label(k) << "[" << (k % 4)
+                  << "] accepts=" << accepts[k] << " outputs=" << outputs[k]
+                  << " delta=" << (d >= 0 ? "+" : "") << d << "\n";
+        if (k >= 4 && k < 8)
+          memReaderImbalance += (d < 0 ? -d : d);
+      }
+      if (memReaderImbalance != 0)
+        std::cerr << "[telemetry] !! STATUS conservation off by " << memReaderImbalance
+                  << " cycles across memReader PEs -> the watcher DROPPED STATUS "
+                     "frames (lossy status telemetry); treat per-cycle status counts "
+                     "as approximate. Duplicated/lost TASKS stay PE-balanced, so this "
+                     "is a telemetry-integrity signal, not proof of a compute bug.\n";
+      else
+        std::cout << "[telemetry] STATUS conservation OK (memReader balanced; no "
+                     "dropped status frames detected).\n";
+    }
+  };
+
+  // STATUS-stream conservation check. For each monitored PE, sum the cycles its
+  // input handshake (in_valid & in_ready) and output handshake (out_valid &
+  // out_ready) were held, reconstructed from the edge-triggered STATUS samples
+  // (each sample's bits hold until the next sample's cycle_count). A memReader PE
+  // is strictly 1-task-in / 1-result-out, so its accepts MUST equal its outputs.
+  void reportStatusConservation(const std::vector<uint8_t> &buf,
+                                size_t firstBundle, size_t lastBundle)
+  {
+    StatusConservation conservation;
+    conservation.consumeTraceBytes(
+        buf.data() + firstBundle * TELEMETRY_BEAT_BYTES,
+        (lastBundle - firstBundle) * TELEMETRY_BEAT_BYTES);
+    conservation.report();
+  }
+
+  // When the 64 MB readback window is empty, sparse-scan the FULL telemetry
+  // reserve to classify the failure: data found beyond the window => the
+  // free-running watcher's write_idx carried over past it (a prior run without an
+  // FPGA reprogram) -> reprogram/reset before the run; nothing anywhere => the
+  // watcher wrote NOTHING this program cycle (start_gate not firing, reserve base
+  // mismatch, or a stalled watcher) -> a real HW/wiring bug, not carryover.
+  void diagnoseEmptyTelemetry(Addr telemetry_base)
+  {
+    const uint64_t reserveBytes = getTelemetryReserveBytes();
+    const uint64_t windowBytes = getTelemetryWindowBytes();
+    const uint64_t step = 1ULL << 20; // 1 MB probe granularity
+    std::vector<uint8_t> probe(TELEMETRY_BEAT_BYTES, 0);
+    uint64_t firstDataOff = UINT64_MAX;
+    for (uint64_t off = 0; off < reserveBytes; off += step)
+    {
+      if (auto *xm = dynamic_cast<XRTMemory *>(memory_))
+      {
+        try { xm->syncRegionFromDevice(telemetry_base + off, TELEMETRY_BEAT_BYTES); }
+        catch (...) { continue; }
+      }
+      try { memory_->copyFromDevice(probe.data(), telemetry_base + off, TELEMETRY_BEAT_BYTES); }
+      catch (...) { continue; }
+      bool nz = false;
+      for (uint8_t b : probe)
+        if (b) { nz = true; break; }
+      if (nz) { firstDataOff = off; break; }
+    }
+    if (firstDataOff == UINT64_MAX)
+      std::cerr << "[telemetry] DIAGNOSIS: no data anywhere in the "
+                << (reserveBytes >> 20) << " MB reserve -> the watcher wrote "
+                   "NOTHING this program cycle (start_gate not firing, reserve "
+                   "base != 0x2_0000_0000, or watcher stalled). NOT a write_idx "
+                   "carryover -- this is a real HW/wiring issue.\n";
+    else if (firstDataOff >= windowBytes)
+      std::cerr << "[telemetry] DIAGNOSIS: window empty but data exists at reserve "
+                   "offset " << (firstDataOff >> 20) << " MB (past the "
+                << (windowBytes >> 20) << " MB window) -> the watcher's write_idx "
+                   "CARRIED OVER from a prior run. Reprogram/reset the FPGA "
+                   "(xrt-smi reset) before the run.\n";
+    else
+      std::cerr << "[telemetry] DIAGNOSIS: data at offset " << (firstDataOff >> 20)
+                << " MB is inside the window yet the prefix scan missed it "
+                   "(unexpected -- possible zero-fill/sync race).\n";
+  }
+
   // Read back the telemetry window, find the populated prefix (up to the first
   // all-zero/unwritten bundle), and write it to a timestamped /tmp file.
   void dumpTelemetry(Addr telemetry_base)
   {
     if (telemetry_base == 0)
       return;
+
+    if (getTelemetryWindowBytes() > TELEMETRY_IO_CHUNK_BYTES)
+    {
+      const uint64_t windowBytes = getTelemetryWindowBytes();
+      const size_t stride = TELEMETRY_BEAT_BYTES;
+      std::vector<uint8_t> buf(static_cast<size_t>(TELEMETRY_IO_CHUNK_BYTES));
+
+      char ts[32];
+      std::time_t now = std::time(nullptr);
+      std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&now));
+      std::string path =
+          std::string("/tmp/triangleCountDecoupled_telemetry_") + ts + ".bin";
+
+      std::ofstream out(path, std::ios::binary);
+      if (!out)
+      {
+        std::cerr << "[telemetry] could not open " << path << " for writing\n";
+        return;
+      }
+
+      {
+        std::vector<std::string> candidates;
+        if (const char *e = std::getenv("TCD_HBM_DESCRIPTOR"))
+          candidates.push_back(e);
+        candidates.push_back("triangleCountDecoupled.hbmports.json");
+        candidates.push_back("../triangleCountDecoupled.hbmports.json");
+        std::string descPath, descJson, triedPaths;
+        for (const auto &c : candidates)
+        {
+          if (!triedPaths.empty())
+            triedPaths += ", ";
+          triedPaths += c;
+          std::ifstream df(c, std::ios::binary);
+          if (df)
+          {
+            std::ostringstream ss;
+            ss << df.rdbuf();
+            descJson = ss.str();
+            descPath = c;
+            break;
+          }
+        }
+        if (!descJson.empty())
+        {
+          const uint64_t jlen = descJson.size();
+          uint64_t beats_off = (32 + jlen + 31) & ~uint64_t(31);
+          char hdr[32] = {0};
+          std::memcpy(hdr, "HCKTRACE", 8);
+          uint32_t ver = 1;
+          // offset 12: u32 flags. bit0 = run mode (1 = hw_emu/sw_emu, 0 = real HW).
+          uint32_t flags = isEmulation() ? 0x1u : 0x0u;
+          std::memcpy(hdr + 8, &ver, 4);
+          std::memcpy(hdr + 12, &flags, 4);
+          std::memcpy(hdr + 16, &jlen, 8);
+          std::memcpy(hdr + 24, &beats_off, 8);
+          out.write(hdr, 32);
+          out.write(descJson.data(), static_cast<std::streamsize>(jlen));
+          const uint64_t padBytes = beats_off - 32 - jlen;
+          if (padBytes)
+          {
+            std::vector<char> pad(padBytes, 0);
+            out.write(pad.data(), static_cast<std::streamsize>(padBytes));
+          }
+          std::cout << "[telemetry] embedded HBM port descriptor (" << jlen
+                    << " bytes) from " << descPath << "\n";
+        }
+        else
+        {
+          std::cerr
+              << "\n"
+              << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+              << "!!!  WARNING: HBM PORT DESCRIPTOR NOT FOUND -- TRACE IS UNLABELED !!!\n"
+              << "!!!  looked for: " << triedPaths << "\n"
+              << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n";
+        }
+      }
+
+      bool inRun = false;
+      bool done = false;
+      uint64_t firstBundle = UINT64_MAX;
+      uint64_t written = 0;
+      StatusConservation conservation;
+      for (uint64_t off = 0; off < windowBytes && !done; off += buf.size())
+      {
+        const uint64_t n = std::min<uint64_t>(buf.size(), windowBytes - off);
+        if (auto *xrtMem = dynamic_cast<XRTMemory *>(memory_))
+        {
+          try { xrtMem->syncRegionFromDevice(telemetry_base + off, n); }
+          catch (const std::exception &e)
+          { std::cerr << "[telemetry] sync-from-device failed: " << e.what() << "\n"; }
+        }
+        try
+        {
+          memory_->copyFromDevice(buf.data(), telemetry_base + off, n);
+        }
+        catch (const std::exception &e)
+        {
+          std::cerr << "[telemetry] readback failed: " << e.what() << "\n";
+          return;
+        }
+
+        size_t writeBegin = 0;
+        size_t writeEnd = static_cast<size_t>(n);
+        bool writeChunk = inRun;
+        for (size_t local = 0; local + stride <= n; local += stride)
+        {
+          bool zero = true;
+          for (size_t k = 0; k < stride; ++k)
+            if (buf[local + k] != 0)
+            {
+              zero = false;
+              break;
+            }
+          const uint64_t globalBundle = (off + local) / stride;
+          if (!inRun)
+          {
+            if (zero)
+              continue;
+            inRun = true;
+            writeChunk = true;
+            writeBegin = local;
+            firstBundle = globalBundle;
+          }
+          else if (zero)
+          {
+            writeEnd = local;
+            done = true;
+            break;
+          }
+        }
+        if (writeChunk && writeEnd > writeBegin)
+        {
+          out.write(reinterpret_cast<const char *>(buf.data() + writeBegin),
+                    static_cast<std::streamsize>(writeEnd - writeBegin));
+          conservation.consumeTraceBytes(buf.data() + writeBegin,
+                                         writeEnd - writeBegin);
+          written += (writeEnd - writeBegin) / stride;
+        }
+      }
+
+      if (firstBundle == UINT64_MAX)
+      {
+        std::cout << "[telemetry] window empty (watcher wrote nothing in [base, "
+                     "base+window)\n";
+        diagnoseEmptyTelemetry(telemetry_base);
+      }
+      else if (firstBundle != 0)
+        std::cout << "[telemetry] populated run starts at beat " << firstBundle
+                  << " (byte offset " << (firstBundle * stride)
+                  << ") -- watcher write_idx carried over from a prior run\n";
+
+      out.close();
+      std::cout << "[telemetry] wrote " << written << " beats ("
+                << (written * stride) << " bytes) to:\n"
+                << "[telemetry] " << path << "\n";
+      conservation.report();
+      return;
+    }
 
     std::vector<uint8_t> buf(getTelemetryWindowBytes());
     // The watcher writes its bundles directly to device HBM (it reaches the
@@ -365,10 +690,9 @@ private:
     const size_t stride = TELEMETRY_BEAT_BYTES;
     const size_t maxBundles = buf.size() / stride;
 
-    // A beat is "unwritten" iff all 32 bytes are 0: the watcher only ever stores a
-    // beat that has at least one non-NULL bundle (a non-zero header byte), and
-    // reserveTelemetry zero-fills the window beforehand. So an all-zero beat is
-    // unwritten padding.
+    // A beat is "unwritten" iff all 32 bytes are 0. reserveTelemetry zero-fills
+    // the window beforehand, and the watcher only stores real telemetry beats,
+    // so an all-zero beat still means untouched memory.
     auto bundleIsZero = [&](size_t idx) {
       const uint8_t *b = buf.data() + idx * stride;
       for (size_t k = 0; k < stride; ++k)
@@ -390,13 +714,18 @@ private:
     const size_t written = lastBundle - firstBundle;
     const size_t byteOffset = firstBundle * stride;
     if (firstBundle == maxBundles)
+    {
       std::cout << "[telemetry] window empty (watcher wrote nothing in [base, "
-                   "base+window); if this is a repeat run, reprogram the FPGA to "
-                   "reset the watcher write index)\n";
+                   "base+window)\n";
+      diagnoseEmptyTelemetry(telemetry_base);
+    }
     else if (firstBundle != 0)
       std::cout << "[telemetry] populated run starts at beat " << firstBundle
                 << " (byte offset " << byteOffset
                 << ") -- watcher write_idx carried over from a prior run\n";
+
+    if (written > 0)
+      reportStatusConservation(buf, firstBundle, lastBundle);
 
     char ts[32];
     std::time_t now = std::time(nullptr);
@@ -410,6 +739,76 @@ private:
       std::cerr << "[telemetry] could not open " << path << " for writing\n";
       return;
     }
+    // Standard self-describing header: the HBM-port -> module descriptor emitted by
+    // the generator (<design>.hbmports.json), so the viewer can label each bandwidth
+    // port and PE. Located via $TCD_HBM_DESCRIPTOR, else "triangleCountDecoupled.hbmports.json"
+    // in the cwd. If it is missing we print a LOUD warning and fall back to a
+    // headerless trace (beats at offset 0) -- that is a misconfiguration, not a mode.
+    // Layout when present (see traceViewer/format.md §0):
+    //   [0:8)  magic "HCKTRACE"   [8:12) u32 version=1   [12:16) u32 reserved
+    //   [16:24) u64 json_length   [24:32) u64 beats_offset (32-aligned)
+    //   [32 : 32+json_length) JSON descriptor, then zero pad to beats_offset.
+    {
+      std::vector<std::string> candidates;
+      if (const char *e = std::getenv("TCD_HBM_DESCRIPTOR"))
+        candidates.push_back(e);
+      candidates.push_back("triangleCountDecoupled.hbmports.json");    // run from workspace
+      candidates.push_back("../triangleCountDecoupled.hbmports.json"); // run from build folder
+      std::string descPath, descJson, triedPaths;
+      for (const auto &c : candidates)
+      {
+        if (!triedPaths.empty())
+          triedPaths += ", ";
+        triedPaths += c;
+        std::ifstream df(c, std::ios::binary);
+        if (df)
+        {
+          std::ostringstream ss;
+          ss << df.rdbuf();
+          descJson = ss.str();
+          descPath = c;
+          break;
+        }
+      }
+      if (!descJson.empty())
+      {
+        const uint64_t jlen = descJson.size();
+        uint64_t beats_off = (32 + jlen + 31) & ~uint64_t(31); // 32-byte align
+        char hdr[32] = {0};
+        std::memcpy(hdr, "HCKTRACE", 8);
+        uint32_t ver = 1;
+        // offset 12: u32 flags. bit0 = run mode (1 = hw_emu/sw_emu, 0 = real HW).
+        uint32_t flags = isEmulation() ? 0x1u : 0x0u;
+        std::memcpy(hdr + 8, &ver, 4);
+        std::memcpy(hdr + 12, &flags, 4);
+        std::memcpy(hdr + 16, &jlen, 8);
+        std::memcpy(hdr + 24, &beats_off, 8);
+        out.write(hdr, 32);
+        out.write(descJson.data(), static_cast<std::streamsize>(jlen));
+        const uint64_t padBytes = beats_off - 32 - jlen;
+        if (padBytes)
+        {
+          std::vector<char> pad(padBytes, 0);
+          out.write(pad.data(), static_cast<std::streamsize>(padBytes));
+        }
+        std::cout << "[telemetry] embedded HBM port descriptor (" << jlen
+                  << " bytes) from " << descPath << "\n";
+      }
+      else
+      {
+        std::cerr
+            << "\n"
+            << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+            << "!!!  WARNING: HBM PORT DESCRIPTOR NOT FOUND -- TRACE IS UNLABELED !!!\n"
+            << "!!!  looked for: " << triedPaths << "\n"
+            << "!!!  The .bin will have NO header, so the viewer cannot map ports/\n"
+            << "!!!  PEs. Fix: copy <design>.hbmports.json (emitted by the sbt\n"
+            << "!!!  generator next to <design>.hdlinfo.json) into the run cwd, or\n"
+            << "!!!  set $TCD_HBM_DESCRIPTOR to its path, then re-run.\n"
+            << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n";
+      }
+    }
+
     out.write(reinterpret_cast<const char *>(buf.data() + byteOffset),
               static_cast<std::streamsize>(written * stride));
     out.close();

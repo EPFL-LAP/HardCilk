@@ -97,8 +97,11 @@ public:
     Addr graph_base = writeWeightedCsrToHbm(memory_, G, edges_base);
     Addr distance_base =
         memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(float), 512);
+    // relaxed[] stores the last round each vertex was enqueued for (a 4-byte
+    // round stamp advanced atomically by SET_IF_GREATER), not a 1-byte flag.
     Addr relaxed_base =
-        memory_->allocateMemFPGA((uint64_t)G.num_vertices, 512);
+        memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(uint32_t),
+                                 512);
     Addr frontier0_base =
         memory_->allocateMemFPGA((uint64_t)G.num_vertices * sizeof(uint32_t),
                                  512);
@@ -110,10 +113,10 @@ public:
 
     std::vector<float> init_dist(G.num_vertices,
                                  -std::numeric_limits<float>::infinity());
-    std::vector<uint8_t> zeros8(G.num_vertices, 0);
+    std::vector<uint32_t> zeros_relaxed(G.num_vertices, 0);
     uint64_t zero64 = 0;
     copyVectorToDevice(memory_, distance_base, init_dist);
-    copyVectorToDevice(memory_, relaxed_base, zeros8);
+    copyVectorToDevice(memory_, relaxed_base, zeros_relaxed);
     copyBytesToDevice(memory_, nextFChar_base, &zero64, sizeof(zero64));
 
     WidestPath_args root{};

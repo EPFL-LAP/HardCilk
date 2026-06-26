@@ -161,8 +161,7 @@ public:
 
     tuneSchedulerQueueCapacities("ApproxDenseSub", G.num_vertices);
     auto t_kernel_start = std::chrono::high_resolution_clock::now();
-    int rc = runRootTask(std::vector<ApproxDenseSubHost_args>{root}, cont_base,
-                         offsetof(ApproxDenseSubHost_args, done));
+    int rc = runApproxDenseSubRootTask(root, cont_base, G.num_vertices);
     auto t_kernel_done = t_kernel_done_;
 
     ApproxDenseSubHost_args cont{};
@@ -228,6 +227,125 @@ public:
   }
 
 private:
+  static const char *phaseName(uint32_t phase)
+  {
+    switch (phase)
+    {
+    case 0:
+      return "classify";
+    case 1:
+      return "decrement";
+    default:
+      return "unknown";
+    }
+  }
+
+  ApproxDenseSubHost_args readContinuation(Addr cont_base)
+  {
+    ApproxDenseSubHost_args cont{};
+    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&cont), cont_base,
+                            sizeof(cont));
+    return cont;
+  }
+
+  uint64_t readCounter64(Addr addr)
+  {
+    if (addr == 0)
+      return 0;
+    uint64_t value = 0;
+    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&value), addr,
+                            sizeof(value));
+    return value;
+  }
+
+  void printProgress(Addr cont_base, uint32_t vertex_count,
+                     std::chrono::high_resolution_clock::time_point start)
+  {
+    ApproxDenseSubHost_args cont = readContinuation(cont_base);
+    uint64_t kept_wave = readCounter64(cont.nextFChar);
+    uint64_t removed_wave = readCounter64(cont.removedChar);
+    uint32_t removed_total = vertex_count >= cont.frontier_length
+                                 ? vertex_count - cont.frontier_length
+                                 : 0;
+    double remaining_percent =
+        vertex_count == 0
+            ? 0.0
+            : 100.0 * (double)cont.frontier_length / (double)vertex_count;
+    double best_density = fixedU32_32ToDouble(cont.best_density_bits);
+    double elapsed = std::chrono::duration<double>(
+                         std::chrono::high_resolution_clock::now() - start)
+                         .count();
+    std::cout << "[ApproxDenseSub] progress: active_set="
+              << cont.frontier_length << "/" << vertex_count << " ("
+              << remaining_percent << "%)"
+              << " removed_total=" << removed_total
+              << " round=" << cont.round
+              << " phase=" << phaseName(cont.phase)
+              << " counter=" << cont.counter
+              << " kept_wave=" << kept_wave
+              << " removed_wave=" << removed_wave
+              << " best_length=" << cont.best_length
+              << " best_density=" << std::setprecision(8) << best_density
+              << " active=" << cont.active << " done=" << cont.done
+              << " elapsed=" << elapsed << "s\n";
+  }
+
+  int runApproxDenseSubRootTask(const ApproxDenseSubHost_args &root,
+                                Addr cont_base, uint32_t vertex_count)
+  {
+    initSystem(std::vector<ApproxDenseSubHost_args>{root},
+               &hardcilkDoneConditionStub, 0, 0, false);
+    const auto start = std::chrono::high_resolution_clock::now();
+    const auto deadline = start + std::chrono::duration<double>(watchdog_s_);
+    const auto sample_period = std::chrono::milliseconds(250);
+    auto next_progress = start;
+    uint64_t iters = 0;
+    startSystem();
+
+    while (true)
+    {
+      if (!fast_mode_ && checkPaused() == 0)
+        managePausedServer();
+
+      uint32_t done = 0;
+      memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&done),
+                              cont_base +
+                                  offsetof(ApproxDenseSubHost_args, done),
+                              sizeof(done));
+      if (done != 0)
+      {
+        t_kernel_done_ = std::chrono::high_resolution_clock::now();
+        if (!fast_mode_)
+          printProgress(cont_base, vertex_count, start);
+        std::cout << "[ApproxDenseSub] done after " << iters << " polls";
+        if (fast_mode_)
+          std::cout << " (fast mode)";
+        std::cout << "\n";
+        return 0;
+      }
+
+      auto now = std::chrono::high_resolution_clock::now();
+      if (!fast_mode_ && now >= next_progress)
+      {
+        printProgress(cont_base, vertex_count, start);
+        next_progress = now + sample_period;
+      }
+
+      if (now > deadline)
+      {
+        t_kernel_done_ = now;
+        std::cerr << "[ApproxDenseSub] WATCHDOG: " << watchdog_s_
+                  << "s elapsed without done.\n";
+        return -1;
+      }
+
+      iters++;
+      std::this_thread::sleep_for(fast_mode_
+                                      ? std::chrono::milliseconds(10)
+                                      : std::chrono::microseconds(200));
+    }
+  }
+
   std::string graph_file_;
   double epsilon_;
 };

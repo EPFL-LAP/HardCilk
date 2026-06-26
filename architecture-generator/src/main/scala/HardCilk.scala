@@ -563,11 +563,11 @@ class HardCilk(
     val maxHbmPorts = 31
 
     // Fixed AXI config matching the synthesized watcher.v gmem master: 256b data
-    // (a 256-bit beat = two 128-bit telemetry bundles), 1-bit id, 64b address, 1-bit
+    // (a 256-bit beat = two 128-bit telemetry bundles), 3-bit id, 64b address, 1-bit
     // user on every channel, full AXI4 (ARLEN=8 => axi3Compat off, qos/prot/cache/
     // region/lock on). Must match watcher.v C_M_AXI_GMEM_DATA_WIDTH.
     val gmemCfg = axi4.Config(
-      wId = 1,
+      wId = 3,
       wAddr = 64,
       wData = 256,
       wUserAR = 1,
@@ -595,12 +595,16 @@ class HardCilk(
 
     watcher.io.elements("ap_clk").asInstanceOf[Clock] := clock
     watcher.io.elements("ap_rst_n").asInstanceOf[Bool] := ~reset.asBool
-    // mem = m_axi base pointer (offset=direct), start_addr = byte offset added in
-    // the kernel. The watcher is mapped exclusively to HBM[16:31], which starts
-    // at physical address 0x200000000 in the device address space. Vitis does NOT
-    // automatically subtract this base for AXI masters, so the kernel must issue
-    // the full physical address. `wc.startAddr` acts as an offset into this window.
-    watcher.io.elements("mem").asInstanceOf[UInt] := BigInt("200000000", 16).U(64.W)
+    // mem_0..7 = m_axi base pointers for the eight HLS channels under one gmem
+    // bundle. start_addr = byte offset added in the kernel. The watcher is mapped
+    // exclusively to HBM[16:31], which starts at physical address 0x200000000 in
+    // the device address space. Vitis does NOT automatically subtract this base
+    // for AXI masters, so the kernel must issue the full physical address.
+    // `wc.startAddr` acts as an offset into this window.
+    for (ch <- 0 until 8) {
+      watcher.getPort(watcher.memBasePin(ch)).asInstanceOf[UInt] :=
+        BigInt("200000000", 16).U(64.W)
+    }
     watcher.io.elements("start_addr").asInstanceOf[UInt] := BigInt(wc.startAddr).U(64.W)
 
     // --- Tap each monitored PE's in/out queue handshakes ---
@@ -789,5 +793,14 @@ class HardCilk(
     )
     write.write(hdlinfoModule.asJson.toString())
     write.close()
+
+    // HBM port -> module descriptor (built by HasHBMInterconnect). Lets the
+    // telemetry viewer label each bandwidth port by the PE/scheduler/etc. attached
+    // to it. Copied next to the xclbin and embedded in the trace .bin by the host.
+    val wports = new java.io.PrintWriter(
+      f"${outputDirPathRTL}/${fullSysGenDescriptor.name}.hbmports.json"
+    )
+    wports.write(hbmPortMappingJson)
+    wports.close()
   }
 }

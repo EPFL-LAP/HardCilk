@@ -13,6 +13,109 @@ The viewer needs to show, over time:
 
 ---
 
+## 0. File header: HBM-port descriptor
+
+Every `.bin` **begins with a self-describing header** carrying the generator's
+HBM-port → module map (`<design>.hbmports.json`), so the viewer can label each
+bandwidth port and PE by what is actually attached to it (which PE / scheduler /
+allocator). The host (`TriangleCountDecoupledDriver.h`) finds the descriptor via
+`$TCD_HBM_DESCRIPTOR`, else `triangleCountDecoupled.hbmports.json` in the cwd, else
+`../triangleCountDecoupled.hbmports.json` (one level up, for runs launched from the
+build folder), and writes the header before the beats.
+
+> **Missing-descriptor fallback (misconfiguration, not a mode).** If the host
+> cannot find the descriptor it prints a loud warning and writes a **headerless**
+> file (beats at offset 0). A viewer must still tolerate this — no magic ⇒
+> `beats_offset = 0` — but the trace is then unlabeled and should be treated as a
+> setup error to fix, not a supported format.
+
+Detect the header by the 8-byte magic at offset 0:
+
+```
+offset  0 : magic       = "HCKTRACE" (8 ASCII bytes)
+offset  8 : u32 version = 1   (little-endian)
+offset 12 : u32 flags         (little-endian; see below)
+offset 16 : u64 json_length   (bytes of the JSON descriptor, excluding padding)
+offset 24 : u64 beats_offset  (byte offset where telemetry beats begin; 32-aligned)
+offset 32 : JSON descriptor   (json_length bytes, UTF-8)
+   ...    : zero padding up to beats_offset
+beats_offset : the 256-bit beat stream (everything in §1 onward)
+```
+
+### `flags` (offset 12, u32)
+
+A little-endian bitfield describing how the trace was produced. Unused bits are 0
+and reserved; a viewer should mask the bit it cares about and ignore the rest.
+
+| bit | name           | meaning                                                   |
+|----:|----------------|-----------------------------------------------------------|
+| 0   | `is_emulation` | `1` = the run was a Vitis **emulation** (`hw_emu`/`sw_emu`); `0` = **real hardware** |
+
+The host sets bit 0 from `XCL_EMULATION_MODE` (set during emulation, unset on HW).
+Use it to label the trace's provenance — e.g. emulation traces are cosim-deterministic
+and use a smaller telemetry reserve, while HW traces reflect real per-stack bandwidth
+and timing. (This field was `reserved` in earlier traces, where it was always 0 —
+which correctly reads as "real hardware", so old HW traces remain valid.)
+
+If the magic is **not** present, `beats_offset = 0`. A viewer must check the magic
+first and start beat decoding at `beats_offset`.
+
+### The descriptor JSON
+
+```json
+{
+  "design": "triangleCountDecoupled",
+  "numComputePorts": 28,
+  "pes": [
+    { "peNumber": 0, "task": "whileLoopMain_reentry0_cont0", "statusPrefix": "cont0_status",    "indexInTask": 0 },
+    { "peNumber": 4, "task": "memReader",                     "statusPrefix": "memReader_status","indexInTask": 0 },
+    { "peNumber": 8, "task": "whileLoopMain_reentry0",        "statusPrefix": "reentry0_status", "indexInTask": 0 }
+  ],
+  "ports": [
+    { "port": 4,  "portName": "m_axi_04",
+      "masters": [ {"owner": "pe:memReader:0#main",   "role": "main",   "peNumber": 4, "wData": 32, "wId": 1} ] },
+    { "port": 12, "portName": "m_axi_12",
+      "masters": [ {"owner": "pe:memReader:0#argOut", "role": "argOut", "peNumber": 4, "wData": 32, "wId": 0} ] },
+    { "port": 25, "portName": "m_axi_25",
+      "masters": [ {"owner": "scheduler:memReader:vss:0", "role": "ring", "peNumber": null, "wData": 256, "wId": 1} ] }
+  ]
+}
+```
+
+A memReader PE owns **two** ports — `role: "main"` (its `m_axi_gmem` graph-read port)
+and `role: "argOut"` (its argument/continuation write-buffer port) — both with the
+same `peNumber`. The `role` tells you which is which without parsing the owner.
+
+The descriptor answers two questions:
+
+1. **What type is each STATUS `PE#`?** → `pes[]`. The STATUS bundle (§3) numbers PEs
+   `0..11` in the watcher's monitored order, `peCount` per task, consecutively
+   (`cont0` 0–3, `memReader` 4–7, `reentry0` 8–11). `pes[]` is exactly that table:
+   `peNumber` → `task` / `statusPrefix` / `indexInTask`. Use it to label the PE rows.
+2. **Which `PE#` owns a given memory port?** → each `ports[].masters[].peNumber`.
+   So you can line a port's bandwidth up with that PE's ACTIVE/STALLED timeline.
+
+Field notes:
+- `port` is the **compacted exported index** — identical to the `BW_READ`/`BW_WRITE`
+  port index in §4 and to the watcher's bandwidth tap `axiOuts(p)`.
+- `role` is the master's function: `main` = the kernel's `m_axi_gmem` compute port;
+  `argOut` / `argDataOut` / `spawnNext` = argument/continuation write-buffer ports;
+  `ring` / `spawner` = scheduler ports. Use it directly to label a port (e.g. a
+  memReader PE's `main` read vs its `argOut` write). When a single `peNumber` owns
+  several ports, the `owner` also gets a `#<role>` suffix (e.g. `pe:memReader:0#main`).
+- `owner` is `"<kind>:<task>:<index>[#<role>]"`. Per-PE kinds (`pe`, `spawnNextWB`,
+  `sendArgumentWB`) get a non-null `peNumber`; shared servers (`scheduler` with
+  `:vss:`/`:spawner:`, `closureAllocator`, `memoryAllocator`, `argumentNotifier`)
+  have `peNumber: null` since they serve all PEs, not one. `xdma_or_external` marks
+  a non-compute master (e.g. the XDMA slave).
+- The watcher's **own** telemetry write ports are not listed (they are the trace
+  sink, not a measured compute port).
+
+This is the authoritative, per-build replacement for the hand-maintained port
+identity table in §4 — read `ports[]` rather than assuming fixed widths.
+
+---
+
 ## 1. Physical layout
 
 The watcher is a free-running hardware block that writes fixed-size records to HBM,
@@ -50,7 +153,7 @@ bits [7:0]  = header (bundle type)
 
 | header | type      | meaning                                              |
 |-------:|-----------|------------------------------------------------------|
-| 0      | `NULL`    | empty padding slot — **skip it**                     |
+| 0      | `NULL`    | empty padding slot; payload ignored — **skip it**    |
 | 1      | `STATUS`  | a PE-handshake snapshot at a single cycle            |
 | 2      | `BW_READ` sub 0  | per-port avg **read** bytes/cycle, ports 0..14   |
 | 3      | `BW_READ` sub 1  | ports 15..29                                      |
@@ -126,6 +229,12 @@ Per-HBM-port average bandwidth over the most recent **128-cycle window**. Emitte
 per window (every 128 cycles). 31 ports are covered across 3 sub-bundles of 15 ports
 each; read and write are separate bundles.
 
+> **Timing a window.** `BW_READ`/`BW_WRITE` bundles carry no timestamp of their own.
+> Each window also emits one `BW_ADDR` bundle (§5) whose `bits[124:53]` hold the
+> window's final `cycle_count`; that is the time anchor for the whole set (the averages
+> cover cycles `[cycle-127 .. cycle]`). Idle windows are skipped, so anchor by reading
+> that field — not by counting emitted sets.
+
 ```
 bits [7:0]              = header (2/3/4 = read sub 0/1/2 ; 5/6/7 = write sub 0/1/2)
 bits [8 + slot*8 +: 8]  = port (sub*15 + slot) average, for slot = 0..14  (8-bit unsigned)
@@ -143,25 +252,44 @@ bits [8 + slot*8 +: 8]  = port (sub*15 + slot) average, for slot = 0..14  (8-bit
   indices 28..30 are reserved and read 0). Port byte-width varies by port, but the
   value is already in **bytes**, so no per-port width conversion is needed.
 
-Port identity (current `triangleCountDecoupled` build; informational, may change):
-`m_axi_00..15` are 32-bit ports, `m_axi_16..24` are 512-bit, `m_axi_25..26` are
-256-bit, `m_axi_27` is 64-bit. The 512-bit ports (16..24) are the graph `memReader`
-data ports and will dominate read bandwidth.
+Port identity: **use the embedded descriptor (§0), not a fixed table** — the exact
+PE/scheduler attached to each port is per-build and emitted by the generator into
+`ports[]` (keyed by the same port index used here). For reference, a typical
+`triangleCountDecoupled` build has `m_axi_00..15` 32-bit, `m_axi_16..24` 512-bit
+(the graph `memReader` data ports — these dominate read bandwidth), `m_axi_25..26`
+256-bit, `m_axi_27` 64-bit, but always defer to the descriptor.
 
 ---
 
 ## 5. `BW_ADDR` bundle (header = 8)
 
-A rotating per-port address sample. One port per window; the port index advances each
-window so all ports are covered over time. **Reserved for future address-range
-classification** (e.g. graph vs scheduler); a basic viewer can ignore it.
+A rotating per-port address sample **plus the window's timestamp**. Exactly one
+`BW_ADDR` bundle is emitted per window, alongside that window's `BW_READ`/`BW_WRITE`
+set, so it doubles as the **time anchor** for the whole set (see §4). The port index
+advances each window so all address ports are covered over time.
 
 ```
 bits [7:0]    = 8
 bits [12:8]   = port index (0..30)
 bits [32:13]  = AW address bits [39:20] (most-recent write address on that port)
 bits [52:33]  = AR address bits [39:20] (most-recent read  address on that port)
+bits [124:53] = cycle_count (72-bit) of the window's FINAL cycle  (see below)
+bits [127:125]= reserved (0)
 ```
+
+### Window timestamp (`bits [124:53]`)
+This is the `cycle_count` (same clock/epoch as the STATUS timestamp, §3 — relative to
+the start gate) of the **last cycle of the 128-cycle window** that the accompanying
+`BW_READ`/`BW_WRITE` averages summarize. So a value `C` means the averages cover cycles
+**`[C-127 .. C]`** inclusive, and windows land on `C = 128, 256, 384, …`.
+
+Because every emitted window carries its own absolute cycle, **do not infer window time
+by counting** — a window with zero traffic on all ports emits nothing (it is skipped),
+so the N-th emitted BW set is not necessarily the N-th 128-cycle window. Read the cycle
+from this field directly; it is robust to skipped-idle-window and dropped bundles.
+
+The address bits remain **reserved for future address-range classification** (e.g. graph
+vs scheduler); a basic viewer can ignore them but should still read the timestamp.
 
 The 20 captured bits are AXI address bits **`addr[39:20]`** — i.e. the address with the
 low 20 bits dropped (1 MB granularity). Reconstruct an approximate byte address as
@@ -176,16 +304,24 @@ interpret as opaque region tags for now.
 ## 6. Reading procedure
 
 ```python
-import struct
+import struct, json
 
 def decode(path, clock_hz=100_000_000):
     data = open(path, "rb").read()
-    for off in range(0, len(data) - 31, 32):
+    # §0: optional self-describing header carrying the HBM-port descriptor.
+    descriptor, beats_off, is_emulation = None, 0, False
+    if data[:8] == b"HCKTRACE":
+        flags      = int.from_bytes(data[12:16], "little")
+        is_emulation = bool(flags & 0x1)                # bit0: 1=emulation, 0=hw
+        json_len   = int.from_bytes(data[16:24], "little")
+        beats_off  = int.from_bytes(data[24:32], "little")
+        descriptor = json.loads(data[32:32+json_len])   # ports[] -> owners
+    for off in range(beats_off, len(data) - 31, 32):
         slot0 = int.from_bytes(data[off:off+16],    "little")
         slot1 = int.from_bytes(data[off+16:off+32], "little")
         for bundle in (slot0, slot1):
             header = bundle & 0xFF
-            if header == 0:                      # NULL padding
+            if header == 0:                      # NULL padding, payload ignored
                 continue
             elif header == 1:                    # STATUS
                 status = (bundle >> 8)  & ((1 << 48) - 1)
@@ -199,10 +335,12 @@ def decode(path, clock_hz=100_000_000):
                     avg  = (bundle >> (8 + slot*8)) & 0xFF       # bytes/cycle
                     port = sub*15 + slot
                     # bytes_per_sec = avg * clock_hz
-            elif header == 8:                    # BW_ADDR (optional)
-                port = (bundle >> 8)  & 0x1F
-                aw   = (bundle >> 13) & ((1 << 20) - 1)
-                ar   = (bundle >> 33) & ((1 << 20) - 1)
+            elif header == 8:                    # BW_ADDR + window timestamp
+                port  = (bundle >> 8)  & 0x1F
+                aw    = (bundle >> 13) & ((1 << 20) - 1)
+                ar    = (bundle >> 33) & ((1 << 20) - 1)
+                cycle = (bundle >> 53) & ((1 << 72) - 1)  # window's FINAL cycle;
+                # the BW_READ/BW_WRITE set in this window covers cycles [cycle-127 .. cycle]
 ```
 
 ### Finding the valid region
@@ -258,13 +396,16 @@ a clean marker of a run's beginning.
 ## 8. Quick reference
 
 ```
+Header : magic "HCKTRACE", [8:12) u32 version, [12:16) u32 flags (bit0=is_emulation),
+         [16:24) u64 json_length, [24:32) u64 beats_offset, then JSON, pad, beats.
 Beat   : 32 bytes = slot0 (bytes 0..15), slot1 (bytes 16..31), each a 128-bit bundle.
 Bundle : [7:0] header.
   1 STATUS : [55:8] 48 status bits (PE k -> [8+k*4 +:4] = in_v,in_r,out_v,out_r),
              [127:56] cycle_count (72b, since start gate).
   2..4 BW_READ  sub 0..2 : [8+slot*8 +:8] avg read  bytes/cycle, port = sub*15+slot.
   5..7 BW_WRITE sub 0..2 : [8+slot*8 +:8] avg write bytes/cycle, port = sub*15+slot.
-  8 BW_ADDR : [12:8] port, [32:13] AW addr[39:20], [52:33] AR addr[39:20] (<<20 = byte addr).
+  8 BW_ADDR : [12:8] port, [32:13] AW addr[39:20], [52:33] AR addr[39:20] (<<20 = byte addr),
+              [124:53] cycle_count of window's FINAL cycle (set covers [cycle-127 .. cycle]).
   0 NULL   : skip.
 PE state (input handshake): WAITING=!in_valid, STALLED=in_valid&!in_ready, ACTIVE=in_valid&in_ready.
 bytes/s = bw_value * clock_hz.  window = 128 cycles.
