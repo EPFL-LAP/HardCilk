@@ -30,33 +30,29 @@ using Addr = uint64_t;
 static constexpr size_t TELEMETRY_BEAT_BYTES = 32;
 static constexpr uint64_t TELEMETRY_IO_CHUNK_BYTES = 64ULL << 20;
 
-struct __attribute__((packed)) TriangleCountDecoupledRootTask
+struct __attribute__((packed)) CountDecoupledRootTask
 {
   Addr cont;
   Addr A;
-  Addr B;
   Addr count;
   uint32_t size;
   uint32_t i;
-  uint32_t j;
-  uint32_t a_i;
-  uint32_t b_j;
-  uint8_t _padding[12];
+  uint8_t _padding[32];
 };
 
-static_assert(sizeof(TriangleCountDecoupledRootTask) ==
-                  sizeof(whileLoopMain_reentry0_task),
-              "Host root task must match whileLoopMain_reentry0_task layout");
+static_assert(sizeof(CountDecoupledRootTask) ==
+                  sizeof(taskInitiator_reentry0_task),
+              "Host root task must match taskInitiator_reentry0_task layout");
 
-inline bool triangleCountDecoupledDoneCondition(int32_t value)
+inline bool countDecoupledDoneCondition(int32_t value)
 {
   return value != 0;
 }
 
-class TriangleCountDecoupledDriver : public hardCilkDriver
+class CountDecoupledDriver : public hardCilkDriver
 {
 public:
-  TriangleCountDecoupledDriver(Memory *memory, uint32_t size,
+  CountDecoupledDriver(Memory *memory, uint32_t size,
                                uint32_t num_instances = 1,
                                double watchdog_s = 600.0,
                                bool fast_mode = false)
@@ -67,10 +63,10 @@ public:
   static int run_cpu_test_bench(uint32_t size)
   {
     size = std::max<uint32_t>(1, size);
-    std::vector<int32_t> A, B;
-    buildInputs(size, A, B);
-    int32_t matches = referenceCount(A, B);
-    std::cout << "[triangleCountDecoupled-CPU] size=" << size
+    std::vector<int32_t> A;
+    buildInputs(size, A);
+    int32_t matches = referenceCount(A);
+    std::cout << "[countDecoupled-CPU] size=" << size
               << " expected_iterations=" << size
               << " matches=" << matches << "\n";
     return 0;
@@ -83,9 +79,9 @@ public:
 
     // Every instance solves an identical (but independent, non-overlapping)
     // problem, so one reference count applies to all.
-    std::vector<int32_t> A, B;
-    buildInputs(size_, A, B);
-    const int32_t expected = referenceCount(A, B);
+    std::vector<int32_t> A;
+    buildInputs(size_, A);
+    const int32_t expected = referenceCount(A);
     const uint64_t array_bytes = (uint64_t)size_ * sizeof(int32_t);
 
     clearComputeHBM();
@@ -102,59 +98,48 @@ public:
     // adjacent banks for the large continuation pool allocated by initSystem.
     const uint64_t all_array_bytes = array_bytes * N;
     Addr all_A_addr = allocateComputeMem(all_array_bytes, 512);
-    Addr all_B_addr = allocateComputeMem(all_array_bytes, 512);
     Addr all_count_addr = allocateComputeMem((uint64_t)N * 2 * sizeof(int32_t),
                                              512);
 
     std::vector<int32_t> all_A((uint64_t)N * size_);
-    std::vector<int32_t> all_B((uint64_t)N * size_);
     std::vector<int32_t> all_count((uint64_t)N * 2, 0);
     for (uint32_t k = 0; k < N; ++k)
     {
       std::copy(A.begin(), A.end(), all_A.begin() + (uint64_t)k * size_);
-      std::copy(B.begin(), B.end(), all_B.begin() + (uint64_t)k * size_);
     }
     memory_->copyToDevice(all_A_addr,
                           reinterpret_cast<const uint8_t *>(all_A.data()),
-                          all_array_bytes);
-    memory_->copyToDevice(all_B_addr,
-                          reinterpret_cast<const uint8_t *>(all_B.data()),
                           all_array_bytes);
     memory_->copyToDevice(all_count_addr,
                           reinterpret_cast<const uint8_t *>(all_count.data()),
                           all_count.size() * sizeof(int32_t));
 
     // Build N non-overlapping instances and one root task each.
-    std::vector<TriangleCountDecoupledRootTask> roots(N);
+    std::vector<CountDecoupledRootTask> roots(N);
     std::vector<Addr> count_addrs(N), done_addrs(N);
     for (uint32_t k = 0; k < N; ++k)
     {
       Addr A_addr = all_A_addr + (uint64_t)k * array_bytes;
-      Addr B_addr = all_B_addr + (uint64_t)k * array_bytes;
       Addr count_addr = all_count_addr +
                         (uint64_t)k * 2 * sizeof(int32_t);
       Addr done_addr = count_addr + sizeof(int32_t);
-      TriangleCountDecoupledRootTask &r = roots[k];
+      CountDecoupledRootTask &r = roots[k];
       r.cont = done_addr;
       r.A = A_addr;
-      r.B = B_addr;
       r.count = count_addr;
       r.size = size_;
       r.i = 0;
-      r.j = 0;
-      r.a_i = 0;
-      r.b_j = 0;
       count_addrs[k] = count_addr;
       done_addrs[k] = done_addr;
     }
 
-    std::cout << "[triangleCountDecoupled] instances=" << N << " size=" << size_
+    std::cout << "[countDecoupled] instances=" << N << " size=" << size_
               << " expected_matches_each=" << expected << "\n";
 
     // initSystem writes the whole vector to the root scheduler and sets
     // fifoTail=N, so all N root tasks are live concurrently.
     configureInitialQueueCapacities();
-    initSystem(roots, &triangleCountDecoupledDoneCondition, 0, 0, false);
+    initSystem(roots, &countDecoupledDoneCondition, 0, 0, false);
 
     auto t_kernel_start = std::chrono::high_resolution_clock::now();
     startSystem();
@@ -182,13 +167,13 @@ public:
     }
     auto t_done = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[triangleCountDecoupled-FPGA] execution time: "
+    std::cout << "[countDecoupled-FPGA] execution time: "
               << std::chrono::duration<double>(t_kernel_done - t_kernel_start)
                      .count()
               << "s\n";
-    std::cout << "[triangleCountDecoupled-FPGA] end-to-end time: "
+    std::cout << "[countDecoupled-FPGA] end-to-end time: "
               << std::chrono::duration<double>(t_done - t0).count() << "s\n";
-    std::cout << "[triangleCountDecoupled-FPGA] passed=" << passed << "/" << N
+    std::cout << "[countDecoupled-FPGA] passed=" << passed << "/" << N
               << " expected_each=" << expected << "\n";
 
     // Always dump telemetry (even on failure) so a hang/mismatch can be analyzed.
@@ -196,11 +181,11 @@ public:
 
     if (rc == 0 && passed == N)
     {
-      std::cout << "[triangleCountDecoupled] PASS\n";
+      std::cout << "[countDecoupled] PASS\n";
       return 0;
     }
 
-    std::cerr << "[triangleCountDecoupled] FAIL passed=" << passed << "/" << N;
+    std::cerr << "[countDecoupled] FAIL passed=" << passed << "/" << N;
     if (any_bad)
       std::cerr << " first_bad[" << first_bad_k << "]=" << first_bad_got
                 << " expected=" << expected;
@@ -249,15 +234,15 @@ private:
     XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
     if (xrtMem == nullptr)
     {
-      std::cerr << "[triangleCountDecoupled] memory is not XRTMemory; "
+      std::cerr << "[countDecoupled] memory is not XRTMemory; "
                    "full HBM clear skipped\n";
       return;
     }
 
-    std::cout << "[triangleCountDecoupled] clearing 8 GiB compute HBM "
+    std::cout << "[countDecoupled] clearing 8 GiB compute HBM "
                  "(banks 0-15)\n";
     xrtMem->clearHBMBankRange(COMPUTE_FIRST_BANK, COMPUTE_LAST_BANK);
-    std::cout << "[triangleCountDecoupled] compute HBM clear complete\n";
+    std::cout << "[countDecoupled] compute HBM clear complete\n";
   }
 
   void configureInitialQueueCapacities()
@@ -284,7 +269,7 @@ private:
       }
     }
     // initSystem doubles capacityVirtualQueue when allocating the backing BO.
-    std::cout << "[triangleCountDecoupled] initial scheduler backing capacity: "
+    std::cout << "[countDecoupled] initial scheduler backing capacity: "
               << (2 * INITIAL_SCHEDULER_VIRTUAL_CAPACITY)
               << " entries per server; continuation allocator capacity: "
               << allocatorCapacity << " entries\n";
@@ -427,7 +412,7 @@ private:
       std::time_t now = std::time(nullptr);
       std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&now));
       std::string path =
-          std::string("/tmp/triangleCountDecoupled_telemetry_") + ts + ".bin";
+          std::string("/tmp/countDecoupled_telemetry_") + ts + ".bin";
 
       std::ofstream out(path, std::ios::binary);
       if (!out)
@@ -441,10 +426,10 @@ private:
       std::vector<hardcilk_telemetry::WatcherPe> watcherPes;
       {
         std::vector<std::string> candidates;
-        if (const char *e = std::getenv("TCD_HBM_DESCRIPTOR"))
+        if (const char *e = std::getenv("CD_HBM_DESCRIPTOR"))
           candidates.push_back(e);
-        candidates.push_back("triangleCountDecoupled.hbmports.json");
-        candidates.push_back("../triangleCountDecoupled.hbmports.json");
+        candidates.push_back("countDecoupled.hbmports.json");
+        candidates.push_back("../countDecoupled.hbmports.json");
         std::string descPath, descJson, triedPaths;
         for (const auto &c : candidates)
         {
@@ -650,7 +635,7 @@ private:
     std::time_t now = std::time(nullptr);
     std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&now));
     std::string path =
-        std::string("/tmp/triangleCountDecoupled_telemetry_") + ts + ".bin";
+        std::string("/tmp/countDecoupled_telemetry_") + ts + ".bin";
 
     std::ofstream out(path, std::ios::binary);
     if (!out)
@@ -660,7 +645,7 @@ private:
     }
     // Standard self-describing header: the HBM-port -> module descriptor emitted by
     // the generator (<design>.hbmports.json), so the viewer can label each bandwidth
-    // port and PE. Located via $TCD_HBM_DESCRIPTOR, else "triangleCountDecoupled.hbmports.json"
+    // port and PE. Located via $CD_HBM_DESCRIPTOR, else "countDecoupled.hbmports.json"
     // in the cwd. If it is missing we print a LOUD warning and fall back to a
     // headerless trace (beats at offset 0) -- that is a misconfiguration, not a mode.
     // Layout when present (see traceViewer/format.md §0):
@@ -669,10 +654,10 @@ private:
     //   [32 : 32+json_length) JSON descriptor, then zero pad to beats_offset.
     {
       std::vector<std::string> candidates;
-      if (const char *e = std::getenv("TCD_HBM_DESCRIPTOR"))
+      if (const char *e = std::getenv("CD_HBM_DESCRIPTOR"))
         candidates.push_back(e);
-      candidates.push_back("triangleCountDecoupled.hbmports.json");    // run from workspace
-      candidates.push_back("../triangleCountDecoupled.hbmports.json"); // run from build folder
+      candidates.push_back("countDecoupled.hbmports.json");    // run from workspace
+      candidates.push_back("../countDecoupled.hbmports.json"); // run from build folder
       std::string descPath, descJson, triedPaths;
       for (const auto &c : candidates)
       {
@@ -723,7 +708,7 @@ private:
             << "!!!  The .bin will have NO header, so the viewer cannot map ports/\n"
             << "!!!  PEs. Fix: copy <design>.hbmports.json (emitted by the sbt\n"
             << "!!!  generator next to <design>.hdlinfo.json) into the run cwd, or\n"
-            << "!!!  set $TCD_HBM_DESCRIPTOR to its path, then re-run.\n"
+            << "!!!  set $CD_HBM_DESCRIPTOR to its path, then re-run.\n"
             << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n";
       }
     }
@@ -737,47 +722,19 @@ private:
               << "[telemetry] " << path << "\n";
   }
 
-  static void buildInputs(uint32_t size, std::vector<int32_t> &A,
-                          std::vector<int32_t> &B)
+  static void buildInputs(uint32_t size, std::vector<int32_t> &A)
   {
     A.resize(size);
-    B.resize(size);
-    uint32_t matches = size / 2;
-    for (uint32_t i = 0; i < matches; i++)
-    {
-      A[i] = (int32_t)i;
-      B[i] = (int32_t)i;
-    }
-    for (uint32_t i = matches; i < size; i++)
-    {
-      A[i] = (int32_t)(i + size);
-      B[i] = (int32_t)i;
-    }
+    for (uint32_t i = 0; i < size; i++)
+      A[i] = ((i * 1103515245u + 12345u) >> 30) & 1u;
   }
 
-  static int32_t referenceCount(const std::vector<int32_t> &A,
-                                const std::vector<int32_t> &B)
+  static int32_t referenceCount(const std::vector<int32_t> &A)
   {
-    uint32_t i = 0;
-    uint32_t j = 0;
     int32_t count = 0;
-    while (i < A.size() && j < B.size())
-    {
-      if (A[i] == B[j])
-      {
+    for (int32_t value : A)
+      if (value == 1)
         count++;
-        i++;
-        j++;
-      }
-      else if (A[i] < B[j])
-      {
-        i++;
-      }
-      else
-      {
-        j++;
-      }
-    }
     return count;
   }
 
@@ -796,7 +753,7 @@ private:
                               sizeof(done));
       if (done != 0)
       {
-        std::cout << "[triangleCountDecoupled] done after " << polls
+        std::cout << "[countDecoupled] done after " << polls
                   << " polls";
         if (fast_mode_)
           std::cout << " (fast mode)";
@@ -807,7 +764,7 @@ private:
       auto now = std::chrono::high_resolution_clock::now();
       if (now > deadline)
       {
-        std::cerr << "[triangleCountDecoupled] WATCHDOG: " << watchdog_s_
+        std::cerr << "[countDecoupled] WATCHDOG: " << watchdog_s_
                   << "s elapsed without done. done=" << done << "\n";
         return -1;
       }
@@ -821,7 +778,7 @@ private:
   uint64_t allocatorAvailable() const
   {
     for (const auto &task : descriptor.taskDescriptors)
-      if (task.name == "whileLoopMain_reentry0_cont0" &&
+      if (task.name == "taskAdder_cont0" &&
           !task.mgmtBaseAddresses.allocationServersBaseAddresses.empty())
         return memory_->readReg64(
             task.mgmtBaseAddresses.allocationServersBaseAddresses.front() +
@@ -832,7 +789,7 @@ private:
   uint64_t allocatorCapacity() const
   {
     for (const auto &task : descriptor.taskDescriptors)
-      if (task.name == "whileLoopMain_reentry0_cont0")
+      if (task.name == "taskAdder_cont0")
         return task.getCapacityVirtualQueue("allocator");
     return 0;
   }
@@ -840,7 +797,7 @@ private:
   void dumpStallState(const std::vector<char> &done,
                       const std::vector<int32_t> &states)
   {
-    std::cout << "[triangleCountDecoupled-STALL] unfinished instances:";
+    std::cout << "[countDecoupled-STALL] unfinished instances:";
     size_t shown = 0;
     for (size_t k = 0; k < done.size() && shown < 16; ++k)
       if (!done[k])
@@ -852,7 +809,7 @@ private:
 
     for (const auto &task : descriptor.taskDescriptors)
       for (uint64_t base : task.mgmtBaseAddresses.schedulerServersBaseAddresses)
-        std::cout << "[triangleCountDecoupled-SCHED] task=" << task.name
+        std::cout << "[countDecoupled-SCHED] task=" << task.name
                   << " base=0x" << std::hex << base << std::dec
                   << " currLen="
                   << memory_->readReg64(base + scheduler_server_currLen_shift)
@@ -903,7 +860,7 @@ private:
 
       if (remaining == 0)
       {
-        std::cout << "[triangleCountDecoupled] all " << count_addrs.size()
+        std::cout << "[countDecoupled] all " << count_addrs.size()
                   << " instances done after " << polls << " polls"
                   << (fast_mode_ ? " (fast mode)" : "") << "\n";
         return 0;
@@ -930,7 +887,7 @@ private:
                                 ? 0.0
                                 : (double)matches / count_addrs.size();
         double elapsed = std::chrono::duration<double>(now - start).count();
-        std::cout << "[triangleCountDecoupled] progress: done="
+        std::cout << "[countDecoupled] progress: done="
                   << (count_addrs.size() - remaining) << "/"
                   << count_addrs.size() << " avg_iterations="
                   << avgIterations << "/" << size_ << " (" << progress
@@ -953,7 +910,7 @@ private:
 
       if (now > deadline)
       {
-        std::cerr << "[triangleCountDecoupled] WATCHDOG: " << watchdog_s_
+        std::cerr << "[countDecoupled] WATCHDOG: " << watchdog_s_
                   << "s elapsed; " << remaining << "/" << count_addrs.size()
                   << " instances NOT done\n";
         return -1;

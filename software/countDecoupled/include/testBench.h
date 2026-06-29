@@ -1,43 +1,41 @@
 #pragma once
 
-#include <ApproxDenseSubDriver.h>
 #include <SingleFpgaBenchmark.h>
+#include <CountDecoupledDriver.h>
 
 #include <cstdlib>
 #include <iostream>
 #include <string>
 
-struct ApproxDenseSubBenchArgs
+struct CountDecoupledBenchArgs
 {
   std::string xclbin_path;
-  std::string graph_file;
-  double epsilon = 0.1;
+  uint32_t size = 100;
+  uint32_t num_instances = 1; // independent root tasks launched concurrently
   double watchdog_s = 600.0;
   bool fast_mode = false;
   WaveformConfig wave; // hw_emu waveform capture (see --waveform/--fst)
 };
 
-inline void approx_dense_sub_usage(const char *prog)
+inline void count_decoupled_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
-            << " <xclbin_path|--cpu> <graph.txt> [epsilon] [watchdog_s]"
-               " [--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n"
-            << "Graph format: unweighted edge list, loaded undirected.\n";
+            << " <xclbin_path|--cpu> [size] [num_instances] [watchdog_s] "
+               "[--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n";
   benchmarkWaveformUsage(std::cerr);
 }
 
-inline bool parse_approx_dense_sub_args(int argc, char **argv,
-                                        ApproxDenseSubBenchArgs &out)
+inline bool parse_count_decoupled_args(
+    int argc, char **argv, CountDecoupledBenchArgs &out)
 {
-  if (argc < 3)
+  if (argc < 2)
   {
-    approx_dense_sub_usage(argv[0]);
+    count_decoupled_usage(argv[0]);
     return false;
   }
   out.xclbin_path = argv[1];
-  out.graph_file = argv[2];
   int positional = 0;
-  for (int i = 3; i < argc; i++)
+  for (int i = 2; i < argc; i++)
   {
     std::string arg = argv[i];
     if (arg == "--fast")
@@ -48,8 +46,10 @@ inline bool parse_approx_dense_sub_args(int argc, char **argv,
     if (benchmarkTryParseWaveformArg(arg, out.wave))
       continue;
     if (positional == 0)
-      out.epsilon = std::atof(argv[i]);
+      out.size = (uint32_t)std::strtoul(argv[i], nullptr, 0);
     else if (positional == 1)
+      out.num_instances = (uint32_t)std::strtoul(argv[i], nullptr, 0);
+    else if (positional == 2)
       out.watchdog_s = std::atof(argv[i]);
     else
       return false;
@@ -58,21 +58,19 @@ inline bool parse_approx_dense_sub_args(int argc, char **argv,
   return true;
 }
 
-inline int run_approx_dense_sub_benchmark(int argc, char **argv,
-                                          const std::string &kernel_name)
+inline int run_count_decoupled_benchmark(
+    int argc, char **argv, const std::string &kernel_name)
 {
-  setenv("PARLAY_NUM_THREADS", "4", 0);
-  ApproxDenseSubBenchArgs args;
-  if (!parse_approx_dense_sub_args(argc, argv, args))
+  CountDecoupledBenchArgs args;
+  if (!parse_count_decoupled_args(argc, argv, args))
     return EXIT_FAILURE;
   if (benchmarkCpuOnlyRequested(args.xclbin_path))
-    return ApproxDenseSubDriver::run_cpu_test_bench(args.graph_file,
-                                                    args.epsilon);
+    return CountDecoupledDriver::run_cpu_test_bench(args.size);
   benchmarkApplyWaveformDefaults(args.wave, kernel_name);
   return runSingleFpgaBenchmark(
       args.xclbin_path, kernel_name,
       [&](Memory *m) {
-        ApproxDenseSubDriver driver(m, args.graph_file, args.epsilon,
+        CountDecoupledDriver driver(m, args.size, args.num_instances,
                                     args.watchdog_s, args.fast_mode);
         return driver.run_test_bench();
       },

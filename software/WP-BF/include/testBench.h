@@ -14,21 +14,23 @@ struct WidestPathBenchArgs
   uint32_t source = 0;
   double watchdog_s = 600.0;
   bool fast_mode = false;
+  WaveformConfig wave; // hw_emu waveform capture (see --waveform/--fst)
 };
 
 inline void widest_path_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <weighted_graph.csv> [source]"
-               " [watchdog_s] [--fast]\n"
+               " [watchdog_s] [--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n"
             << "CSV format: src,dst,weight (directed). Whitespace is also"
                " accepted.\n";
+  benchmarkWaveformUsage(std::cerr);
 }
 
 inline bool parse_widest_path_args(int argc, char **argv,
                                    WidestPathBenchArgs &out)
 {
-  if (argc < 3 || argc > 6)
+  if (argc < 3)
   {
     widest_path_usage(argv[0]);
     return false;
@@ -44,6 +46,8 @@ inline bool parse_widest_path_args(int argc, char **argv,
       out.fast_mode = true;
       continue;
     }
+    if (benchmarkTryParseWaveformArg(arg, out.wave))
+      continue;
     if (positional == 0)
       out.source = (uint32_t)std::strtoul(argv[i], nullptr, 0);
     else if (positional == 1)
@@ -64,9 +68,13 @@ inline int run_widest_path_benchmark(int argc, char **argv,
     return EXIT_FAILURE;
   if (benchmarkCpuOnlyRequested(args.xclbin_path))
     return WidestPathDriver::run_cpu_test_bench(args.graph_file, args.source);
-  return runSingleFpgaBenchmark(args.xclbin_path, kernel_name, [&](Memory *m) {
-    WidestPathDriver driver(m, args.graph_file, args.source, args.watchdog_s,
-                            args.fast_mode);
-    return driver.run_test_bench();
-  });
+  benchmarkApplyWaveformDefaults(args.wave, kernel_name);
+  return runSingleFpgaBenchmark(
+      args.xclbin_path, kernel_name,
+      [&](Memory *m) {
+        WidestPathDriver driver(m, args.graph_file, args.source,
+                                args.watchdog_s, args.fast_mode);
+        return driver.run_test_bench();
+      },
+      args.wave);
 }

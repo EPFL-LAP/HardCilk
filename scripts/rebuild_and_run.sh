@@ -33,6 +33,7 @@ declare -A HLS_KERNELS=(
   [MaximalIndependentSet]="MaximalIndependentSet NGS mis_loop_helper"
   [GraphColoring]="GraphColoring color_init_helper color_loop_helper"
   [triangleCountDecoupled]="whileLoopMain whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader watcher"
+  [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader watcher"
 )
 
 declare -A HOST_TARGET=(
@@ -43,6 +44,7 @@ declare -A HOST_TARGET=(
   [MaximalIndependentSet]="MaximalIndependentSet_xrt"
   [GraphColoring]="GraphColoring_xrt"
   [triangleCountDecoupled]="triangleCountDecoupled_xrt"
+  [countDecoupled]="countDecoupled_xrt"
 )
 
 declare -A XCLBIN_NAME=(
@@ -53,6 +55,7 @@ declare -A XCLBIN_NAME=(
   [MaximalIndependentSet]="MaximalIndependentSet.xclbin"
   [GraphColoring]="GraphColoring.xclbin"
   [triangleCountDecoupled]="triangleCountDecoupled.xclbin"
+  [countDecoupled]="countDecoupled.xclbin"
 )
 
 declare -A REDUCE_AXI=(
@@ -63,6 +66,7 @@ declare -A REDUCE_AXI=(
   [MaximalIndependentSet]=30
   [GraphColoring]=30
   [triangleCountDecoupled]=16
+  [countDecoupled]=16
 )
 
 default_run_args() {
@@ -83,6 +87,9 @@ default_run_args() {
       echo "${GRAPH:-/beta/bradley/Graphs/tinyGraph.txt} ${MAX_COLORS:-64} ${SEED:-1} ${WATCHDOG}"
       ;;
     triangleCountDecoupled)
+      echo "${SIZE:-10} ${INSTANCES:-10} ${WATCHDOG}"
+      ;;
+    countDecoupled)
       echo "${SIZE:-10} ${INSTANCES:-10} ${WATCHDOG}"
       ;;
     *)
@@ -166,8 +173,10 @@ if (( START_STEP <= 4 )); then
   cd "$WORKSPACE_DIR"
   # `make clean` (per-target) instead of `make cleanall`: cleanall also wipes
   # xclbin-backups/ (it is meant as the explicit "nuke everything" target), so
-  # using it for routine rebuilds destroyed saved bitstreams. clean is enough.
+  # using it for routine rebuilds destroyed saved bitstreams. Remove the Vitis
+  # package/XO caches separately so stale staged RTL cannot survive a relink.
   make clean TARGET=hw_emu
+  rm -rf packaged_kernel_* tmp_kernel_pack_* .ipcache .Xil */xo/hw_emu
   make TARGET=hw_emu
   make emconfig TARGET=hw_emu
 fi

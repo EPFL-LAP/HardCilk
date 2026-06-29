@@ -19,7 +19,7 @@
 #           Valid names: BFS, WP-BF, BellmanFord, ApproxDenseSub,
 #                        MaximalIndependentSet, GraphColoring,
 #                        graphRandomWalk, pageRank, triangleCount,
-#                        triangleCountDecoupled
+#                        triangleCountDecoupled, countDecoupled
 #   -D  Debug mode: pass through to build_kernels.sh to keep all
 #           intermediate build state (default: off — delete intermediates)
 #   -h  Show this help
@@ -64,6 +64,11 @@
 #       ├── whileLoopMain_reentry0_cont0/
 #       ├── memReader/
 #       └── watcher/          ← telemetry kernel
+#   └── countDecoupled/
+#       ├── taskInitiator_reentry0/
+#       ├── taskAdder_cont0/
+#       ├── memReader/
+#       └── watcher/          ← telemetry kernel
 # =============================================================================
 
 set -euo pipefail
@@ -104,10 +109,11 @@ declare -A BENCHMARK_KERNELS=(
     [pageRank]="page_rank_map vertex_map"
     [triangleCount]="triangle vertex_map"
     [triangleCountDecoupled]="whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader watcher"
+    [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader watcher"
 )
 
 # Ordered list so the build sequence is deterministic
-BENCHMARK_ORDER=(BFS WP-BF BellmanFord ApproxDenseSub MaximalIndependentSet GraphColoring graphRandomWalk pageRank triangleCount triangleCountDecoupled)
+BENCHMARK_ORDER=(BFS WP-BF BellmanFord ApproxDenseSub MaximalIndependentSet GraphColoring graphRandomWalk pageRank triangleCount triangleCountDecoupled countDecoupled)
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {

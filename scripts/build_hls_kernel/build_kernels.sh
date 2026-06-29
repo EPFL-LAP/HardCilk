@@ -146,6 +146,7 @@ for KERNEL in "${KERNELS[@]}"; do
         RTL_SRC="${PROJ_DIR}/${KERNEL}_proj/solution1/syn/verilog"
         RTL_DEST="${VERILOG_OUT}/${KERNEL}"
         if [[ -d "$RTL_SRC" ]]; then
+            rm -rf "$RTL_DEST"
             mkdir -p "$RTL_DEST"
             cp -r "${RTL_SRC}/." "$RTL_DEST/"
             success "Verilog copied to : $RTL_DEST"
