@@ -3,7 +3,10 @@
 #include <GraphBenchmarkCommon.h>
 #include <benchmarks/SSWidestPath/JulienneDBS17/SSWidestPath.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <iomanip>
 
 struct WidestPath_args
@@ -133,8 +136,8 @@ public:
 
     tuneSchedulerQueueCapacities("WidestPath", G.num_vertices);
     auto t_kernel_start = std::chrono::high_resolution_clock::now();
-    int rc = runRootTask(std::vector<WidestPath_args>{root}, cont_base,
-                         offsetof(WidestPath_args, done));
+    int rc = runWidestPathRootTask(root, cont_base, distance_base,
+                                   G.num_vertices);
     auto t_kernel_done = t_kernel_done_;
 
     std::vector<float> got(G.num_vertices);
@@ -198,9 +201,147 @@ public:
   }
 
 private:
+  bool isEmulation() const
+  {
+    const char *emuMode = std::getenv("XCL_EMULATION_MODE");
+    return emuMode != nullptr && emuMode[0] != '\0';
+  }
+
+  size_t countVisited(Addr distance_base, uint32_t vertex_count)
+  {
+    std::vector<float> distances(vertex_count);
+    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(distances.data()),
+                            distance_base,
+                            (uint64_t)vertex_count * sizeof(float));
+    return std::count_if(distances.begin(), distances.end(),
+                         [](float distance) { return std::isfinite(distance); });
+  }
+
+  void printProgress(Addr cont_base, Addr distance_base,
+                     uint32_t vertex_count,
+                     std::chrono::high_resolution_clock::time_point start)
+  {
+    WidestPath_args cont{};
+    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&cont), cont_base,
+                            sizeof(cont));
+    size_t visited = countVisited(distance_base, vertex_count);
+    double percent = vertex_count == 0
+                         ? 0.0
+                         : 100.0 * (double)visited / (double)vertex_count;
+    double elapsed = std::chrono::duration<double>(
+                         std::chrono::high_resolution_clock::now() - start)
+                         .count();
+    std::cout << "[WP-BF] progress: visited=" << visited << "/"
+              << vertex_count << " (" << percent << "%)"
+              << " round=" << cont.round
+              << " frontier=" << cont.frontier_length
+              << " active=" << cont.active << " done=" << cont.done
+              << " elapsed=" << elapsed << "s\n";
+  }
+
+  int runWidestPathRootTask(const WidestPath_args &root, Addr cont_base,
+                            Addr distance_base, uint32_t vertex_count)
+  {
+    initSystem(std::vector<WidestPath_args>{root},
+               &hardcilkDoneConditionStub, 0, 0, false);
+    const auto start = std::chrono::high_resolution_clock::now();
+    const auto deadline = start + std::chrono::duration<double>(watchdog_s_);
+
+    // Stall detection: if the kernel makes no observable forward progress for
+    // STALL_WINDOW seconds, bail out immediately so a hang is easy to debug
+    // (rather than waiting out the full watchdog). "Progress" is any change in
+    // the continuation's counters or in the number of finalized distances.
+    // Disabled in fast_mode (no per-poll reads) and relaxed under emulation.
+    const double stall_window_s = isEmulation() ? 120.0 : 1.0;
+    const auto sample_period = std::chrono::milliseconds(250);
+    auto next_sample = start;
+    auto last_change = start;
+    bool have_signature = false;
+    uint32_t last_counter = 0, last_round = 0, last_frontier = 0,
+             last_active = 0;
+    size_t last_visited = 0;
+
+    uint64_t iters = 0;
+    startSystem();
+
+    while (true)
+    {
+      if (!fast_mode_ && checkPaused() == 0)
+        managePausedServer();
+
+      uint32_t done = 0;
+      memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&done),
+                              cont_base + offsetof(WidestPath_args, done),
+                              sizeof(done));
+
+      if (done != 0)
+      {
+        t_kernel_done_ = std::chrono::high_resolution_clock::now();
+        if (!fast_mode_)
+          printProgress(cont_base, distance_base, vertex_count, start);
+        std::cout << "[WP-BF] done after " << iters << " polls";
+        if (fast_mode_)
+          std::cout << " (fast mode)";
+        std::cout << "\n";
+        return 0;
+      }
+
+      auto now = std::chrono::high_resolution_clock::now();
+      if (!fast_mode_ && now >= next_sample)
+      {
+        next_sample = now + sample_period;
+
+        WidestPath_args cont{};
+        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&cont), cont_base,
+                                sizeof(cont));
+        size_t visited = countVisited(distance_base, vertex_count);
+        printProgress(cont_base, distance_base, vertex_count, start);
+
+        bool changed = !have_signature || cont.counter != last_counter ||
+                       cont.round != last_round ||
+                       cont.frontier_length != last_frontier ||
+                       cont.active != last_active || visited != last_visited;
+        if (changed)
+        {
+          have_signature = true;
+          last_counter = cont.counter;
+          last_round = cont.round;
+          last_frontier = cont.frontier_length;
+          last_active = cont.active;
+          last_visited = visited;
+          last_change = now;
+        }
+        else if (std::chrono::duration<double>(now - last_change).count() >=
+                 stall_window_s)
+        {
+          t_kernel_done_ = now;
+          std::cerr << "[WP-BF] STALL: no progress for " << stall_window_s
+                    << "s (round=" << cont.round
+                    << " frontier=" << cont.frontier_length
+                    << " active=" << cont.active << " visited=" << visited
+                    << "/" << vertex_count
+                    << "). Exiting early for debug.\n";
+          return -1;
+        }
+      }
+      if (now > deadline)
+      {
+        t_kernel_done_ = now;
+        std::cerr << "[WP-BF] WATCHDOG: " << watchdog_s_
+                  << "s elapsed without done.\n";
+        return -1;
+      }
+
+      iters++;
+      std::this_thread::sleep_for(fast_mode_
+                                      ? std::chrono::milliseconds(10)
+                                      : std::chrono::microseconds(200));
+    }
+  }
+
   static std::vector<double> runGbbsIntegerReference(const WeightedGraph &G,
-                                                    uint32_t source,
-                                                    double &elapsed_s)
+                                                     uint32_t source,
+                                                     double &elapsed_s)
   {
     auto gbbs_graph = buildGbbsWeightedIntGraph(G);
     auto start = std::chrono::high_resolution_clock::now();

@@ -25,12 +25,14 @@ struct BfsBenchArgs {
   int max_depth = 0;        // 0 == unbounded (vertex_count)
   double watchdog_s = 600;  // wall-clock deadline for the management loop
   bool fast_mode = false;   // poll only done every 10 ms during FPGA run
+  WaveformConfig wave;      // hw_emu waveform capture (see --waveform/--fst)
 };
 
 inline void bfs_print_usage(const char *prog) {
   std::cerr
       << "\nUsage:\n  " << prog
-      << " <xclbin_path> <graph_file> [source] [max_depth] [watchdog_s] [--fast]\n\n"
+      << " <xclbin_path> <graph_file> [source] [max_depth] [watchdog_s] [--fast]"
+         " [--waveform[=DIR]] [--fst] [--no-vcd]\n\n"
       << "Arguments:\n"
       << "  xclbin_path   .xclbin to load onto the FPGA, or --cpu for CPU-only\n"
       << "  graph_file    edge-list graph (loaded undirected), synthetic:star2m,\n"
@@ -59,11 +61,14 @@ inline void bfs_print_usage(const char *prog) {
       << "  each with D unique children and V already-visited frontier edges;\n"
       << "  default N=7529,D=112,V=0 mirrors the wikimix discovery burst.\n"
       << "  synthetic:wm_target_prefix:A:N:M creates root->A->N->M, with\n"
-      << "  default A=20,N=7529,M=840007 matching wikimix's early levels.\n\n";
+      << "  default A=20,N=7529,M=840007 matching wikimix's early levels.\n\n"
+      << "Waveform capture:\n";
+  benchmarkWaveformUsage(std::cerr);
+  std::cerr << "\n";
 }
 
 inline bool bfs_parse_args(int argc, char *argv[], BfsBenchArgs &out) {
-  if (argc < 3 || argc > 7) {
+  if (argc < 3) {
     bfs_print_usage(argv[0]);
     return false;
   }
@@ -76,6 +81,8 @@ inline bool bfs_parse_args(int argc, char *argv[], BfsBenchArgs &out) {
       out.fast_mode = true;
       continue;
     }
+    if (benchmarkTryParseWaveformArg(arg, out.wave))
+      continue;
     if (arg.rfind("--", 0) == 0) {
       std::cerr << "[BFS] unknown option: " << arg << "\n";
       bfs_print_usage(argv[0]);
@@ -170,9 +177,13 @@ inline int run_bfs_benchmark(int argc, char *argv[],
     return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
   }
 
-  return runSingleFpgaBenchmark(args.xclbin_path, kernel_name, [&](Memory *m) {
-    BFSDriver driver(m, args.graph_file, args.source, args.max_depth,
-                     args.watchdog_s, args.fast_mode);
-    return driver.run_test_bench();
-  });
+  benchmarkApplyWaveformDefaults(args.wave, kernel_name);
+  return runSingleFpgaBenchmark(
+      args.xclbin_path, kernel_name,
+      [&](Memory *m) {
+        BFSDriver driver(m, args.graph_file, args.source, args.max_depth,
+                         args.watchdog_s, args.fast_mode);
+        return driver.run_test_bench();
+      },
+      args.wave);
 }

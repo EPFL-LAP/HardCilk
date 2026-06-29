@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VALID_BENCHMARKS=("BFS" "WP-BF" "BellmanFord" "ApproxDenseSub" "MaximalIndependentSet" "GraphColoring" "graphRandomWalk" "pageRank" "triangleCount" "triangleCountDecoupled")
+VALID_BENCHMARKS=("BFS" "WP-BF" "BellmanFord" "ApproxDenseSub" "MaximalIndependentSet" "GraphColoring" "graphRandomWalk" "pageRank" "triangleCount" "triangleCountDecoupled" "countDecoupled")
 
 usage() {
     echo "Usage: $0 <benchmarkName> [workspaceNumber]"
@@ -99,9 +99,13 @@ rsync -a --no-owner --no-group --exclude='*-arxiv' "$XRT_PROJECTS_DIR/" "$XCLBIN
 
 # --- Step 2: Copy only files (not subfolders) from rtl/ into xclbin-workspace/<benchmark>/IP/ ---
 echo "Copying RTL files into $XCLBIN_WORKSPACE_DIR/IP/ ..."
+rm -rf "$XCLBIN_WORKSPACE_DIR/src/IP"
 mkdir -p "$XCLBIN_WORKSPACE_DIR/src/IP"
 
 find "$RTL_DIR" -maxdepth 1 -type f -exec cp {} "$XCLBIN_WORKSPACE_DIR/src/IP/" \;
+if [[ -f "$RTL_DIR/${BENCHMARK}.hbmports.json" ]]; then
+    cp "$RTL_DIR/${BENCHMARK}.hbmports.json" "$XCLBIN_WORKSPACE_DIR/"
+fi
 
 # --- Step 3: Copy software folder into xclbin-workspace/<benchmark>/host/ ---
 echo "Copying software into $XCLBIN_WORKSPACE_DIR/src/host/ ..."

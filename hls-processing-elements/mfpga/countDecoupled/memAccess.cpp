@@ -3,9 +3,9 @@
 #include <ap_int.h>
 #include <stdint.h>
 
-#define N_whileLoopMain_reentry0_cont0 1
+#define N_taskAdder_cont0 1
 #define N_memReader 1
-#define N_whileLoopMain_reentry0 1
+#define N_taskInitiator_reentry0 1
 
 // The STATUS word is ap_uint<48> packed 4 bits/PE => at most 12 monitored PE slots.
 // The status arrays pack CONTIGUOUSLY (each group's base = running sum of the prior
@@ -13,8 +13,7 @@
 // numProcessingElements to match) to scale PE counts; this hard-stops csynth if the
 // monitored total would overflow the bundle. The generator enforces the same cap.
 #define MAX_STATUS_PES 12
-static_assert(N_whileLoopMain_reentry0_cont0 + N_memReader +
-                      N_whileLoopMain_reentry0 <=
+static_assert(N_taskAdder_cont0 + N_memReader + N_taskInitiator_reentry0 <=
                   MAX_STATUS_PES,
               "total monitored PEs exceed the 48-bit STATUS bundle (12 PEs x 4 bits); "
               "reduce the N_ defines or widen the STATUS word");
@@ -88,12 +87,12 @@ void watcher_gate_tap(
 
 void watcher_runner(
     hls::stream<ap_uint<256>> &write_queue,
-    hls::stream<ap_uint<2>> cont0_status_in_stream[N_whileLoopMain_reentry0_cont0],
-    hls::stream<ap_uint<2>> cont0_status_out_stream[N_whileLoopMain_reentry0_cont0],
+    hls::stream<ap_uint<2>> adder_status_in_stream[N_taskAdder_cont0],
+    hls::stream<ap_uint<2>> adder_status_out_stream[N_taskAdder_cont0],
     hls::stream<ap_uint<2>> memReader_status_in_stream[N_memReader],
     hls::stream<ap_uint<2>> memReader_status_out_stream[N_memReader],
-    hls::stream<ap_uint<2>> reentry0_status_in_stream[N_whileLoopMain_reentry0],
-    hls::stream<ap_uint<2>> reentry0_status_out_stream[N_whileLoopMain_reentry0],
+    hls::stream<ap_uint<2>> initiator_status_in_stream[N_taskInitiator_reentry0],
+    hls::stream<ap_uint<2>> initiator_status_out_stream[N_taskInitiator_reentry0],
     hls::stream<ap_uint<1>> &gate_stream,
     ap_uint<8> bw_wbytes[MAX_HBM_PORTS],
     ap_uint<16> bw_rbytes[MAX_HBM_PORTS],
@@ -251,12 +250,12 @@ void watcher(
     // iteration via a DIRECT volatile pointer (not a struct member). Reading a port
     // twice (per-field) creates a loop-carried volatile dependence => II=2; reading
     // through a direct volatile pointer keeps the read fresh (no hoist) at II=1.
-    ap_uint<2> cont0_status_in[N_whileLoopMain_reentry0_cont0],
-    ap_uint<2> cont0_status_out[N_whileLoopMain_reentry0_cont0],
+    ap_uint<2> adder_status_in[N_taskAdder_cont0],
+    ap_uint<2> adder_status_out[N_taskAdder_cont0],
     ap_uint<2> memReader_status_in[N_memReader],
     ap_uint<2> memReader_status_out[N_memReader],
-    ap_uint<2> reentry0_status_in[N_whileLoopMain_reentry0],
-    ap_uint<2> reentry0_status_out[N_whileLoopMain_reentry0],
+    ap_uint<2> initiator_status_in[N_taskInitiator_reentry0],
+    ap_uint<2> initiator_status_out[N_taskInitiator_reentry0],
     // --- per-HBM-port bandwidth taps (already byte-accurate, computed in Chisel) ---
     ap_uint<8> bw_wbytes[MAX_HBM_PORTS],  // write bytes this cycle (PopCount WSTRB)
     ap_uint<16> bw_rbytes[MAX_HBM_PORTS], // read  bytes this cycle ((ARLEN+1)<<ARSIZE)
@@ -277,18 +276,18 @@ void watcher(
 #pragma HLS INTERFACE ap_ctrl_none port = return
 
 // Status: one discrete 2-bit ap_none pin per queue (<prefix>_in_<i>/<prefix>_out_<i>)
-#pragma HLS ARRAY_PARTITION variable = cont0_status_in complete dim = 1
-#pragma HLS INTERFACE mode = ap_none port = cont0_status_in
-#pragma HLS ARRAY_PARTITION variable = cont0_status_out complete dim = 1
-#pragma HLS INTERFACE mode = ap_none port = cont0_status_out
+#pragma HLS ARRAY_PARTITION variable = adder_status_in complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = adder_status_in
+#pragma HLS ARRAY_PARTITION variable = adder_status_out complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = adder_status_out
 #pragma HLS ARRAY_PARTITION variable = memReader_status_in complete dim = 1
 #pragma HLS INTERFACE mode = ap_none port = memReader_status_in
 #pragma HLS ARRAY_PARTITION variable = memReader_status_out complete dim = 1
 #pragma HLS INTERFACE mode = ap_none port = memReader_status_out
-#pragma HLS ARRAY_PARTITION variable = reentry0_status_in complete dim = 1
-#pragma HLS INTERFACE mode = ap_none port = reentry0_status_in
-#pragma HLS ARRAY_PARTITION variable = reentry0_status_out complete dim = 1
-#pragma HLS INTERFACE mode = ap_none port = reentry0_status_out
+#pragma HLS ARRAY_PARTITION variable = initiator_status_in complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = initiator_status_in
+#pragma HLS ARRAY_PARTITION variable = initiator_status_out complete dim = 1
+#pragma HLS INTERFACE mode = ap_none port = initiator_status_out
 
 // Bandwidth + address taps: one discrete ap_none input pin per port
 #pragma HLS ARRAY_PARTITION variable = bw_wbytes complete dim = 1
@@ -303,24 +302,24 @@ void watcher(
 #pragma HLS INTERFACE mode = ap_none port = start_gate
 
 #pragma HLS dataflow
-  hls::stream<ap_uint<2>> cont0_status_in_stream[N_whileLoopMain_reentry0_cont0];
-  hls::stream<ap_uint<2>> cont0_status_out_stream[N_whileLoopMain_reentry0_cont0];
+  hls::stream<ap_uint<2>> adder_status_in_stream[N_taskAdder_cont0];
+  hls::stream<ap_uint<2>> adder_status_out_stream[N_taskAdder_cont0];
   hls::stream<ap_uint<2>> memReader_status_in_stream[N_memReader];
   hls::stream<ap_uint<2>> memReader_status_out_stream[N_memReader];
-  hls::stream<ap_uint<2>> reentry0_status_in_stream[N_whileLoopMain_reentry0];
-  hls::stream<ap_uint<2>> reentry0_status_out_stream[N_whileLoopMain_reentry0];
-#pragma HLS stream variable = cont0_status_in_stream depth = 32
-#pragma HLS stream variable = cont0_status_out_stream depth = 32
+  hls::stream<ap_uint<2>> initiator_status_in_stream[N_taskInitiator_reentry0];
+  hls::stream<ap_uint<2>> initiator_status_out_stream[N_taskInitiator_reentry0];
+#pragma HLS stream variable = adder_status_in_stream depth = 32
+#pragma HLS stream variable = adder_status_out_stream depth = 32
 #pragma HLS stream variable = memReader_status_in_stream depth = 32
 #pragma HLS stream variable = memReader_status_out_stream depth = 32
-#pragma HLS stream variable = reentry0_status_in_stream depth = 32
-#pragma HLS stream variable = reentry0_status_out_stream depth = 32
-#pragma HLS ARRAY_PARTITION variable = cont0_status_in_stream complete dim = 1
-#pragma HLS ARRAY_PARTITION variable = cont0_status_out_stream complete dim = 1
+#pragma HLS stream variable = initiator_status_in_stream depth = 32
+#pragma HLS stream variable = initiator_status_out_stream depth = 32
+#pragma HLS ARRAY_PARTITION variable = adder_status_in_stream complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = adder_status_out_stream complete dim = 1
 #pragma HLS ARRAY_PARTITION variable = memReader_status_in_stream complete dim = 1
 #pragma HLS ARRAY_PARTITION variable = memReader_status_out_stream complete dim = 1
-#pragma HLS ARRAY_PARTITION variable = reentry0_status_in_stream complete dim = 1
-#pragma HLS ARRAY_PARTITION variable = reentry0_status_out_stream complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = initiator_status_in_stream complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = initiator_status_out_stream complete dim = 1
   hls::stream<ap_uint<1>> gate_stream;
 #pragma HLS stream variable = gate_stream depth = 32
   hls::stream<ap_uint<256>> write_queue;
@@ -345,11 +344,11 @@ void watcher(
 #pragma HLS stream variable = cq6 depth = 8
 #pragma HLS stream variable = cq7 depth = 8
 
-  for (int i = 0; i < N_whileLoopMain_reentry0_cont0; i++)
+  for (int i = 0; i < N_taskAdder_cont0; i++)
   {
 #pragma HLS unroll
-    watcher_status2_tap(cont0_status_in[i], cont0_status_in_stream[i]);
-    watcher_status2_tap(cont0_status_out[i], cont0_status_out_stream[i]);
+    watcher_status2_tap(adder_status_in[i], adder_status_in_stream[i]);
+    watcher_status2_tap(adder_status_out[i], adder_status_out_stream[i]);
   }
   for (int i = 0; i < N_memReader; i++)
   {
@@ -357,17 +356,17 @@ void watcher(
     watcher_status2_tap(memReader_status_in[i], memReader_status_in_stream[i]);
     watcher_status2_tap(memReader_status_out[i], memReader_status_out_stream[i]);
   }
-  for (int i = 0; i < N_whileLoopMain_reentry0; i++)
+  for (int i = 0; i < N_taskInitiator_reentry0; i++)
   {
 #pragma HLS unroll
-    watcher_status2_tap(reentry0_status_in[i], reentry0_status_in_stream[i]);
-    watcher_status2_tap(reentry0_status_out[i], reentry0_status_out_stream[i]);
+    watcher_status2_tap(initiator_status_in[i], initiator_status_in_stream[i]);
+    watcher_status2_tap(initiator_status_out[i], initiator_status_out_stream[i]);
   }
   watcher_gate_tap(start_gate, gate_stream);
   watcher_runner(write_queue,
-                 cont0_status_in_stream, cont0_status_out_stream,
+                 adder_status_in_stream, adder_status_out_stream,
                  memReader_status_in_stream, memReader_status_out_stream,
-                 reentry0_status_in_stream, reentry0_status_out_stream,
+                 initiator_status_in_stream, initiator_status_out_stream,
                  gate_stream, bw_wbytes, bw_rbytes, bw_awaddr, bw_araddr);
   // Do not pass start_gate into this dataflow process: HLS materializes scalar
   // arguments as one-shot FIFOs, so the distributor could latch the reset-time 0 forever.
@@ -411,12 +410,12 @@ void watcher_status2_tap(
 
 void watcher_runner(
     hls::stream<ap_uint<256>> &write_queue, // 256-bit AXI beat = two 128-bit bundle slots {slot1,slot0}
-    hls::stream<ap_uint<2>> cont0_status_in_stream[N_whileLoopMain_reentry0_cont0],
-    hls::stream<ap_uint<2>> cont0_status_out_stream[N_whileLoopMain_reentry0_cont0],
+    hls::stream<ap_uint<2>> adder_status_in_stream[N_taskAdder_cont0],
+    hls::stream<ap_uint<2>> adder_status_out_stream[N_taskAdder_cont0],
     hls::stream<ap_uint<2>> memReader_status_in_stream[N_memReader],
     hls::stream<ap_uint<2>> memReader_status_out_stream[N_memReader],
-    hls::stream<ap_uint<2>> reentry0_status_in_stream[N_whileLoopMain_reentry0],
-    hls::stream<ap_uint<2>> reentry0_status_out_stream[N_whileLoopMain_reentry0],
+    hls::stream<ap_uint<2>> initiator_status_in_stream[N_taskInitiator_reentry0],
+    hls::stream<ap_uint<2>> initiator_status_out_stream[N_taskInitiator_reentry0],
     hls::stream<ap_uint<1>> &gate_stream,
     // --- per-HBM-port bandwidth taps (already byte-accurate, computed in Chisel) ---
     ap_uint<8> bw_wbytes[MAX_HBM_PORTS],  // write bytes this cycle (PopCount WSTRB)
@@ -451,26 +450,26 @@ void watcher_runner(
     volatile ap_uint<20> *araddr_v = bw_araddr;
 
     ap_uint<48> curStatus = 0;
-    for (int i = 0; i < N_whileLoopMain_reentry0_cont0; i++)
+    for (int i = 0; i < N_taskAdder_cont0; i++)
     {
 #pragma HLS unroll
       const int k = i;
-      curStatus(k * 4 + 1, k * 4 + 0) = cont0_status_in_stream[i].read();
-      curStatus(k * 4 + 3, k * 4 + 2) = cont0_status_out_stream[i].read();
+      curStatus(k * 4 + 1, k * 4 + 0) = adder_status_in_stream[i].read();
+      curStatus(k * 4 + 3, k * 4 + 2) = adder_status_out_stream[i].read();
     }
     for (int i = 0; i < N_memReader; i++)
     {
 #pragma HLS unroll
-      const int k = N_whileLoopMain_reentry0_cont0 + i;
+      const int k = N_taskAdder_cont0 + i;
       curStatus(k * 4 + 1, k * 4 + 0) = memReader_status_in_stream[i].read();
       curStatus(k * 4 + 3, k * 4 + 2) = memReader_status_out_stream[i].read();
     }
-    for (int i = 0; i < N_whileLoopMain_reentry0; i++)
+    for (int i = 0; i < N_taskInitiator_reentry0; i++)
     {
 #pragma HLS unroll
-      const int k = N_whileLoopMain_reentry0_cont0 + N_memReader + i;
-      curStatus(k * 4 + 1, k * 4 + 0) = reentry0_status_in_stream[i].read();
-      curStatus(k * 4 + 3, k * 4 + 2) = reentry0_status_out_stream[i].read();
+      const int k = N_taskAdder_cont0 + N_memReader + i;
+      curStatus(k * 4 + 1, k * 4 + 0) = initiator_status_in_stream[i].read();
+      curStatus(k * 4 + 3, k * 4 + 2) = initiator_status_out_stream[i].read();
     }
     ap_uint<1> start_gate_now = gate_stream.read();
     // Adjacent-cycle change detect, tracked every cycle (even pre-gate) so the
@@ -637,10 +636,10 @@ void watcher_runner(
   }
 }
 
-void whileLoopMain_reentry0_cont0(
+void taskAdder_cont0(
     void *mem,
-    hls::stream<whileLoopMain_reentry0_cont0_task> &taskIn,
-    hls::stream<whileLoopMain_reentry0_task> &taskOutGlobal)
+    hls::stream<taskAdder_cont0_task> &taskIn,
+    hls::stream<taskInitiator_reentry0_task> &taskOutGlobal)
 {
 
 #pragma HLS INTERFACE mode = axis port = taskIn
@@ -653,52 +652,23 @@ void whileLoopMain_reentry0_cont0(
 // the writeback time to commit in this generated pipeline.
 #pragma HLS DEPENDENCE variable = mem inter false
 
-  whileLoopMain_reentry0_cont0_task args = taskIn.read();
+  taskAdder_cont0_task args = taskIn.read();
 
-  if ((args.a_i == args.b_j))
+  if (args.value == 1)
   {
     (MEM_IN(mem, args.count, int)++);
-    (args.i++);
-    (args.j++);
   }
-  else
-  {
-    if ((args.a_i < args.b_j))
-    {
-      (args.i++);
-    }
-    else
-    {
-      (args.j++);
-    }
-  }
-  whileLoopMain_reentry0_task whileLoopMain_reentry0_args0;
-  whileLoopMain_reentry0_args0._cont = args._cont;
-  whileLoopMain_reentry0_args0.A = args.A;
-  whileLoopMain_reentry0_args0.B = args.B;
-  whileLoopMain_reentry0_args0.count = args.count;
-  whileLoopMain_reentry0_args0.size = args.size;
-  whileLoopMain_reentry0_args0.i = args.i;
-  whileLoopMain_reentry0_args0.j = args.j;
-  whileLoopMain_reentry0_args0.a_i = args.a_i;
-  whileLoopMain_reentry0_args0.b_j = args.b_j;
-  taskOutGlobal.write(whileLoopMain_reentry0_args0);
+  (args.i++);
+
+  taskInitiator_reentry0_task taskInitiator_reentry0_args0;
+  taskInitiator_reentry0_args0._cont = args._cont;
+  taskInitiator_reentry0_args0.A = args.A;
+  taskInitiator_reentry0_args0.count = args.count;
+  taskInitiator_reentry0_args0.size = args.size;
+  taskInitiator_reentry0_args0.i = args.i;
+  taskOutGlobal.write(taskInitiator_reentry0_args0);
 }
 
-void whileLoopMain_exit0(
-    hls::stream<whileLoopMain_exit0_task> &taskIn,
-    hls::stream<uint64_t> &argOut)
-{
-
-#pragma HLS INTERFACE mode = axis port = taskIn
-#pragma HLS INTERFACE mode = axis port = argOut
-#pragma HLS INTERFACE ap_ctrl_none port = return
-#pragma HLS PIPELINE II = 1 style = flp
-
-  whileLoopMain_exit0_task args = taskIn.read();
-
-  argOut.write(args._cont);
-}
 void memReader(
     void *mem,
     hls::stream<memReader_task> &taskIn,
@@ -723,43 +693,12 @@ void memReader(
   argOut.write(args._cont);
 }
 
-void whileLoopMain(
-    hls::stream<whileLoopMain_task> &taskIn,
-    hls::stream<whileLoopMain_reentry0_task> &taskOutGlobal)
-{
-
-#pragma HLS INTERFACE mode = axis port = taskIn
-#pragma HLS INTERFACE mode = axis port = taskOutGlobal
-#pragma HLS INTERFACE ap_ctrl_none port = return
-#pragma HLS PIPELINE II = 1 style = flp
-
-  uint32_t i;
-  uint32_t j;
-  uint32_t a_i;
-  uint32_t b_j;
-  whileLoopMain_task args = taskIn.read();
-
-  i = 0;
-  j = 0;
-  whileLoopMain_reentry0_task whileLoopMain_reentry0_args1;
-  whileLoopMain_reentry0_args1._cont = args._cont;
-  whileLoopMain_reentry0_args1.A = args.A;
-  whileLoopMain_reentry0_args1.B = args.B;
-  whileLoopMain_reentry0_args1.count = args.count;
-  whileLoopMain_reentry0_args1.size = args.size;
-  whileLoopMain_reentry0_args1.i = i;
-  whileLoopMain_reentry0_args1.j = j;
-  whileLoopMain_reentry0_args1.a_i = 0;
-  whileLoopMain_reentry0_args1.b_j = 0;
-  taskOutGlobal.write(whileLoopMain_reentry0_args1);
-}
-
-void whileLoopMain_reentry0(
+void taskInitiator_reentry0(
     void *mem,
-    hls::stream<whileLoopMain_reentry0_task> &taskIn,
+    hls::stream<taskInitiator_reentry0_task> &taskIn,
     hls::stream<memReader_task> &taskOutGlobal,
     hls::stream<uint64_t> &closureIn,
-    hls::stream<whileLoopMain_reentry0_cont0_spawn_next> &spawnNext)
+    hls::stream<taskAdder_cont0_spawn_next> &spawnNext)
 {
 
 #pragma HLS INTERFACE mode = m_axi port = mem
@@ -768,44 +707,36 @@ void whileLoopMain_reentry0(
 #pragma HLS INTERFACE mode = axis port = closureIn
 #pragma HLS INTERFACE mode = axis port = spawnNext
 #pragma HLS INTERFACE ap_ctrl_none port = return
-#pragma HLS PIPELINE II = 2 style = flp
+#pragma HLS PIPELINE II = 1 style = flp
 
-  whileLoopMain_reentry0_task args = taskIn.read();
+  taskInitiator_reentry0_task args = taskIn.read();
 
-  if (((args.i < args.size) && (args.j < args.size)))
+  if (args.i < args.size)
   {
-    uint32_t SN_whileLoopMain_reentry0_cont0c_cnt = 2;
-    whileLoopMain_reentry0_cont0_task SN_whileLoopMain_reentry0_cont0c;
-    SN_whileLoopMain_reentry0_cont0c._cont = args._cont;
-    SN_whileLoopMain_reentry0_cont0c._counter = SN_whileLoopMain_reentry0_cont0c_cnt;
-    addr_t SN_whileLoopMain_reentry0_cont0c_k = closureIn.read();
+    uint32_t SN_taskAdder_cont0c_cnt = 1;
+    taskAdder_cont0_task SN_taskAdder_cont0c;
+    SN_taskAdder_cont0c._cont = args._cont;
+    SN_taskAdder_cont0c._counter = SN_taskAdder_cont0c_cnt;
+    addr_t SN_taskAdder_cont0c_k = closureIn.read();
 
-    SN_whileLoopMain_reentry0_cont0c.j = args.j;
-    SN_whileLoopMain_reentry0_cont0c.i = args.i;
-    SN_whileLoopMain_reentry0_cont0c.size = args.size;
-    SN_whileLoopMain_reentry0_cont0c.count = args.count;
-    SN_whileLoopMain_reentry0_cont0c.B = args.B;
-    SN_whileLoopMain_reentry0_cont0c.A = args.A;
-    SN_whileLoopMain_reentry0_cont0c.a_i = args.a_i;
-    SN_whileLoopMain_reentry0_cont0c.b_j = args.b_j;
-    whileLoopMain_reentry0_cont0_spawn_next SN_whileLoopMain_reentry0_cont0;
-    SN_whileLoopMain_reentry0_cont0.addr = SN_whileLoopMain_reentry0_cont0c_k;
-    SN_whileLoopMain_reentry0_cont0.data = SN_whileLoopMain_reentry0_cont0c;
-    SN_whileLoopMain_reentry0_cont0.size = 6;
-    SN_whileLoopMain_reentry0_cont0.allow = SN_whileLoopMain_reentry0_cont0c_cnt;
-    spawnNext.write(SN_whileLoopMain_reentry0_cont0);
+    SN_taskAdder_cont0c.i = args.i;
+    SN_taskAdder_cont0c.size = args.size;
+    SN_taskAdder_cont0c.count = args.count;
+    SN_taskAdder_cont0c.A = args.A;
+    SN_taskAdder_cont0c._value_pad = 0;
+    SN_taskAdder_cont0c.value = 0;
+    taskAdder_cont0_spawn_next SN_taskAdder_cont0;
+    SN_taskAdder_cont0.addr = SN_taskAdder_cont0c_k;
+    SN_taskAdder_cont0.data = SN_taskAdder_cont0c;
+    SN_taskAdder_cont0.size = 6;
+    SN_taskAdder_cont0.allow = SN_taskAdder_cont0c_cnt;
+    spawnNext.write(SN_taskAdder_cont0);
 
     memReader_task memReader_args2;
-    memReader_args2._cont = SN_whileLoopMain_reentry0_cont0c_k + offsetof(whileLoopMain_reentry0_cont0_task, a_i);
+    memReader_args2._cont = SN_taskAdder_cont0c_k + offsetof(taskAdder_cont0_task, value);
     memReader_args2.mem = args.A;
     memReader_args2.idx = args.i;
     taskOutGlobal.write(memReader_args2);
-
-    memReader_task memReader_args3;
-    memReader_args3._cont = SN_whileLoopMain_reentry0_cont0c_k + offsetof(whileLoopMain_reentry0_cont0_task, b_j);
-    memReader_args3.mem = args.B;
-    memReader_args3.idx = args.j;
-    taskOutGlobal.write(memReader_args3);
   }
   else
   {

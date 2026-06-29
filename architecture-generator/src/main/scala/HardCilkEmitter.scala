@@ -61,7 +61,8 @@ object HardCilkEmitter extends App {
           "ApproxDenseSub",
           "MaximalIndependentSet",
           "GraphColoring",
-          "triangleCountDecoupled"
+          "triangleCountDecoupled",
+          "countDecoupled"
         )
         if (emitGeneratedXrt.contains(jsonName)) {
           val rootTaskName =

@@ -461,10 +461,18 @@ trait HasHBMInterconnect extends Module {
       regOwners(remoteMemAccessGroups.toSeq)
 
       // ---- STATUS PE# table -------------------------------------------------
-      // The STATUS bundle numbers PEs 0..(N-1) in the watcher's MONITORED ORDER,
-      // peCount PEs per monitored task, consecutively (cont0:0..3, memReader:4..7,
-      // reentry0:8..11, ...). Reproduce that here so a port master can be tied back
-      // to the exact PE# whose handshakes appear in the STATUS stream.
+      // The watcher's 48-bit STATUS word packs the monitored groups CONTIGUOUSLY in
+      // monitored order: group g starts right after the previous group's PEs, so with
+      // one PE each the layout is adder:0, memReader:1, initiator:2 (no gaps). This
+      // MUST match the watcher HLS, which advances its pack offset by the running
+      // sum of the per-group N_ defines (memAccess.cpp: base = N_g0, then N_g0+N_g1),
+      // and the host StatusConservation, which numbers PEs 0..NPE-1 the same way.
+      // Emitting exactly `peCount` entries per group (the real instantiated count)
+      // makes this table an accurate map of the live STATUS slots and the true number
+      // of monitored PEs present.
+      // 48-bit STATUS word, 4 bits/PE -> at most 12 monitored PE slots. Must match
+      // MAX_STATUS_PES in the watcher HLS (memAccess.cpp).
+      val MaxStatusPes = 12
       val monitored: Seq[(String, String)] =
         fullSysGenDescriptor.watcherConfig.toSeq
           .flatMap(_.monitored.map(m => (m.taskName, m.statusPrefix)))
@@ -478,6 +486,16 @@ trait HasHBMInterconnect extends Module {
           pesEntries += s"""    {"peNumber": ${peCursor + i}, "task": "$taskName", "statusPrefix": "$statusPrefix", "indexInTask": $i}"""
         peCursor += peCount
       }
+      if (peCursor > MaxStatusPes)
+        throw new RuntimeException(
+          s"watcher monitors $peCursor PEs total (" +
+            monitored
+              .map { case (t, _) => s"$t=${peMap.get(t).map(_.length).getOrElse(0)}" }
+              .mkString(", ") +
+            s") but the 48-bit STATUS word holds at most $MaxStatusPes (4 bits/PE). " +
+            "Reduce numProcessingElements on the monitored tasks (and the matching N_ " +
+            "defines in memAccess.cpp), or widen the STATUS word in the watcher HLS."
+        )
       val pesJson = pesEntries.mkString(",\n")
 
       // Map a port master's owner string to the STATUS PE# it belongs to, or None

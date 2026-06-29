@@ -346,12 +346,19 @@ int hardCilkDriver::setReturnAddr(uint64_t addr)
 
     // memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(&val), sizeof(val));
 
-    printf("NOTE: RETURN ADDRESS VALUE SHOULD BE SET BY THE USER CORRECTLY BASED ON ARGUMENT NOTIIFICATION\n");
+    // setReturnAddr is called once per root task, so at high instance counts the
+    // old unconditional prints flooded the log. Print the advisory NOTE once, and
+    // only log the first few addresses (then a single summary) to stay readable.
+    if (return_addresses.empty())
+        printf("NOTE: return address values should be set by the user correctly based on argument notification\n");
 
     return_addresses.push_back(addr);
 
-    // Log the return addresses
-    printf("Return address set to 0x%lx\n", addr);
+    constexpr size_t kMaxAddrLogs = 4;
+    if (return_addresses.size() <= kMaxAddrLogs)
+        printf("Return address set to 0x%lx\n", addr);
+    else if (return_addresses.size() == kMaxAddrLogs + 1)
+        printf("Return address set to 0x%lx (... suppressing further per-instance logs)\n", addr);
 
     return 0;
 }

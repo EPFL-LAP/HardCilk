@@ -15,22 +15,25 @@ struct BellmanFordBenchArgs
   double watchdog_s = 600.0;
   bool fast_mode = false;
   uint32_t max_depth = 0; // 0 = unlimited
+  WaveformConfig wave;    // hw_emu waveform capture (see --waveform/--fst)
 };
 
 inline void bellman_ford_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <weighted_graph.csv> [source]"
-               " [watchdog_s] [--fast] [--max-depth=N]\n"
+               " [watchdog_s] [--fast] [--max-depth=N]"
+               " [--waveform[=DIR]] [--fst] [--no-vcd]\n"
             << "CSV format: src,dst,weight (directed). Whitespace is also"
                " accepted.\n"
             << "  --max-depth=N  Stop after N rounds (0 = unlimited).\n";
+  benchmarkWaveformUsage(std::cerr);
 }
 
 inline bool parse_bellman_ford_args(int argc, char **argv,
                                     BellmanFordBenchArgs &out)
 {
-  if (argc < 3 || argc > 8)
+  if (argc < 3)
   {
     bellman_ford_usage(argv[0]);
     return false;
@@ -46,6 +49,8 @@ inline bool parse_bellman_ford_args(int argc, char **argv,
       out.fast_mode = true;
       continue;
     }
+    if (benchmarkTryParseWaveformArg(arg, out.wave))
+      continue;
     if (arg.rfind("--max-depth=", 0) == 0)
     {
       out.max_depth = (uint32_t)std::strtoul(arg.c_str() + 12, nullptr, 0);
@@ -76,9 +81,14 @@ inline int run_bellman_ford_benchmark(int argc, char **argv,
     return EXIT_FAILURE;
   if (benchmarkCpuOnlyRequested(args.xclbin_path))
     return BellmanFordDriver::run_cpu_test_bench(args.graph_file, args.source);
-  return runSingleFpgaBenchmark(args.xclbin_path, kernel_name, [&](Memory *m) {
-    BellmanFordDriver driver(m, args.graph_file, args.source, args.watchdog_s,
-                             args.fast_mode, args.max_depth);
-    return driver.run_test_bench();
-  });
+  benchmarkApplyWaveformDefaults(args.wave, kernel_name);
+  return runSingleFpgaBenchmark(
+      args.xclbin_path, kernel_name,
+      [&](Memory *m) {
+        BellmanFordDriver driver(m, args.graph_file, args.source,
+                                 args.watchdog_s, args.fast_mode,
+                                 args.max_depth);
+        return driver.run_test_bench();
+      },
+      args.wave);
 }

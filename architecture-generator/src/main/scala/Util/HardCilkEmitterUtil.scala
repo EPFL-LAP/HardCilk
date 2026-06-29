@@ -86,6 +86,16 @@ object HardCilkEmitterUtil {
 
   def basename(path: String): String = path.split("/").last.split("\\.").head
 
+  private def deleteStagedModuleFiles(outputDirPath: String, moduleName: String): Unit = {
+    val dir = new java.io.File(outputDirPath)
+    val files = Option(dir.listFiles()).getOrElse(Array.empty)
+    files.foreach { file =>
+      val fileName = file.getName
+      if (file.isFile && (fileName == s"$moduleName.v" || fileName.startsWith(s"${moduleName}_"))) {
+        Files.deleteIfExists(file.toPath)
+      }
+    }
+  }
 
   def readFile(path: String): String = {
     import java.nio.charset.StandardCharsets
@@ -130,6 +140,7 @@ object HardCilkEmitterUtil {
       val watcherFiles =
         if (watcherDir.exists) watcherDir.listFiles() else null
       if (watcherFiles != null) {
+        deleteStagedModuleFiles(outputDirPathRTL, "watcher")
         watcherFiles.foreach { file =>
           writeFile(
             s"$outputDirPathRTL/${file.getName()}",

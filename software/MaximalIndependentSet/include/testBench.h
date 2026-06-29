@@ -14,19 +14,21 @@ struct MisBenchArgs
   uint32_t seed = 1;
   double watchdog_s = 600.0;
   bool fast_mode = false;
+  WaveformConfig wave; // hw_emu waveform capture (see --waveform/--fst)
 };
 
 inline void mis_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <graph.txt> [seed] [watchdog_s]"
-               " [--fast]\n"
+               " [--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n"
             << "Graph format: unweighted edge list, loaded undirected.\n";
+  benchmarkWaveformUsage(std::cerr);
 }
 
 inline bool parse_mis_args(int argc, char **argv, MisBenchArgs &out)
 {
-  if (argc < 3 || argc > 6)
+  if (argc < 3)
   {
     mis_usage(argv[0]);
     return false;
@@ -42,6 +44,8 @@ inline bool parse_mis_args(int argc, char **argv, MisBenchArgs &out)
       out.fast_mode = true;
       continue;
     }
+    if (benchmarkTryParseWaveformArg(arg, out.wave))
+      continue;
     if (positional == 0)
       out.seed = (uint32_t)std::strtoul(argv[i], nullptr, 0);
     else if (positional == 1)
@@ -63,9 +67,13 @@ inline int run_mis_benchmark(int argc, char **argv,
   if (benchmarkCpuOnlyRequested(args.xclbin_path))
     return MaximalIndependentSetDriver::run_cpu_test_bench(args.graph_file,
                                                            args.seed);
-  return runSingleFpgaBenchmark(args.xclbin_path, kernel_name, [&](Memory *m) {
-    MaximalIndependentSetDriver driver(m, args.graph_file, args.seed,
-                                       args.watchdog_s, args.fast_mode);
-    return driver.run_test_bench();
-  });
+  benchmarkApplyWaveformDefaults(args.wave, kernel_name);
+  return runSingleFpgaBenchmark(
+      args.xclbin_path, kernel_name,
+      [&](Memory *m) {
+        MaximalIndependentSetDriver driver(m, args.graph_file, args.seed,
+                                           args.watchdog_s, args.fast_mode);
+        return driver.run_test_bench();
+      },
+      args.wave);
 }

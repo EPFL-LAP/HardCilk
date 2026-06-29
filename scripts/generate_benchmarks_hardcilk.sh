@@ -14,9 +14,10 @@ declare -A REDUCE_AXI=(
   [pageRank]=22
   [triangleCount]=23
   [triangleCountDecoupled]=15
+  [countDecoupled]=16
 )
 
-BENCHMARK_ORDER=(BFS WP-BF BellmanFord ApproxDenseSub MaximalIndependentSet GraphColoring graphRandomWalk pageRank triangleCount triangleCountDecoupled)
+BENCHMARK_ORDER=(BFS WP-BF BellmanFord ApproxDenseSub MaximalIndependentSet GraphColoring graphRandomWalk pageRank triangleCount triangleCountDecoupled countDecoupled)
 
 usage() {
   echo "Usage: $0 [all|benchmark[,benchmark...]]"

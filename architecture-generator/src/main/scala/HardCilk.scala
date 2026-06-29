@@ -647,9 +647,28 @@ class HardCilk(
 
     // --- Start gate: the watcher stays idle until the spawn scheduler dispatches its
     // first task (the first fire of any scheduler's taskOut). This anchors the
-    // telemetry timeline to compute start instead of FPGA programming. Latched + one
-    // RegNext (same uniform delay as the status taps). All watcher-scoped: no effect
-    // on benchmarks without a watcherConfig.
+    // telemetry timeline to compute start instead of FPGA programming. All
+    // watcher-scoped: no effect on benchmarks without a watcherConfig.
+    //
+    // CRITICAL: the gate must reach the watcher at least one cycle BEFORE the very
+    // first accept is observable, otherwise that accept is lost. The first task the
+    // scheduler dispatches IS the root task, and the root PE can accept it in the
+    // same cycle it is dispatched (combinational taskIn ready, L=0). The status taps
+    // delay that accept by one RegNext, so an L=0 accept dispatched at cycle T is
+    // observable at the watcher at T+1.
+    //
+    // Matching the gate to the SAME 1-cycle delay (a registered latch, gate high at
+    // T+1) is NOT enough in practice: the watcher HLS samples the scalar `start_gate`
+    // one pipeline stage later than the partitioned status arrays, so a gate that is
+    // only coincident with the accept still misses it by that internal skew (observed:
+    // initiator accepts undercounted by exactly 1 = the root task). So drive the gate
+    // a full cycle EARLY by OR-ing the latch with the combinational firstDispatch:
+    // gate high at T (dispatch cycle) while the accept lands at T+1, giving one cycle
+    // of margin that absorbs the internal skew. firstDispatch covers cycle T; the
+    // RegInit latch holds the gate from T+1 onward. firstDispatch is (TVALID&&TREADY),
+    // driven 0 out of reset, so the gate is X-free at startup. Starting the timeline
+    // one cycle before the first dispatch is harmless (cycle_count is just anchored a
+    // cycle earlier).
     val firstDispatch =
       schedulerMap.values
         .flatMap(s => s.io_export.taskOut.map(t => t.TVALID.asBool && t.TREADY.asBool))
@@ -658,7 +677,7 @@ class HardCilk(
         .getOrElse(false.B)
     val startedLatch = RegInit(false.B)
     when(firstDispatch) { startedLatch := true.B }
-    watcher.getPort("start_gate") := RegNext(startedLatch, false.B).asUInt
+    watcher.getPort("start_gate") := (startedLatch || firstDispatch).asUInt
 
     // --- Per-HBM-port bandwidth + address taps ---
     // For each exported compute master we register, with reset-init 0 (same X-startup

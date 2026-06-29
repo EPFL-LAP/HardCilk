@@ -1,9 +1,10 @@
 # HardCilk telemetry trace format
 
 This document specifies the on-disk/on-HBM format produced by the **watcher**
-telemetry kernel (`hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp`)
-for the `triangleCountDecoupled` benchmark. It is self-contained: a fresh implementer
-should be able to write a useful viewer from this document alone.
+telemetry kernels (for example
+`hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp`). It is
+self-contained: a fresh implementer should be able to write a useful viewer from
+this document alone.
 
 The viewer needs to show, over time:
 - when each PE is **ACTIVE** (consuming a task),
@@ -16,12 +17,13 @@ The viewer needs to show, over time:
 ## 0. File header: HBM-port descriptor
 
 Every `.bin` **begins with a self-describing header** carrying the generator's
-HBM-port → module map (`<design>.hbmports.json`), so the viewer can label each
+HBM-port -> module map (`<design>.hbmports.json`), so the viewer can label each
 bandwidth port and PE by what is actually attached to it (which PE / scheduler /
-allocator). The host (`TriangleCountDecoupledDriver.h`) finds the descriptor via
-`$TCD_HBM_DESCRIPTOR`, else `triangleCountDecoupled.hbmports.json` in the cwd, else
-`../triangleCountDecoupled.hbmports.json` (one level up, for runs launched from the
-build folder), and writes the header before the beats.
+allocator). The host finds the descriptor via a design-specific environment
+variable (for example `$TCD_HBM_DESCRIPTOR` or `$CD_HBM_DESCRIPTOR`), else
+`<design>.hbmports.json` in the cwd, else `../<design>.hbmports.json` (one level
+up, for runs launched from the build folder), and writes the header before the
+beats.
 
 > **Missing-descriptor fallback (misconfiguration, not a mode).** If the host
 > cannot find the descriptor it prints a loud warning and writes a **headerless**
@@ -65,18 +67,18 @@ first and start beat decoding at `beats_offset`.
 ```json
 {
   "design": "triangleCountDecoupled",
-  "numComputePorts": 28,
+  "numComputePorts": 13,
   "pes": [
     { "peNumber": 0, "task": "whileLoopMain_reentry0_cont0", "statusPrefix": "cont0_status",    "indexInTask": 0 },
-    { "peNumber": 4, "task": "memReader",                     "statusPrefix": "memReader_status","indexInTask": 0 },
-    { "peNumber": 8, "task": "whileLoopMain_reentry0",        "statusPrefix": "reentry0_status", "indexInTask": 0 }
+    { "peNumber": 1, "task": "memReader",                     "statusPrefix": "memReader_status","indexInTask": 0 },
+    { "peNumber": 2, "task": "whileLoopMain_reentry0",        "statusPrefix": "reentry0_status", "indexInTask": 0 }
   ],
   "ports": [
-    { "port": 4,  "portName": "m_axi_04",
-      "masters": [ {"owner": "pe:memReader:0#main",   "role": "main",   "peNumber": 4, "wData": 32, "wId": 1} ] },
-    { "port": 12, "portName": "m_axi_12",
-      "masters": [ {"owner": "pe:memReader:0#argOut", "role": "argOut", "peNumber": 4, "wData": 32, "wId": 0} ] },
-    { "port": 25, "portName": "m_axi_25",
+    { "port": 1,  "portName": "m_axi_01",
+      "masters": [ {"owner": "pe:memReader:0#main",   "role": "main",   "peNumber": 1, "wData": 32, "wId": 1} ] },
+    { "port": 3,  "portName": "m_axi_03",
+      "masters": [ {"owner": "pe:memReader:0#argOut", "role": "argOut", "peNumber": 1, "wData": 32, "wId": 0} ] },
+    { "port": 10, "portName": "m_axi_10",
       "masters": [ {"owner": "scheduler:memReader:vss:0", "role": "ring", "peNumber": null, "wData": 256, "wId": 1} ] }
   ]
 }
@@ -89,9 +91,12 @@ same `peNumber`. The `role` tells you which is which without parsing the owner.
 The descriptor answers two questions:
 
 1. **What type is each STATUS `PE#`?** → `pes[]`. The STATUS bundle (§3) numbers PEs
-   `0..11` in the watcher's monitored order, `peCount` per task, consecutively
-   (`cont0` 0–3, `memReader` 4–7, `reentry0` 8–11). `pes[]` is exactly that table:
-   `peNumber` → `task` / `statusPrefix` / `indexInTask`. Use it to label the PE rows.
+   `0..11` in the watcher's monitored order, `peCount` per task, consecutively.
+   `pes[]` is exactly that table: `peNumber` → `task` / `statusPrefix` /
+   `indexInTask`. Use it to label the PE rows. In the current one-PE-per-task
+   triangle build, that order is `cont0` at PE 0, `memReader` at PE 1, and
+   `reentry0` at PE 2; wider builds continue each task's slot range before the next
+   task begins.
 2. **Which `PE#` owns a given memory port?** → each `ports[].masters[].peNumber`.
    So you can line a port's bandwidth up with that PE's ACTIVE/STALLED timeline.
 
@@ -178,9 +183,11 @@ bits [127:56] = cycle_count     (72-bit unsigned)
 ```
 
 ### cycle_count
-Free-running cycle counter **relative to the start of compute** (it begins at 0 when
-the first task is dispatched by the scheduler — see §7). Multiply by the clock period
-to get wall-clock time. At 100 MHz, 1 cycle = 10 ns.
+Free-running cycle counter **relative to the start of compute**. It is reset to 0
+when the first task is dispatched by the scheduler, then increments before emitted
+bundles are packed, so the first baseline STATUS sample normally has `cycle_count =
+1` (see §7). Multiply by the clock period to get wall-clock time. At 100 MHz, 1
+cycle = 10 ns.
 
 ### The 48 status bits
 12 monitored PEs, 4 bits each. PE `k` occupies status bits `[k*4 +: 4]`, i.e. bundle
@@ -193,13 +200,18 @@ bit 2 : out_valid  (output queue: the PE is presenting a result)
 bit 3 : out_ready  (output queue: downstream can accept the result)
 ```
 
-PE index → name (current `triangleCountDecoupled` design, 4 PEs per task):
+PE index → name is described by the embedded descriptor's `pes[]` table. The
+current `triangleCountDecoupled` one-PE-per-task build uses:
 
-| k    | task / role                          |
-|------|--------------------------------------|
-| 0..3 | `whileLoopMain_reentry0_cont0[0..3]` (continuation PEs) |
-| 4..7 | `memReader[0..3]`                    (graph memory readers) |
-| 8..11| `whileLoopMain_reentry0[0..3]`       (re-entry PEs) |
+| k | task / role |
+|---|-------------|
+| 0 | `whileLoopMain_reentry0_cont0[0]` (continuation PE) |
+| 1 | `memReader[0]` (graph memory reader) |
+| 2 | `whileLoopMain_reentry0[0]` (re-entry PE) |
+
+Slots not listed in `pes[]` are reserved and should be ignored by viewers. Older
+or wider builds may use more slots, for example four PEs per task; always prefer
+the descriptor over this example table.
 
 ### Deriving the three viewer states (from the **input** handshake)
 For each PE, per STATUS sample:
@@ -214,12 +226,11 @@ Also useful: a **task consumed** event = `in_valid && in_ready`; a **result push
 event = `out_valid && out_ready`.
 
 ### Timing model
-STATUS bundles are **edge-triggered**: the watcher emits one only when the 48-bit
-status vector **changes**. So a STATUS sample at `cycle_count = T` means "this state
-held from T until the next STATUS sample's cycle_count". Render each PE's state as a
-piecewise-constant timeline: hold the state from one sample's cycle to the next.
-(The very first state change after the start gate is consumed silently — see §7 — so
-the timeline effectively begins at the first emitted STATUS sample.)
+STATUS bundles are **edge-triggered**: the watcher emits one when the 48-bit status
+vector **changes**, plus one baseline STATUS bundle when the start gate opens. So a
+STATUS sample at `cycle_count = T` means "this state held from T until the next STATUS
+sample's cycle_count". Render each PE's state as a piecewise-constant timeline: hold
+the state from one sample's cycle to the next.
 
 ---
 
@@ -354,9 +365,9 @@ clean gap) and the dump may begin with stale beats from earlier runs. As a safet
 the host decoder scans for the first non-zero beat and dumps the contiguous populated
 run from there; the reference host decoder (`TriangleCountDecoupledDriver.h`) is the
 source of truth. Within a run, the start gate guarantees the first STATUS beat carries
-a small `cycle_count` (it starts at 0 at compute start, not the ~hundreds-of-millions
-offset of FPGA-programming time), so a small monotonically-increasing `cycle_count` is
-a clean marker of a run's beginning.
+a small `cycle_count` (normally 1, not the ~hundreds-of-millions offset of
+FPGA-programming time), so a small monotonically-increasing `cycle_count` is a clean
+marker of a run's beginning.
 
 ---
 
@@ -368,16 +379,14 @@ a clean marker of a run's beginning.
   compute start, not to FPGA programming (which can be hundreds of millions of cycles
   earlier). The gate latches and only re-arms on FPGA reset; it does **not** reset
   `write_idx` between host runs (see §6).
-- **`write_idx` / offset 0.** When the start gate opens (first task dispatch after an
-  FPGA reset), the watcher explicitly zeroes `write_idx` (the beat write pointer),
-  `cycle_count`, the window counter and the bandwidth accumulators. So after an FPGA
-  reset the trace deterministically starts at **byte offset 0**. The gate latches, so
-  repeated host runs that share one FPGA programming keep the gate open and **append**
-  (no per-run reset) — `xrt-smi reset` before a run is what gives a fresh offset-0
-  trace.
-- **Prime skip.** The very first beat the watcher would emit is consumed silently (a
-  one-time hardware-pipeline prime). At most one STATUS sample is lost, right at the
-  start.
+- **`write_idx` / offset 0.** `write_idx` is reset by FPGA reset/reprogramming, not by
+  the start gate. When the start gate opens, the watcher zeroes `cycle_count`, the
+  window counter and the bandwidth accumulators, then emits a baseline STATUS bundle
+  after incrementing `cycle_count` for the first compute cycle. So after an FPGA reset
+  the trace deterministically starts at **byte offset 0**.
+  The gate latches, so repeated host runs that share one FPGA programming keep the
+  gate open and **append** (no per-run reset) — `xrt-smi reset` before a run is what
+  gives a fresh offset-0 trace.
 - **Beat packing.** Each cycle the watcher emits at most one 256-bit beat. A STATUS
   bundle (emitted on a status change) takes slot0; bandwidth bundles fill the remaining
   slot(s). So a beat is `{STATUS, BW}`, `{BW, BW}`, `{STATUS, NULL}`, or `{BW, NULL}`.

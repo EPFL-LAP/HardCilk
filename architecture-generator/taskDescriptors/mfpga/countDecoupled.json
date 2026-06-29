@@ -3,34 +3,34 @@
   "isVitisProject": true,
   "mallocList": {},
   "memorySizeSim": 16,
-  "name": "triangleCountDecoupled",
+  "name": "countDecoupled",
   "sendArgumentList": {
     "memReader": [
-      "whileLoopMain_reentry0_cont0"
+      "taskAdder_cont0"
     ]
   },
   "spawnList": {
-    "whileLoopMain_reentry0": [
+    "taskInitiator_reentry0": [
       "memReader"
     ],
-    "whileLoopMain_reentry0_cont0": [
-      "whileLoopMain_reentry0"
+    "taskAdder_cont0": [
+      "taskInitiator_reentry0"
     ]
   },
   "spawnNextList": {
-    "whileLoopMain_reentry0": [
-      "whileLoopMain_reentry0_cont0"
+    "taskInitiator_reentry0": [
+      "taskAdder_cont0"
     ]
   },
   "targetFrequency": 100,
   "watcherConfig": {
-    "hdlPath": "../hls-kernel-output/triangleCountDecoupled/watcher",
+    "hdlPath": "../hls-kernel-output/countDecoupled/watcher",
     "moduleName": "watcher",
     "startAddr": 0,
     "monitored": [
       {
-        "taskName": "whileLoopMain_reentry0_cont0",
-        "statusPrefix": "cont0_status",
+        "taskName": "taskAdder_cont0",
+        "statusPrefix": "adder_status",
         "inPort": "taskIn",
         "outPort": "taskOutGlobal"
       },
@@ -41,8 +41,8 @@
         "outPort": "argOut"
       },
       {
-        "taskName": "whileLoopMain_reentry0",
-        "statusPrefix": "reentry0_status",
+        "taskName": "taskInitiator_reentry0",
+        "statusPrefix": "initiator_status",
         "inPort": "taskIn",
         "outPort": "taskOutGlobal"
       }
@@ -55,9 +55,9 @@
       "hasAXI": true,
       "isCont": true,
       "isRoot": false,
-      "name": "whileLoopMain_reentry0_cont0",
+      "name": "taskAdder_cont0",
       "numProcessingElements": 1,
-      "peHDLPath": "../hls-kernel-output/triangleCountDecoupled/whileLoopMain_reentry0_cont0",
+      "peHDLPath": "../hls-kernel-output/countDecoupled/taskAdder_cont0",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -98,7 +98,7 @@
       "isRoot": false,
       "name": "memReader",
       "numProcessingElements": 1,
-      "peHDLPath": "../hls-kernel-output/triangleCountDecoupled/memReader",
+      "peHDLPath": "../hls-kernel-output/countDecoupled/memReader",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -119,9 +119,9 @@
       "hasAXI": true,
       "isCont": false,
       "isRoot": true,
-      "name": "whileLoopMain_reentry0",
+      "name": "taskInitiator_reentry0",
       "numProcessingElements": 1,
-      "peHDLPath": "../hls-kernel-output/triangleCountDecoupled/whileLoopMain_reentry0",
+      "peHDLPath": "../hls-kernel-output/countDecoupled/taskInitiator_reentry0",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
