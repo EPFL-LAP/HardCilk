@@ -15,20 +15,22 @@ struct GraphColoringBenchArgs
   uint32_t seed = 1;
   double watchdog_s = 600.0;
   bool fast_mode = false;
+  WaveformConfig wave; // hw_emu waveform capture (see --waveform/--fst)
 };
 
 inline void graph_coloring_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <graph.txt> [max_colors] [seed]"
-               " [watchdog_s] [--fast]\n"
+               " [watchdog_s] [--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n"
             << "Graph format: unweighted edge list, loaded undirected.\n";
+  benchmarkWaveformUsage(std::cerr);
 }
 
 inline bool parse_graph_coloring_args(int argc, char **argv,
                                       GraphColoringBenchArgs &out)
 {
-  if (argc < 3 || argc > 7)
+  if (argc < 3)
   {
     graph_coloring_usage(argv[0]);
     return false;
@@ -44,6 +46,8 @@ inline bool parse_graph_coloring_args(int argc, char **argv,
       out.fast_mode = true;
       continue;
     }
+    if (benchmarkTryParseWaveformArg(arg, out.wave))
+      continue;
     if (positional == 0)
       out.max_colors = (uint32_t)std::strtoul(argv[i], nullptr, 0);
     else if (positional == 1)
@@ -67,9 +71,13 @@ inline int run_graph_coloring_benchmark(int argc, char **argv,
   if (benchmarkCpuOnlyRequested(args.xclbin_path))
     return GraphColoringDriver::run_cpu_test_bench(
         args.graph_file, args.max_colors, args.seed);
-  return runSingleFpgaBenchmark(args.xclbin_path, kernel_name, [&](Memory *m) {
-    GraphColoringDriver driver(m, args.graph_file, args.max_colors, args.seed,
-                               args.watchdog_s, args.fast_mode);
-    return driver.run_test_bench();
-  });
+  benchmarkApplyWaveformDefaults(args.wave, kernel_name);
+  return runSingleFpgaBenchmark(
+      args.xclbin_path, kernel_name,
+      [&](Memory *m) {
+        GraphColoringDriver driver(m, args.graph_file, args.max_colors,
+                                   args.seed, args.watchdog_s, args.fast_mode);
+        return driver.run_test_bench();
+      },
+      args.wave);
 }

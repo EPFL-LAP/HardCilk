@@ -23,6 +23,7 @@ import scala.collection.immutable.SeqMap
   *                                  (256-bit beat = two 128-bit telemetry bundles)
   *   - <statusPrefix>_in_<i>  [1:0] input  -- {bit1=ready, bit0=valid} of the in queue
   *   - <statusPrefix>_out_<i> [1:0] input  -- {bit1=ready, bit0=valid} of the out queue
+  *     HLS drops the `_<i>` suffix for array ports when the array length is 1.
   *   - bw_wbytes_<p> [7:0]   input  -- write bytes transferred this cycle on HBM port p
   *   - bw_rbytes_<p> [15:0]  input  -- read  bytes requested this cycle on HBM port p
   *   - bw_awaddr_<p> [19:0]  input  -- most-recent AW addr[63:44] on HBM port p (future)
@@ -47,8 +48,21 @@ class WatcherBlackBox(
 ) extends BlackBox {
   override def desiredName: String = moduleName
 
-  def inPinName(statusPrefix: String, i: Int): String = s"${statusPrefix}_in_${i}"
-  def outPinName(statusPrefix: String, i: Int): String = s"${statusPrefix}_out_${i}"
+  private val monitoredCounts: Map[String, Int] = monitored.toMap
+
+  private def statusPinName(statusPrefix: String, direction: String, i: Int): String = {
+    val count = monitoredCounts.getOrElse(
+      statusPrefix,
+      throw new RuntimeException(s"Unknown watcher status prefix: $statusPrefix")
+    )
+    if (count == 1) s"${statusPrefix}_${direction}"
+    else s"${statusPrefix}_${direction}_${i}"
+  }
+
+  def inPinName(statusPrefix: String, i: Int): String =
+    statusPinName(statusPrefix, "in", i)
+  def outPinName(statusPrefix: String, i: Int): String =
+    statusPinName(statusPrefix, "out", i)
   def memBasePin(channel: Int): String = s"mem_${channel}"
 
   def wbytesPin(p: Int): String = s"bw_wbytes_${p}"
