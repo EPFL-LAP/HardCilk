@@ -23,7 +23,7 @@ inline void bellman_ford_usage(const char *prog)
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <weighted_graph.csv> [source]"
                " [watchdog_s] [--fast] [--max-depth=N]"
-               " [--waveform[=DIR]] [--fst] [--no-vcd]\n"
+               " [--waveform[=DIR]] [--fst] [--keep-vcd|--no-vcd]\n"
             << "CSV format: src,dst,weight (directed). Whitespace is also"
                " accepted.\n"
             << "  --max-depth=N  Stop after N rounds (0 = unlimited).\n";

@@ -236,15 +236,16 @@ the state from one sample's cycle to the next.
 
 ## 4. `BW_READ` / `BW_WRITE` bundles (headers 2–7)
 
-Per-HBM-port average bandwidth over the most recent **128-cycle window**. Emitted once
-per window (every 128 cycles). 31 ports are covered across 3 sub-bundles of 15 ports
-each; read and write are separate bundles.
+Per-HBM-port average bandwidth over the most recent **128-cycle window**. Emitted at
+most once per window (every 128 cycles); windows whose averaged read/write values are
+all zero are skipped. 31 ports are covered across 3 sub-bundles of 15 ports each; read
+and write are separate bundles.
 
 > **Timing a window.** `BW_READ`/`BW_WRITE` bundles carry no timestamp of their own.
-> Each window also emits one `BW_ADDR` bundle (§5) whose `bits[124:53]` hold the
+> Each emitted window also emits one `BW_ADDR` bundle (§5) whose `bits[124:53]` hold the
 > window's final `cycle_count`; that is the time anchor for the whole set (the averages
-> cover cycles `[cycle-127 .. cycle]`). Idle windows are skipped, so anchor by reading
-> that field — not by counting emitted sets.
+> cover cycles `[cycle-127 .. cycle]`). Idle/rounded-to-zero windows are skipped, so
+> anchor by reading that field — not by counting emitted sets.
 
 ```
 bits [7:0]              = header (2/3/4 = read sub 0/1/2 ; 5/6/7 = write sub 0/1/2)
@@ -295,9 +296,10 @@ the start gate) of the **last cycle of the 128-cycle window** that the accompany
 **`[C-127 .. C]`** inclusive, and windows land on `C = 128, 256, 384, …`.
 
 Because every emitted window carries its own absolute cycle, **do not infer window time
-by counting** — a window with zero traffic on all ports emits nothing (it is skipped),
-so the N-th emitted BW set is not necessarily the N-th 128-cycle window. Read the cycle
-from this field directly; it is robust to skipped-idle-window and dropped bundles.
+by counting** — a window whose averaged traffic rounds to zero on all ports emits
+nothing, so the N-th emitted BW set is not necessarily the N-th 128-cycle window. Read
+the cycle from this field directly; it is robust to skipped idle windows and dropped
+bundles.
 
 The address bits remain **reserved for future address-range classification** (e.g. graph
 vs scheduler); a basic viewer can ignore them but should still read the timestamp.

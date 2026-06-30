@@ -22,7 +22,7 @@ inline void graph_coloring_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <graph.txt> [max_colors] [seed]"
-               " [watchdog_s] [--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n"
+               " [watchdog_s] [--fast] [--waveform[=DIR]] [--fst] [--keep-vcd|--no-vcd]\n"
             << "Graph format: unweighted edge list, loaded undirected.\n";
   benchmarkWaveformUsage(std::cerr);
 }

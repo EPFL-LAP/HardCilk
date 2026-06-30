@@ -21,7 +21,7 @@ inline void widest_path_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <weighted_graph.csv> [source]"
-               " [watchdog_s] [--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n"
+               " [watchdog_s] [--fast] [--waveform[=DIR]] [--fst] [--keep-vcd|--no-vcd]\n"
             << "CSV format: src,dst,weight (directed). Whitespace is also"
                " accepted.\n";
   benchmarkWaveformUsage(std::cerr);

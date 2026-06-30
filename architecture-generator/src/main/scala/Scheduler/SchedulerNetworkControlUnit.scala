@@ -18,9 +18,9 @@ class SchedulerNetworkControlUnit extends Module {
 
   val stealReqReg = RegInit(false.B)
 
-  when(io.connSS.stealReq.valid) {
+  when(io.connSS.stealReq.valid && ~stealReqReg) {
     io.reqTaskOut := 1.U
-  }.elsewhen(io.connSS.serveStealReq.valid) {
+  }.elsewhen(io.connSS.serveStealReq.valid && stealReqReg) {
     io.reqTaskOut := 0.U
   }.otherwise {
     io.reqTaskOut := stealReqReg

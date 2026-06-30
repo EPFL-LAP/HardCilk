@@ -46,7 +46,9 @@ endif
 VPP_FLAGS   := -t $(TARGET) --platform $(XPLATFORM) --save-temps
 
 VPP_LDFLAGS := --optimize 2 -R 2
-VPP_LDFLAGS += --config $(SRC_CFG)
+VPP_BASE_CONFIG := $(SRC_CFG)
+include ../../scripts/xclbin_incremental_checkpoint.mk
+VPP_LDFLAGS += $(VPP_CONFIG_FLAG)
 
 VPP_LINKHOOK_FLAGS :=
 ifeq ($(TARGET),hw)
@@ -79,6 +81,7 @@ $(XO_DIR)/whileLoopMain_reentry0_0.xo: \
 # ============================================================
 $(XCLBIN): $(KERNEL_OBJS) $(SRC_CFG)
 	mkdir -p $(BUILD_DIR) $(BUILD_REPORT_DIR)
+	$(PREPARE_VPP_CONFIG)
 	$(VPP)                    \
 	    --vivado.synth.jobs 32 \
 	    --vivado.impl.jobs  16 \
@@ -89,6 +92,7 @@ $(XCLBIN): $(KERNEL_OBJS) $(SRC_CFG)
 	    --report_dir $(BUILD_REPORT_DIR)/generator_collector \
 	    $(VPP_LDFLAGS)         \
 	    -o $@ $(KERNEL_OBJS)
+	$(ARCHIVE_INCREMENTAL_CHECKPOINT)
 	@mkdir -p $(BACKUP_DIR)
 	@ts=$$(date +%Y%m%d_%H%M%S); \
 	  cp $@ $(BACKUP_DIR)/triangleCountDecoupled.$(TARGET).$$ts.xclbin; \
@@ -117,6 +121,7 @@ clean:
 	-rm -rf $(BUILD_DIR) $(TEMP_DIR) *.log *.jou
 
 cleanall: clean
+	-rm -rf $(CUR_DIR)/checkpoints
 	-rm -rf _x_temp.* build_dir.* $(CUR_DIR)/reports $(XO_ROOT)
 	-rm -rf .ipcache .Xil
 	-rm -rf packaged_kernel_*

@@ -32,7 +32,7 @@ inline void bfs_print_usage(const char *prog) {
   std::cerr
       << "\nUsage:\n  " << prog
       << " <xclbin_path> <graph_file> [source] [max_depth] [watchdog_s] [--fast]"
-         " [--waveform[=DIR]] [--fst] [--no-vcd]\n\n"
+         " [--waveform[=DIR]] [--fst] [--keep-vcd|--no-vcd]\n\n"
       << "Arguments:\n"
       << "  xclbin_path   .xclbin to load onto the FPGA, or --cpu for CPU-only\n"
       << "  graph_file    edge-list graph (loaded undirected), synthetic:star2m,\n"

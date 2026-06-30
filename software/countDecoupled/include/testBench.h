@@ -21,7 +21,7 @@ inline void count_decoupled_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> [size] [num_instances] [watchdog_s] "
-               "[--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n";
+               "[--fast] [--waveform[=DIR]] [--fst] [--keep-vcd|--no-vcd]\n";
   benchmarkWaveformUsage(std::cerr);
 }
 
@@ -66,7 +66,8 @@ inline int run_count_decoupled_benchmark(
     return EXIT_FAILURE;
   if (benchmarkCpuOnlyRequested(args.xclbin_path))
     return CountDecoupledDriver::run_cpu_test_bench(args.size);
-  benchmarkApplyWaveformDefaults(args.wave, kernel_name);
+  benchmarkApplyWaveformDefaults(args.wave, kernel_name,
+                                 "countDecoupled_telemetry");
   return runSingleFpgaBenchmark(
       args.xclbin_path, kernel_name,
       [&](Memory *m) {

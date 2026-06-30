@@ -21,7 +21,7 @@ inline void mis_usage(const char *prog)
 {
   std::cerr << "Usage:\n  " << prog
             << " <xclbin_path|--cpu> <graph.txt> [seed] [watchdog_s]"
-               " [--fast] [--waveform[=DIR]] [--fst] [--no-vcd]\n"
+               " [--fast] [--waveform[=DIR]] [--fst] [--keep-vcd|--no-vcd]\n"
             << "Graph format: unweighted edge list, loaded undirected.\n";
   benchmarkWaveformUsage(std::cerr);
 }

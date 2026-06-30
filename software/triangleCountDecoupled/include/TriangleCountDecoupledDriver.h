@@ -224,6 +224,18 @@ private:
     return emuMode != nullptr && !std::string(emuMode).empty();
   }
 
+  static std::string telemetryTimestamp()
+  {
+    const char *env = std::getenv("HARDCILK_RUN_TIMESTAMP");
+    if (env != nullptr && env[0] != '\0')
+      return std::string(env);
+
+    char ts[32];
+    std::time_t now = std::time(nullptr);
+    std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&now));
+    return std::string(ts);
+  }
+
   uint64_t getTelemetryReserveBytes() const
   {
     return isEmulation() ? (256ULL << 20) : (8ULL << 30);
@@ -423,11 +435,9 @@ private:
       const size_t stride = TELEMETRY_BEAT_BYTES;
       std::vector<uint8_t> buf(static_cast<size_t>(TELEMETRY_IO_CHUNK_BYTES));
 
-      char ts[32];
-      std::time_t now = std::time(nullptr);
-      std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&now));
       std::string path =
-          std::string("/tmp/triangleCountDecoupled_telemetry_") + ts + ".bin";
+          std::string("/tmp/triangleCountDecoupled_telemetry_") +
+          telemetryTimestamp() + ".bin";
 
       std::ofstream out(path, std::ios::binary);
       if (!out)
@@ -646,11 +656,9 @@ private:
     if (written > 0)
       reportStatusConservation(buf, firstBundle, lastBundle);
 
-    char ts[32];
-    std::time_t now = std::time(nullptr);
-    std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&now));
     std::string path =
-        std::string("/tmp/triangleCountDecoupled_telemetry_") + ts + ".bin";
+        std::string("/tmp/triangleCountDecoupled_telemetry_") +
+        telemetryTimestamp() + ".bin";
 
     std::ofstream out(path, std::ios::binary);
     if (!out)

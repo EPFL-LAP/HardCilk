@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -45,6 +46,25 @@ inline bool benchmarkCheckRuntimeEnv()
   return false;
 }
 
+inline std::string benchmarkTimestampNow()
+{
+  char ts[32];
+  std::time_t now = std::time(nullptr);
+  std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&now));
+  return std::string(ts);
+}
+
+inline std::string benchmarkGetOrCreateRunTimestamp()
+{
+  const char *env = std::getenv("HARDCILK_RUN_TIMESTAMP");
+  if (env != nullptr && env[0] != '\0')
+    return std::string(env);
+
+  std::string ts = benchmarkTimestampNow();
+  setenv("HARDCILK_RUN_TIMESTAMP", ts.c_str(), 1);
+  return ts;
+}
+
 // Configuration for capturing a full xsim waveform during hardware
 // emulation (XCL_EMULATION_MODE=hw_emu). When enabled the host writes an
 // xrt.ini (debug_mode=batch -> native .wdb) plus pre/post-sim TCL scripts
@@ -52,16 +72,16 @@ inline bool benchmarkCheckRuntimeEnv()
 struct WaveformConfig
 {
   bool enabled = false;
-  std::string dir = "waveform";      // output directory (relative to cwd)
+  std::string dir = "/tmp";          // output directory
   std::string vcd_basename = "dump"; // <basename>.vcd inside `dir`
   // Regex (xsim get_scopes -regexp) selecting the hierarchy to log. Defaults
   // to the whole design; pass the kernel CU name to scope to that subtree.
   std::string kernel_scope_regex = ".*";
   // xsim can only emit VCD (not FST). When fst is true, post-sim converts the
-  // VCD to a compact GTKWave .fst via `vcd2fst` (if present on PATH). The VCD
-  // is removed afterwards unless keep_vcd is also set.
+  // VCD to a compact GTKWave .fst via `vcd2fst` (if present on PATH). --fst
+  // deletes the intermediate VCD by default; --keep-vcd preserves it.
   bool fst = false;
-  bool keep_vcd = true;
+  bool keep_vcd = false;
 };
 
 // Print the shared waveform-capture flag documentation. Every benchmark host
@@ -70,13 +90,13 @@ struct WaveformConfig
 inline void benchmarkWaveformUsage(std::ostream &os)
 {
   os << "  --waveform[=DIR]  (hw_emu only) dump a full xsim waveform into DIR "
-        "(default: waveform):\n"
+        "(default: /tmp):\n"
      << "                    native .wdb + .vcd, scoped to the user kernel.\n"
-     << "  --fst             also convert the VCD to a compact GTKWave .fst "
+     << "  --fst             convert the VCD to a compact GTKWave .fst "
         "(needs vcd2fst;\n"
-     << "                    implies --waveform).\n"
-     << "  --no-vcd          with --fst, delete the VCD after conversion "
-        "(keep only .fst + .wdb).\n";
+     << "                    implies --waveform and deletes the VCD by default).\n"
+     << "  --keep-vcd        with --fst, keep the intermediate VCD.\n"
+     << "  --no-vcd          with --fst, delete the intermediate VCD (default).\n";
 }
 
 // If `arg` is a waveform-related option, apply it to `wave` and return true.
@@ -102,6 +122,11 @@ inline bool benchmarkTryParseWaveformArg(const std::string &arg,
     wave.fst = true;
     return true;
   }
+  if (arg == "--keep-vcd")
+  {
+    wave.keep_vcd = true;
+    return true;
+  }
   if (arg == "--no-vcd")
   {
     wave.keep_vcd = false;
@@ -111,10 +136,12 @@ inline bool benchmarkTryParseWaveformArg(const std::string &arg,
 }
 
 // Fill in per-design waveform defaults from the kernel name: scope the capture
-// to the kernel CU and name the dump after it. Call after arg parsing, before
+// to the kernel CU and name the dump after the telemetry file when a design
+// telemetry prefix is supplied. Call after arg parsing, before
 // runSingleFpgaBenchmark. Leaves any caller-set overrides untouched.
 inline void benchmarkApplyWaveformDefaults(WaveformConfig &wave,
-                                           const std::string &kernel_name)
+                                           const std::string &kernel_name,
+                                           const std::string &telemetry_prefix = "")
 {
   if (!wave.enabled)
     return;
@@ -122,7 +149,13 @@ inline void benchmarkApplyWaveformDefaults(WaveformConfig &wave,
   if (cu.empty())
     cu = "kernel";
   if (wave.vcd_basename == "dump") // struct default -> use a recognizable name
-    wave.vcd_basename = cu;
+  {
+    if (!telemetry_prefix.empty())
+      wave.vcd_basename =
+          telemetry_prefix + "_" + benchmarkGetOrCreateRunTimestamp();
+    else
+      wave.vcd_basename = cu;
+  }
   if (wave.kernel_scope_regex == ".*") // struct default -> scope to the CU
     wave.kernel_scope_regex = ".*" + cu + ".*";
 }
@@ -169,6 +202,7 @@ inline bool benchmarkSetupHwEmuWaveform(const WaveformConfig &wave)
   const std::string pre = dir + "/pre_sim.tcl";
   const std::string post = dir + "/post_sim.tcl";
   const std::string vcd = dir + "/" + wave.vcd_basename + ".vcd";
+  const std::string wdb = dir + "/" + wave.vcd_basename + ".wdb";
 
   // pre-sim: opened before `run all`, so the VCD captures from time 0.
   {
@@ -256,11 +290,12 @@ puts "\[Waveform\] logged $cnt objects to VCD"
     f << "# Auto-generated by --waveform (do not edit; regenerated each run).\n"
       << "puts \"\\[Waveform\\] post-sim: closing VCD + copying .wdb\"\n"
       << "set wave_dir {" << dir << "}\n"
+      << "set wdb_file {" << wdb << "}\n"
       << "if { [catch { close_vcd } msg] } { puts \"\\[Waveform\\] close_vcd: "
          "$msg\" }\n"
       << "foreach w [glob -nocomplain *.wdb] {\n"
-      << "  if { [catch { file copy -force $w [file join $wave_dir [file tail "
-         "$w]] } msg] } { puts \"\\[Waveform\\] wdb copy failed: $msg\" }\n"
+      << "  if { [catch { file copy -force $w $wdb_file } msg] } "
+         "{ puts \"\\[Waveform\\] wdb copy failed: $msg\" }\n"
       << "}\n";
     if (wave.fst)
     {
@@ -314,7 +349,7 @@ puts "\[Waveform\] logged $cnt objects to VCD"
 
   std::cout << "[Waveform] hw_emu waveform capture enabled.\n"
             << "[Waveform]   output dir : " << dir << "\n"
-            << "[Waveform]   native wdb : " << dir << "/<kernel>.wdb\n";
+            << "[Waveform]   native wdb : " << wdb << "\n";
   if (wave.fst)
     std::cout << "[Waveform]   fst        : " << dir << "/"
               << wave.vcd_basename << ".fst (via vcd2fst)\n";

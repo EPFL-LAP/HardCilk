@@ -94,8 +94,11 @@ fi
 # --- Step 1: Copy xrt-projects/<benchmark> to xclbin-workspace, excluding *-arxiv folders ---
 echo "Creating workspace at $XCLBIN_WORKSPACE_DIR ..."
 mkdir -p "$XCLBIN_WORKSPACE_DIR"
+if [[ -d "$XCLBIN_WORKSPACE_DIR/checkpoints" ]]; then
+    echo "Preserving existing incremental checkpoints in $XCLBIN_WORKSPACE_DIR/checkpoints ..."
+fi
 
-rsync -a --no-owner --no-group --exclude='*-arxiv' "$XRT_PROJECTS_DIR/" "$XCLBIN_WORKSPACE_DIR/"
+rsync -a --no-owner --no-group --exclude='*-arxiv' --exclude='checkpoints/' "$XRT_PROJECTS_DIR/" "$XCLBIN_WORKSPACE_DIR/"
 
 # --- Step 2: Copy only files (not subfolders) from rtl/ into xclbin-workspace/<benchmark>/IP/ ---
 echo "Copying RTL files into $XCLBIN_WORKSPACE_DIR/IP/ ..."

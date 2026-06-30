@@ -542,7 +542,8 @@ void watcher_runner(
 
     // ---- window boundary: build the 7 BW bundles into the (empty) queue ----
     // The previous window's <=7 bundles flushed within <=7 cycles, far inside
-    // the 4096-cycle window, so the queue is always empty here.
+    // the next 128-cycle window, so the queue is always empty here. Skip windows
+    // whose averaged read/write bytes are all zero to keep the trace compact.
     if (window)
     {
       bool any_bw = false;

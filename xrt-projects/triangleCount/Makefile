@@ -45,7 +45,9 @@ endif
 VPP_FLAGS   := -t $(TARGET) --platform $(XPLATFORM) --save-temps
 
 VPP_LDFLAGS := --optimize 2 -R 2
-VPP_LDFLAGS += --config $(TMP_CFG)
+VPP_BASE_CONFIG := $(TMP_CFG)
+include ../../scripts/xclbin_incremental_checkpoint.mk
+VPP_LDFLAGS += $(VPP_CONFIG_FLAG)
 
 
 #--- Input .xo files ---
@@ -96,6 +98,7 @@ $(XO_DIR)/triangleCount_0.xo: \
 # ============================================================
 $(XCLBIN): $(KERNEL_OBJS) $(TMP_CFG)
 	mkdir -p $(BUILD_DIR) $(BUILD_REPORT_DIR)
+	$(PREPARE_VPP_CONFIG)
 	$(VPP)                    \
 	    --vivado.synth.jobs 32 \
 	    --vivado.impl.jobs  16 \
@@ -107,6 +110,7 @@ $(XCLBIN): $(KERNEL_OBJS) $(TMP_CFG)
 	    --report_dir $(BUILD_REPORT_DIR)/generator_collector \
 	    $(VPP_LDFLAGS)         \
 	    -o $@ $(KERNEL_OBJS)
+	$(ARCHIVE_INCREMENTAL_CHECKPOINT)
 
 # ============================================================
 # Convenience targets
@@ -119,6 +123,7 @@ clean:
 	-rm -rf $(BUILD_DIR) $(TEMP_DIR) *.log *.jou $(TMP_CFG)
 
 cleanall: clean
+	-rm -rf $(CUR_DIR)/checkpoints
 	-rm -rf _x_temp.* build_dir.* $(CUR_DIR)/reports $(XO_DIR) 
 	-rm -rf .ipcache .Xil
 	-rm -rf packaged_kernel_*
