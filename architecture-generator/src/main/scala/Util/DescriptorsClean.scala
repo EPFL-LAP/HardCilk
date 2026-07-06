@@ -124,8 +124,16 @@ case class TaskDescriptor(
     isAIE: Boolean = false,
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
-    argumentSizeList: List[Int] = List(),
-    taskId: Int = 0 // Defaulted
+    // Per-argDataOut payload width (bits), keyed by the exact argData stream port
+    // name written by the PE ("argDataOut" for a single destination, or
+    // "argDataOut_<continuation>" for each destination of a multi-target send).
+    argumentSizeList: Map[String, Int] = Map(),
+    // Number of ordered write-buffer beats this continuation's closure is written
+    // in (1 = fits in one beat; >1 = closure wider than the buffer's per-beat
+    // payload, so the PE emits that many sequential spawn_next writes).
+    closureWriteBeats: Int = 1,
+    taskId: Int = 0, // Defaulted
+    tag: Int = 0 // Continuation ID; defaulted for non-continuation tasks
 ) {
   // Helper methods are fine to keep here
   def getNumServers(sideType: String): Int = { //
@@ -167,9 +175,11 @@ case class TaskDescriptor(
     }
     
     if(generateArgOutWriteBuffer) {
-      require(!argumentSizeList.isEmpty, s"Task '$name': argumentSizeList must not be empty!")
-      require(argumentSizeList.head > 0, s"Task '$name': argumentWidth must be > 0 to has a write buffer!")
+      require(argumentSizeList.nonEmpty, s"Task '$name': argumentSizeList must not be empty!")
+      require(argumentSizeList.values.forall(_ > 0), s"Task '$name': every argumentWidth must be > 0 to have a write buffer!")
     }
+
+    require(closureWriteBeats >= 1, s"Task '$name': closureWriteBeats must be >= 1")
     
 
   }
@@ -198,7 +208,11 @@ case class FullSysGenDescriptor(
     transformAXI: Boolean = false,
     transformPattern: List[Int] = List(),
     widthAXIAddress: Int = 34,
-    fpgaCountSim: Int = 1
+    fpgaCountSim: Int = 1,
+    // Optional absolute (or explicit) path to the driver software project to copy
+    // into the generated software project. When None, the emitter falls back to
+    // the relative `../software/${jsonName}` (or mfpga variant) convention.
+    driverSoftwarePath: Option[String] = None
 ) {
   // --- All helper logic is kept here ---
   // Assign base addresses
@@ -299,6 +313,7 @@ case class FullSysGenDescriptor(
     val aggregatorMapSendArg = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSpawnNext = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapMalloc = mutable.Map[String, Int]().withDefaultValue(0)
+    val aggregatorMapTaskInGlobal = mutable.Map[String, Int]().withDefaultValue(0)
 
     val connections = taskDescriptors.flatMap { task =>
       val spawnedTasks = spawnList.getOrElse(task.name, List())
@@ -327,9 +342,16 @@ case class FullSysGenDescriptor(
       val spawnedConnections = spawnedTasks.filterNot(_ == task.name).zipWithIndex.flatMap { case (spawnedTask, j) =>
         val spawnedTaskDescriptor = taskDescriptors.find(_.name == spawnedTask).get
         (0 until task.numProcessingElements).map { i =>
+          // The destination taskInGlobal index must be a per-target running
+          // counter (like argIn/spawnNext below), NOT the source PE index `i`.
+          // Using `i` made every distinct spawner of the same target collide on
+          // taskInGlobal[0] (when numProcessingElements == 1), leaving the other
+          // taskInGlobal slots undriven ("sink not fully initialized").
+          aggregatorMapTaskInGlobal(spawnedTask) += 1
           ConnectionDescriptor(
             PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
-            PortDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal", i),
+            PortDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal",
+              aggregatorMapTaskInGlobal(spawnedTask) - 1),
             spawnedTaskDescriptor.widthTask,
             "AXIS"
           )
