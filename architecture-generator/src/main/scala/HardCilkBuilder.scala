@@ -160,7 +160,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
             val wb = Module(new WriteBuffer(
               new WriteBufferConfig(
                 wAddr = desc.widthAddress,
-                wData = task.argumentSizeList.max, // We currently assume a single argument type per task
+                wData = task.argumentSizeList.values.max, // We currently assume a single argument type per task
                 wAllow = 32,
                 wAllowData = Seq(64) // Size of the argument notification address
               )
@@ -183,7 +183,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
               addressWidth = 64,
               localModulesCount = task.numProcessingElements,
               taskId = task.taskId,
-              axiDataWidth = task.argumentSizeList.head
+              axiDataWidth = task.argumentSizeList.values.max
             ))
           remoteStreamToMem
         })
@@ -257,6 +257,15 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
 
     val systemConnectionsDescriptor = desc.getSystemConnectionsDescriptor()
 
+    // Track every HardCilk-side (subsystem) port that actually gets wired by the
+    // connection descriptor, so we can report scheduler ports that were left
+    // unconnected — these are what firtool later flags as "sink not fully
+    // initialized" (with an unhelpful empty name).
+    val connectedHC = scala.collection.mutable.Set[(String, String, Int)]()
+    def recordHC(p: PortDescriptor): Unit =
+      if (p.parentType == "HardCilk")
+        connectedHC += ((p.parentName, p.portType, p.portIndex))
+
     for (connection <- systemConnectionsDescriptor.connections) {
       val srcIsPE = connection.srcPort.parentType == "PE"
       val dstIsPE = connection.dstPort.parentType == "PE"
@@ -269,6 +278,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       println(s"[HardCilkBuilder] Connecting ${connection.srcPort} to ${connection.dstPort} (PE exists: ${peExists})")
 
       if (srcIsPE && !peExists) {
+        recordHC(connection.dstPort)
         val hardcilkPort = getPhysicalPort(connection.dstPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs)
         // Connecting WB m_allows to HardCilk and exporting s_allows port
         // Todo: is s_allows and m_allows always index 0? If yes, why it supports multiple?
@@ -294,6 +304,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           }
         }
       } else if (dstIsPE && !peExists) {
+        recordHC(connection.srcPort)
         portsToExport += PortToExport(connection.srcPort, connection.dstPort, isSource = true)
       } else {
         try {
@@ -308,6 +319,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           )
 
           physicalSourcePort <> physicalDestinationPort
+          recordHC(connection.srcPort)
+          recordHC(connection.dstPort)
 
           // Log the connection
           println("[HardCilk:Builder:237] Connected " +
@@ -322,6 +335,34 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         }
       }
     }
+
+    // ---- Scheduler port connection coverage report -------------------------
+    // List every exported scheduler port and whether the connection descriptor
+    // wired it. taskIn/taskInGlobal are sinks (must be driven); an unconnected
+    // one is exactly what firtool reports as "sink not fully initialized".
+    println("[HardCilk:Builder] ===== Scheduler port connection coverage =====")
+    for ((name, sched) <- scheds) {
+      val taskOutN = sched.io_export.taskOut.length
+      val taskInN = sched.io_export.taskIn.map(_.length).getOrElse(0)
+      val taskInGlobalN = sched.io_export.taskInGlobal.map(_.length).getOrElse(0)
+
+      def report(portType: String, count: Int, isSink: Boolean): Unit =
+        for (i <- 0 until count) {
+          val connected = connectedHC.contains((name, portType, i))
+          val flag =
+            if (connected) "connected"
+            else if (isSink) "UNCONNECTED (sink — undriven!)"
+            else "unconnected (source — unused)"
+          println(f"[HardCilk:Builder]   scheduler($name).$portType[$i]: $flag")
+        }
+
+      println(f"[HardCilk:Builder] scheduler '$name': " +
+        f"taskOut=$taskOutN, taskIn=$taskInN, taskInGlobal=$taskInGlobalN")
+      report("taskOut", taskOutN, isSink = false)
+      report("taskIn", taskInN, isSink = true)
+      report("taskInGlobal", taskInGlobalN, isSink = true)
+    }
+    println("[HardCilk:Builder] ===============================================")
 
     portsToExport.toSeq
   }
