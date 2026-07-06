@@ -145,11 +145,18 @@ object HardCilkEmitter extends App {
           cmakeListsContent.replace("${project_template}", jsonName)
         writeFile(cmakeListsPath, newCmakeListsContent)
 
-        // Also copy `../software/${jsonName}` to `outputDirPathSC/projects/${jsonName}`
-        var source_project_path = s"../software/${jsonName}"
-        if(systemDescriptor.mFPGASimulation || systemDescriptor.mFPGASynth){ 
-          source_project_path = s"../software/mfpga/${jsonName}"
-        } 
+        // Copy the driver software project into `outputDirPathSC/projects/${jsonName}`.
+        // If `driverSoftwarePath` is specified in the JSON, use it directly;
+        // otherwise fall back to the relative `../software/${jsonName}` convention
+        // (or the mfpga variant when simulating/synthesizing for multiple FPGAs).
+        var source_project_path = systemDescriptor.driverSoftwarePath match {
+          case Some(path) => path
+          case None =>
+            if (systemDescriptor.mFPGASimulation || systemDescriptor.mFPGASynth)
+              s"../software/mfpga/${jsonName}"
+            else
+              s"../software/${jsonName}"
+        }
 
         val sourceProject = new java.io.File(source_project_path)
 
