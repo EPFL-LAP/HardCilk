@@ -161,6 +161,37 @@ class VitisWriteBufferModule(
         iface
     }
 
+  // ---------------------------------------------------------------------------
+  // New-style sendArgument (argOut) detection.
+  //
+  // A PE may send arguments to several distinct continuations. Each target gets
+  // its own named port pair:
+  //   argOut_<target>      (hls::stream<uint64_t>)        -> allow / notification address
+  //   argDataOut_<target>  (hls::stream<..._arg_out>)     -> argument payload (write buffer pkg)
+  // When present, new-style takes precedence over the legacy bare argOut/argDataOut.
+  //
+  // The legacy single-target case (bare "argOut" + "argDataOut") is preserved as
+  // the base case below.
+  private val newStyleArgOutPairs: Seq[(String, Axis_VitisInterface)] =
+    cfg.interfaces.collect {
+      case iface: Axis_VitisInterface if iface.name.startsWith("argDataOut_") =>
+        (iface.name.stripPrefix("argDataOut_"), iface)
+    }
+
+  private val isNewStyleArgOut: Boolean = newStyleArgOutPairs.nonEmpty
+
+  // Names of all new-style argOut_* / argDataOut_* interfaces (consumed internally
+  // or re-exported under explicit names — never wired by the "rest of ports" block).
+  private val newStyleArgOutNames: Set[String] =
+    if (isNewStyleArgOut)
+      cfg.interfaces.collect {
+        case iface: Axis_VitisInterface
+            if iface.name.startsWith("argOut_") || iface.name.startsWith("argDataOut_") =>
+          iface.name
+      }.toSet
+    else
+      Set.empty
+
   private val pe = Module(new VitisModule(cfg))
 
   println(pe.name)
@@ -177,7 +208,11 @@ class VitisWriteBufferModule(
             x.name != "argDataOut" &&
             // In new-style mode, named spawnNext_* ports are consumed internally;
             // the outside world sees m_axi_spawnNext_<contName> instead.
-            !(isNewStyleSpawnNext && x.name.startsWith("spawnNext_"))
+            !(isNewStyleSpawnNext && x.name.startsWith("spawnNext_")) &&
+            // New-style argDataOut_* payload ports are consumed internally by their
+            // write buffers; the outside world sees m_axi_argOut_<target> instead.
+            // The argOut_* allow ports are re-exported explicitly (see wiring below).
+            !(isNewStyleArgOut && x.name.startsWith("argDataOut_"))
           )
           .map { interface =>
             {
@@ -202,6 +237,7 @@ class VitisWriteBufferModule(
           pe.io.elements
             .get("argDataOut")
             .map(port => {
+              println(s"[HLS:HELPERS] argOut write buffer data width: ${cfg.writeBufferDataWidth}")
               "m_axi_argOut" -> (axi4.Master(
                 new axi4.Config(
                   wAddr = fullSysGenDescriptor.widthAddress,
@@ -219,7 +255,31 @@ class VitisWriteBufferModule(
         // New-style: one m_axi_spawnNext_<contName> AXI-MM port per named spawnNext.
         (if (isNewStyleSpawnNext) {
           newStyleSpawnNextPairs.map { case (contName, iface) =>
+            // The width must match the WriteBuffer that drives this port (see
+            // wiring below): the spawned task is streamed internally at its full
+            // width, but the AXI-MM path to memory is capped at a single 512-bit
+            // write packet — the driver splits wider tasks into multiple packets.
+            val spawnedTaskWidth = fullSysGenDescriptor.taskDescriptors
+              .find(_.name == contName)
+              .map(_.widthTask)
+              .getOrElse(throw new RuntimeException(
+                s"[HLS] spawnNext port '${iface.name}' references task '$contName' " +
+                s"but no task descriptor with that name exists in the system descriptor. " +
+                s"Known tasks: ${fullSysGenDescriptor.taskDescriptors.map(_.name).mkString(", ")}"))
             s"m_axi_spawnNext_$contName" -> (axi4.Master(
+              new axi4.Config(
+                wAddr = fullSysGenDescriptor.widthAddress,
+                wData = if (spawnedTaskWidth > 512) 512 else spawnedTaskWidth
+              )
+            ): Data)
+          }
+        } else Seq.empty[(String, Data)]) ++
+        // New-style: one m_axi_argOut_<target> AXI-MM port per named argDataOut.
+        // The payload width is taken directly from the parsed argDataOut_<target>
+        // interface, so distinct targets may carry distinct argument widths.
+        (if (isNewStyleArgOut) {
+          newStyleArgOutPairs.map { case (target, iface) =>
+            s"m_axi_argOut_$target" -> (axi4.Master(
               new axi4.Config(
                 wAddr = fullSysGenDescriptor.widthAddress,
                 wData = iface.config.wData
@@ -240,21 +300,35 @@ class VitisWriteBufferModule(
   //   "taskOutGlobal" (index N) → the Nth taskGlobalOut_* port in sorted IO order
   // Falls back to exact-name lookup for all other types.
   def getPortByLegacyType(portType: String, portIndex: Int): chisel3.Data = {
-    if (isNewStyleSpawnNext) {
-      portType match {
-        case "taskOutGlobal" =>
-          val taskGlobalOutPorts = io.elements.keys
-            .filter(_.startsWith("taskGlobalOut_"))
-            .toSeq.sorted
-          assert(portIndex < taskGlobalOutPorts.size,
-            s"[HLS] getPortByLegacyType: portIndex $portIndex out of range for 'taskOutGlobal' " +
-            s"in module '${cfg.desiredName}'. Available taskGlobalOut ports: ${taskGlobalOutPorts.mkString(", ")}")
-          io.elements(taskGlobalOutPorts(portIndex))
-        case _ => getPort(portType)
-      }
-    } else {
-      getPort(portType)
+    // New-style argOut: the Nth argOut connection (N = position in this task's
+    // sendArgumentList) maps to the explicitly re-exported argOut_<target> port.
+    if (isNewStyleArgOut && portType == "argOut") {
+      val targets = fullSysGenDescriptor.sendArgumentList.getOrElse(taskName, List())
+      assert(portIndex < targets.size,
+        s"[HLS] getPortByLegacyType: portIndex $portIndex out of range for 'argOut' " +
+        s"in module '${cfg.desiredName}'. sendArgumentList for '$taskName': ${targets.mkString(", ")}")
+      return getPort(s"argOut_${targets(portIndex)}")
     }
+
+    // taskOutGlobal: the logical Nth global-spawn output maps to the Nth
+    // taskGlobalOut_* port in sorted IO order. This holds whenever the PE has
+    // named taskGlobalOut_* ports — independent of whether it also owns a
+    // spawnNext. A task may tail-spawn a reentry/continuation (and so have a
+    // taskGlobalOut_* port) without owning a spawn_next closure, in which case
+    // isNewStyleSpawnNext is false but the translation is still required.
+    // Fall back to the legacy bare "taskOutGlobal" only when no named ports exist.
+    if (portType == "taskOutGlobal") {
+      val taskGlobalOutPorts = io.elements.keys
+        .filter(_.startsWith("taskGlobalOut_"))
+        .toSeq.sorted
+      if (taskGlobalOutPorts.nonEmpty) {
+        assert(portIndex < taskGlobalOutPorts.size,
+          s"[HLS] getPortByLegacyType: portIndex $portIndex out of range for 'taskOutGlobal' " +
+          s"in module '${cfg.desiredName}'. Available taskGlobalOut ports: ${taskGlobalOutPorts.mkString(", ")}")
+        return io.elements(taskGlobalOutPorts(portIndex))
+      }
+    }
+    getPort(portType)
   }
 
   private val peTaskOut = ("taskOut", pe.io.elements.get("taskOut"))
@@ -303,11 +377,14 @@ class VitisWriteBufferModule(
           s"This is a parser/interface mismatch — check the Verilog port list for task '$taskName'.")
       }
 
+      // If the spawned task is wider than a single 512-bit AXI write packet,
+      // cap the write buffer at 512 bits. The driver breaks the task into
+      // multiple packets on the wire.
       val mWriteBuffer = Module(
         new WriteBuffer(
           new WriteBufferConfig(
             wAddr = fullSysGenDescriptor.widthAddress,
-            wData = spawnedTaskWidth,
+            wData = if (spawnedTaskWidth > 512) 512 else spawnedTaskWidth,
             wAllow = (if (variableSpawn) 0 else 32),
             wAllowData = depIfaces.map(d =>
               pe.getPort(d.name).asInstanceOf[axi4s.Interface].cfg.wData
@@ -321,6 +398,10 @@ class VitisWriteBufferModule(
         .get(s"m_axi_spawnNext_$contName")
         .get
         .asInstanceOf[axi4.RawInterface]
+
+      // log both the widts of the axi interfaces
+      println(s"[HLS:HELPERS:208] spawnNext_${contName} width: ${io.elements(s"m_axi_spawnNext_$contName").asInstanceOf[axi4.RawInterface].cfg.wData}")
+      println(s"[HLS:HELPERS:209] write buffer width: ${mWriteBuffer.m_axi.cfg.wData}")
 
       depIfaces.zipWithIndex.foreach { case (depIface, idx) =>
         pe.getPort(depIface.name).asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(idx)
@@ -346,11 +427,14 @@ class VitisWriteBufferModule(
     // the allow signal if present; otherwise all taskOutGlobal ports are used.
     // -------------------------------------------------------------------------
     wSpawnNext.foreach(w => {
+      // If the spawned task is wider than a single 512-bit AXI write packet,
+      // cap the write buffer at 512 bits. The driver breaks the task into
+      // multiple packets on the wire.
       val mWriteBuffer = Module(
         new WriteBuffer(
           new WriteBufferConfig(
             wAddr = fullSysGenDescriptor.widthAddress,
-            wData = w,
+            wData = if (w > 512) 512 else w,
             wAllow = (if (variableSpawn) 0 else 32),
             wAllowData =
               taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
@@ -391,7 +475,62 @@ class VitisWriteBufferModule(
     }
   }
 
-  if (pe.io.elements.get("argDataOut").isDefined) {
+  if (isNewStyleArgOut) {
+    // -------------------------------------------------------------------------
+    // New-style sendArgument write-buffer wiring.
+    //
+    // Each argDataOut_<target> port feeds one WriteBuffer whose allow signal is
+    // the matching argOut_<target> port. The buffer drains to m_axi_argOut_<target>
+    // and the allow stream is re-exported as argOut_<target> (the argIn of the
+    // target continuation).
+    // -------------------------------------------------------------------------
+    assert(cfg.hasArgumentWriteBuffer,
+      "Found new-style argDataOut_* ports in the PE but the task has no write buffer " +
+      "data width specified in the JSON!")
+    assert(!cfg.hasRemoteWriteBuffer,
+      s"[HLS] New-style multi-target sendArgument (argDataOut_*) is not supported " +
+      s"together with the remote write buffer in module '${cfg.desiredName}'.")
+
+    val taskDesc = fullSysGenDescriptor.taskDescriptors.find(_.name == taskName)
+    newStyleArgOutPairs.foreach { case (target, argDataOutIface) =>
+      val allowName = s"argOut_$target"
+      assert(pe.io.elements.contains(allowName),
+        s"[HLS] argDataOut port '${argDataOutIface.name}' has no matching '$allowName' " +
+        s"allow port in module '${cfg.desiredName}'. Every named argDataOut requires a " +
+        s"corresponding argOut_<target> port. Available interfaces: " +
+        s"${cfg.interfaces.map(_.name).mkString(", ")}")
+
+      // The write-buffer payload is the argument DATA width (e.g. 32 for uint32),
+      // NOT the full _arg_out struct TDATA width carried on argDataOutIface
+      // (which also includes addr/size/allow/padding). Take it from the
+      // descriptor's argumentSizeList, keyed by the argDataOut port name.
+      val argWidth = taskDesc
+        .flatMap(_.argumentSizeList.get(argDataOutIface.name))
+        .getOrElse(throw new RuntimeException(
+          s"[HLS] No argumentSizeList entry for port '${argDataOutIface.name}' in task " +
+          s"'$taskName'. Available: ${taskDesc.map(_.argumentSizeList).getOrElse(Map.empty)}"))
+
+      val mWriteBuffer = Module(
+        new WriteBuffer(
+          new WriteBufferConfig(
+            wAddr = fullSysGenDescriptor.widthAddress,
+            wData = argWidth,
+            wAllow = 32, // HardCoded?
+            wAllowData = Seq(pe.getPort(allowName).asInstanceOf[axi4s.Interface].cfg.wData)
+          )
+        )
+      )
+
+      mWriteBuffer.s_pkg <> pe.getPort(argDataOutIface.name).asInstanceOf[axi4s.Interface]
+      mWriteBuffer.m_axi <> io.elements
+        .get(s"m_axi_argOut_$target")
+        .get
+        .asInstanceOf[axi4.RawInterface]
+      pe.getPort(allowName).asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(0)
+      mWriteBuffer.m_allows(0) <> getPort(allowName).asInstanceOf[axi4s.Interface]
+    }
+
+  } else if (pe.io.elements.get("argDataOut").isDefined) {
     assert(cfg.hasArgumentWriteBuffer, "Found argDataOut in the PE but the task has no write buffer data width specified in the JSON!")
     pe.io.elements
       .get("argDataOut")
@@ -446,7 +585,9 @@ class VitisWriteBufferModule(
         } else {
           // Legacy: exclude taskOut / taskOutGlobal (handled by write buffer or direct connect).
           taskOuts.map(_._1)
-        })
+        }) ++
+        // New-style argOut_* / argDataOut_* ports are handled by their write buffers above.
+        (if (isNewStyleArgOut) newStyleArgOutNames.toSeq else Seq.empty)
       ).contains(x._1))
     )
     .foreach {
@@ -723,18 +864,31 @@ object VitisModuleFactory {
         aximmInterface_s_axi_control
       ).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
 
-    // Create the config with the interfaces
-    val hasArgumentWriteBuffer_ = taskDescriptor.generateArgOutWriteBuffer && (fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth)
+    // Create the config with the interfaces.
+    // The remote (mFPGA) write-buffer variant is used only for buffered-store
+    // argOut in mFPGA mode — preserve the original gate for it.
+    val hasRemoteWriteBuffer_ = taskDescriptor.generateArgOutWriteBuffer &&
+      (fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth)
+    // A task needs an argument write buffer whenever it emits any argData — a
+    // return value OR a buffered store — i.e. whenever it has at least one
+    // argDataOut port (equivalently, a non-empty argumentSizeList). This is
+    // independent of generateArgOutWriteBuffer, which the compiler sets only for
+    // buffered stores and NOT for plain return-value sends.
+    val hasArgumentWriteBuffer_ = taskDescriptor.argumentSizeList.nonEmpty
+    // Legacy single bare-"argDataOut" write-buffer payload width, taken from the
+    // matching argumentSizeList entry. Multi-target (new-style) tasks have no bare
+    // "argDataOut" key and take per-port widths from the parsed Verilog instead.
+    val legacyArgOutWidth = taskDescriptor.argumentSizeList.getOrElse("argDataOut", 0)
     VitisModuleConfig(
-      moduleName,
-      config_seq,
-      is_ap_start,
-      is_ap_done,
-      is_ap_idle,
-      is_ap_ready,
-      hasArgumentWriteBuffer_,
-      if(taskDescriptor.generateArgOutWriteBuffer) taskDescriptor.argumentSizeList.head else 0,
-      taskDescriptor.generateArgOutWriteBuffer
+      desiredName = moduleName,
+      interfaces = config_seq,
+      is_ap_start = is_ap_start,
+      is_ap_done = is_ap_done,
+      is_ap_idle = is_ap_idle,
+      is_ap_ready = is_ap_ready,
+      hasRemoteWriteBuffer = hasRemoteWriteBuffer_,
+      writeBufferDataWidth = legacyArgOutWidth,
+      hasArgumentWriteBuffer = hasArgumentWriteBuffer_
     )
   }
 }

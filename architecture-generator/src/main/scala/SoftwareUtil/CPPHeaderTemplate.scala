@@ -19,6 +19,7 @@ object CppHeaderTemplate {
          |    int widthTask;
          |    std::vector<SideConfig> sidesConfigs;
          |    MemSystemDescriptor mgmtBaseAddresses;
+         |    int tag;
          |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
          |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToMallocBaseAddress;
          |
@@ -70,7 +71,8 @@ object CppHeaderTemplate {
          |    ${td.numProcessingElements},
          |    ${td.widthTask},
          |    {${generateSideConfig(td.sidesConfigs)}},
-         |    ${generateMemSystemDescriptor(td.mgmtBaseAddresses)}
+         |    ${generateMemSystemDescriptor(td.mgmtBaseAddresses)},
+         |    ${td.tag}
          |}
          """.stripMargin
       }
