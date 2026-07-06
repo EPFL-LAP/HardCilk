@@ -77,6 +77,7 @@ object HardCilkEmitterUtil {
     }
 
     var numHbmPortExports = 0
+    var hbmPortWidths = Seq.empty[Int]
     ChiselStage.emitSystemVerilogFile(
       {
         val module = new HardCilk(
@@ -89,11 +90,19 @@ object HardCilkEmitterUtil {
           argumentNotifierCutCount = 1
         )
         numHbmPortExports = module.numHbmPortExports
+        // Data width of each exported HBM master, in m_axi_00, m_axi_01, ... order.
+        // The Vitis flow generator reads this back to size register slices/ports.
+        hbmPortWidths = module.axiOuts.map(_.cfg.wData).toSeq
         module
       },
       Array(f"--target-dir=${outputDirPathRTL}"),
       Array("--disable-all-randomization")
     )
+
+    // Emit a small metadata file describing the exported HBM port widths so that
+    // the (separately-invoked) Vitis flow generator can build width-correct
+    // register slices and interface ports instead of assuming a fixed 256 bits.
+    writeFile(s"$outputDirPathRTL/hbm_port_widths.txt", hbmPortWidths.mkString("\n"))
 
     // For the file in the outputDirRTL with the name of the systemDescriptor.name run sv2v on it using os.system, then remove the original file
     import sys.process._
