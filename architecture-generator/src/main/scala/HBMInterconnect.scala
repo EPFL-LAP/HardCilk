@@ -70,6 +70,10 @@ trait HasHBMInterconnect extends Module {
           .filter { case (name, _) => name.startsWith("m_axi_spawnNext_") }
           .foreach { case (_, p) => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull) }
         pe.io.elements.get("m_axi_argOut").foreach(p => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull))
+        // New-style: one m_axi_argOut_<target> port per named argument continuation.
+        pe.io.elements
+          .filter { case (name, _) => name.startsWith("m_axi_argOut_") }
+          .foreach { case (_, p) => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull) }
         if (task.hasAXI) {
           interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
         }
@@ -118,13 +122,93 @@ trait HasHBMInterconnect extends Module {
 
     // log the interfaces from each module
     println(s"[HBM:Interconnect:95] PE interfaces: ${interfacesPE.length}")
+
+    // Log the widths of the PE interfaces
+    val peWidths = interfacesPE.map(_.cfg.wData).distinct.sorted
+    println(s"[HBM:Interconnect:95.1] PE interface widths: ${peWidths.mkString(", ")}")
+
     println(s"[HBM:Interconnect:96] Scheduler interfaces: ${interfacesScheduler.length}")
-    println(s"[HBM:Interconnect:97] Closure Allocator interfaces: ${interfacesClosureAllocator.length}")
-    println(s"[HBM:Interconnect:98] Argument Notifier interfaces: ${interfacesArgumentNotifier.length}")
-    println(s"[HBM:Interconnect:99] Memory Allocator interfaces: ${interfacesMemoryAllocator.length}")
+
+    // Log the widths of the Scheduler interfaces
+    val schedulerWidths = interfacesScheduler.map(_.cfg.wData).distinct.sorted
+    println(s"[HBM:Interconnect:96.1] Scheduler interface widths: ${schedulerWidths.mkString(", ")}")
+
+    // Log the widths of the Closure Allocator interfaces
+    val closureAllocatorWidths = interfacesClosureAllocator.map(_.cfg.wData).distinct.sorted
+    println(s"[HBM:Interconnect:97.1] Closure Allocator interface widths: ${closureAllocatorWidths.mkString(", ")}")
+
+    // Log the widths of the Argument Notifier interfaces
+    val argumentNotifierWidths = interfacesArgumentNotifier.map(_.cfg.wData).distinct.sorted
+    println(s"[HBM:Interconnect:98.1] Argument Notifier interface widths: ${argumentNotifierWidths.mkString(", ")}")
+
+    // Log the widths of the Memory Allocator interfaces
+    val memoryAllocatorWidths = interfacesMemoryAllocator.map(_.cfg.wData).distinct.sorted
+    println(s"[HBM:Interconnect:99.1] Memory Allocator interface widths: ${memoryAllocatorWidths.mkString(", ")}")
 
 
     if (totalPorts > 0) {
+      if (fullSysGenDescriptor.isVitisProject) {
+        // --- Vitis flow: reduce ports WITHOUT using Widen ---
+        // Only interfaces of the same data width are muxed together, so every
+        // resulting HBM master carries a single, uniform bus width and no Widen
+        // module is ever required. The requested port count (numHBMPorts) is a
+        // target: we can never go below the number of distinct widths, since
+        // each width needs at least one dedicated mux.
+        val allInterfaces =
+          interfacesPE ++ interfacesMemoryAllocator ++ interfacesScheduler ++
+            interfacesClosureAllocator ++ interfacesArgumentNotifier ++ interfacesRemoteMemAccess
+
+        val byWidth  = allInterfaces.groupBy(_.cfg.wData)
+        val widths   = byWidth.keys.toSeq.sorted
+        val numWidthGroups = widths.length
+
+        // Clamp the requested reduction: at least one mux per width group, and
+        // never more muxes than there are interfaces (== totalPorts).
+        val targetPorts = math.max(numWidthGroups, math.min(numHBMPorts, totalPorts))
+
+        // Start with one mux per width group, then hand out the remaining muxes
+        // to the currently most-loaded group (highest interfaces-per-mux ratio),
+        // never exceeding a group's interface count.
+        val muxByWidth = scala.collection.mutable.LinkedHashMap(widths.map(w => w -> 1): _*)
+        var remaining = targetPorts - numWidthGroups
+        while (remaining > 0 && widths.exists(w => muxByWidth(w) < byWidth(w).length)) {
+          val w = widths
+            .filter(x => muxByWidth(x) < byWidth(x).length)
+            .maxBy(x => byWidth(x).length.toDouble / muxByWidth(x))
+          muxByWidth(w) += 1
+          remaining -= 1
+        }
+
+        val achievedPorts = muxByWidth.values.sum
+
+        // Rebuild the slave buckets so that each bucket holds only same-width
+        // interfaces, spread round-robin across that group's muxes.
+        hbmSlaves.clear()
+        var idx = 0
+        for (w <- widths) {
+          val ifaces = byWidth(w)
+          val nMux   = muxByWidth(w)
+          for (b <- 0 until nMux) {
+            hbmSlaves += ((idx + b) -> new ArrayBuffer[axi4.full.Interface]())
+          }
+          ifaces.zipWithIndex.foreach { case (iface, k) =>
+            hbmSlaves(idx + (k % nMux)).addOne(iface)
+          }
+          idx += nMux
+        }
+
+        val maxPorts = fullSysGenDescriptor.maximumAXIPorts
+        println(
+          s"[HBM:Interconnect] Vitis Widen-free reduction: requested=$numHBMPorts, " +
+            s"reduced to $achievedPorts HBM port(s) across $numWidthGroups width group(s) " +
+            s"[${widths.mkString(", ")}] (limit $maxPorts)"
+        )
+        require(
+          achievedPorts <= maxPorts,
+          s"[HBM:Interconnect] FAILED to reduce HBM ports: $achievedPorts required (> $maxPorts). " +
+            s"Widths [${widths.mkString(", ")}] cannot be muxed further without using Widen."
+        )
+      } else {
         val numPortsPerMux = totalPorts.toDouble / numHBMPorts.toDouble
         val peMux = math.max(1, math.ceil(1.0 * interfacesPE.length / numPortsPerMux).toInt)
         val serverMux = math.max(0, numHBMPorts - peMux)
@@ -146,12 +230,19 @@ trait HasHBMInterconnect extends Module {
           .foreach(x => {
              if (hbmSlaves.contains(x._1)) hbmSlaves(x._1).addAll(x._2.map(_._1))
           })
+      }
     }
 
 
     if (fullSysGenDescriptor.hasAXIDMAInput){//!isSimulation) {
       val xdma_axi = IO(axi4.Slave(cfgXDMA)).suggestName("s_axi_xdma")
-      hbmSlaves(numHBMPorts - 1).addOne(
+      // In the Vitis (Widen-free) flow the XDMA slave has its own bus width, so
+      // it gets a dedicated bucket to preserve the same-width-per-mux invariant.
+      // Otherwise keep the legacy behaviour of sharing the last requested port.
+      val xdmaBucket =
+        if (fullSysGenDescriptor.isVitisProject) hbmSlaves.keys.reduceOption(_ max _).map(_ + 1).getOrElse(0)
+        else numHBMPorts - 1
+      hbmSlaves.getOrElseUpdate(xdmaBucket, new ArrayBuffer[axi4.full.Interface]()).addOne(
         axi4.full.SlaveBuffer(xdma_axi.asFull, axi4.BufferConfig.all(8))
       )
       interfaceBuffer.addOne(
@@ -175,6 +266,12 @@ trait HasHBMInterconnect extends Module {
         val interfaceCount = hbmSlaves_i._2.length
         val hbmSlave = hbmSlaves_i._2
 
+        // In the Vitis flow every bucket is width-homogeneous, so the mux/output
+        // bus is sized to the bucket's native width and no Widen is needed.
+        // Elsewhere keep the fixed 256-bit HBM bus (Widen handles narrow slaves).
+        val busWidth =
+          if (fullSysGenDescriptor.isVitisProject) hbmSlave.head.cfg.wData else cfgAxi4HBM.wData
+
         if (
           interfaceCount == 1 && hbmSlave.head.cfg.axi3Compat && hbmSlave.head.cfg.wData == 256
         ) {
@@ -192,7 +289,7 @@ trait HasHBMInterconnect extends Module {
           val mux = Module(
             new axi4.full.components.Mux(
               new axi4.full.components.MuxConfig(
-                axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = 2),
+                axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = 2, wData = busWidth),
                 numSlaves = hbmSlave.length
               )
             )
@@ -242,7 +339,7 @@ trait HasHBMInterconnect extends Module {
           )
           axiOuts.addOne(axiOut)
         } else {
-          val outputCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = 2)
+          val outputCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = 2, wData = busWidth)
           val axiOut =
             IO(axi4.Master(outputCfg)).suggestName(f"m_axi_${i}%02d")
           val protocolConverter = Module(
