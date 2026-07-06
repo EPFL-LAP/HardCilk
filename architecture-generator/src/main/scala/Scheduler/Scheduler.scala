@@ -89,6 +89,17 @@ class Scheduler(
   
   val spawnerServerMgmt = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(IO(axi4.lite.Slave(spawnerServer.get(0).asInstanceOf[SpawnerServer].regBlock.cfgAxi))) ) else None
   val spawnerServerAXI = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(IO(axi4.full.Master(spawnerServer.get(0).asInstanceOf[SpawnerServer].axiCfg))) ) else None  
+  // TEMPORARY GUARD (not a final fix): a task with outside-spawn ports must have
+  // spawnerServerNumber >= 1. If it is 0 the division below throws ArithmeticException:
+  // / by zero. The real fix belongs in the descriptor/compiler (ensure spawnServersCount
+  // >= 1 whenever the task has global-task-in / argRoute ports). Log clearly so this is
+  // diagnosable if it recurs.
+  if (outsideSpawn && spawnerServerNumber == 0) {
+    println(f"[SCHEDULER][ERROR] Task '${peType}' has outsideSpawn=true " +
+      f"(peCountGlobalTaskIn=${peCountGlobalTaskIn}, argRouteServersNumber=${argRouteServersNumber}) " +
+      f"but spawnerServerNumber=0. This causes a divide-by-zero at Scheduler.scala step calc. " +
+      f"Set spawnServersCount >= 1 for this task in the descriptor/JSON.")
+  }
   val step = if(outsideSpawn) (peCountGlobalTaskIn + argRouteServersNumber) / spawnerServerNumber else 0
   var spawnerIndicies = Array.tabulate(spawnerServerNumber)(n => (n + n * step))
   var outTaskSpawnIndicies = Array.tabulate(peCountGlobalTaskIn + argRouteServersNumber + spawnerServerNumber)(n => (n))
