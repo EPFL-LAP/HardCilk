@@ -1,0 +1,503 @@
+package SchedulerOG
+
+import chisel3._
+import chisel3.util._
+import Util._
+import chisel3.ChiselEnum
+
+import chext.amba.axi4
+import axi4.Ops._
+import axi4.lite.components.RegisterBlock
+
+class SchedulerServerIO(
+    taskWidth: Int,
+    regBlock: RegisterBlock,
+    sysAddressWidth: Int,
+    peCount: Int
+) extends Bundle {
+  val connNetwork = Flipped(new SchedulerNetworkClientIO(taskWidth))
+  val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
+  val read_address = DecoupledIO(UInt(sysAddressWidth.W))
+  val read_data = Flipped(DecoupledIO(UInt(taskWidth.W)))
+  val read_burst_len = Output(UInt(4.W))
+  val write_address = DecoupledIO(UInt(sysAddressWidth.W))
+  val write_data = DecoupledIO(UInt(taskWidth.W))
+  val write_burst_len = Output(UInt(4.W))
+  val write_last = Output(UInt(1.W))
+  val write_idle = Input(Bool())
+  val ntwDataUnitOccupancy = Input(Bool())
+  val paused = Output(Bool())
+  val lengths_of_hardware_queues = Vec(peCount, Input(UInt(8.W)))
+  val serveRemote = Output(
+    Bool()
+  ) // A signal from the VSS to the RemoteTaskServer
+  val getTasksFromRemote = Output(
+    Bool()
+  ) // A signal from the VSS to the RemoteTaskServer
+}
+
+// N.B: For correct execution
+// contentionThreshold + contentionDelta <= peCount
+// contentionThreshold - contentionDelta >= 0
+
+class SchedulerServer(
+    taskWidth: Int,
+    contentionThreshold: Int,
+    peCount: Int,
+    contentionDelta: Int,
+    vasCount: Int,
+    sysAddressWidth: Int,
+    ignoreRequestSignals: Boolean,
+    nBeats: Int
+) extends Module {
+
+  require(contentionThreshold + contentionDelta <= (peCount + vasCount))
+  require(contentionThreshold - contentionDelta >= 0)
+  require(nBeats <= 16)
+
+  // States
+  object state extends ChiselEnum {
+    val init = Value(0.U)
+    val takeInTask = Value(2.U)
+    val pushTaskMem = Value(3.U)
+    val pushTaskMemAddress = Value(4.U)
+    val popTaskMem = Value(5.U)
+    val popTaskMemAddress = Value(6.U)
+    val giveAwayTask = Value(7.U)
+    val serveStealRequests = Value(8.U)
+    val extendFIFO = Value(9.U)
+    val processInterruptState = Value(10.U)
+  }
+
+  val regBlock = new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
+  val io = IO(
+    new SchedulerServerIO(taskWidth, regBlock, sysAddressWidth, peCount)
+  )
+
+  io.axi_mgmt.suggestName("S_AXI_MGMT")
+
+  io.axi_mgmt :=> regBlock.s_axil
+
+  private val rAddr = RegInit(0.U(64.W))
+  private val rPause = RegInit(0.U(64.W))
+  private val procInterrupt = RegInit(0.U(64.W))
+  private val maxLength = RegInit(0.U(64.W))
+  private val stateReg = RegInit(state.init)
+  private val currLen = RegInit(0.U(64.W))
+  private val contentionCounter = RegInit(0.U(64.W))
+  private val contentionThresh = RegInit(contentionThreshold.U(64.W))
+  private val networkCongested = RegInit(false.B)
+  private val delta = RegInit((contentionDelta).U(32.W))
+  private val fifoTailReg = RegInit(0.U(64.W)) // Push at tail
+  private val fifoHeadReg = RegInit(0.U(64.W)) // Pop at head
+  private val popOrPush = RegInit(true.B) // was pop is true, was push is false
+  private val addrShift = RegInit((log2Ceil(taskWidth / 8)).U)
+  private val taskQueueBuffer = Module(new Queue(UInt(), nBeats))
+  private val memDataCounter = RegInit(0.U(5.W))
+  private val splitPushPending = RegInit(false.B)
+  private val queuesUtil = RegInit(0.U(64.W))
+  private val enableMfpgaSteal = RegInit(0.U(64.W))
+  private val nBeatsUInt = nBeats.U(5.W)
+
+  private def capBurstAtFifoEnd(requestedBeats: UInt, ptr: UInt): UInt = {
+    val slotsToEnd = maxLength - ptr
+    val afterFifoCap =
+      Mux(slotsToEnd < requestedBeats, slotsToEnd(4, 0), requestedBeats)
+    // AXI4 forbids an INCR burst from crossing a 4KB address boundary. Ring slots
+    // are (taskWidth/8) B and a burst is up to nBeats long, so a burst that starts
+    // within (nBeats-1) slots of a 4KB line would straddle it -> illegal burst ->
+    // the HBM/smartconnect mishandles the post-boundary beats and reads/writes the
+    // WRONG ring slots (stale/lost tasks; only shows up once bursts are long, i.e.
+    // at large sizes). Cap at the next 4KB line too. byteAddr is the ABSOLUTE
+    // device address (rAddr + ptr<<addrShift) so the boundary is in device space;
+    // slotsToPageEnd is always >= 1 (== nBeats/page when ptr is page-aligned), so
+    // the burst never collapses to length 0. The push split-continuation
+    // (splitPushPending = burst < requested) carries the remainder; a capped pop
+    // simply reads fewer this round and resumes from the now page-aligned head.
+    val byteAddr = (ptr << addrShift) + rAddr
+    val slotsToPageEnd = (4096.U(13.W) - byteAddr(11, 0)) >> addrShift
+    Mux(slotsToPageEnd < afterFifoCap, slotsToPageEnd(4, 0), afterFifoCap)
+  }
+
+  private val pushRequestedBeats =
+    Mux(splitPushPending, taskQueueBuffer.io.count, nBeatsUInt)
+  private val pushBurstBeats =
+    capBurstAtFifoEnd(pushRequestedBeats, fifoTailReg)
+  private val popRequestedBeats =
+    Mux(currLen < nBeats.U, currLen(4, 0), nBeatsUInt)
+  private val popBurstBeats = capBurstAtFifoEnd(popRequestedBeats, fifoHeadReg)
+
+  regBlock.base(0x00)
+  regBlock.reg(
+    rPause,
+    read = true,
+    write = true,
+    desc = "Register to indicate whether the FSM is paused or not."
+  )
+  regBlock.reg(
+    rAddr,
+    read = true,
+    write = true,
+    desc = "Base address of virtual FIFO"
+  )
+  regBlock.reg(
+    maxLength,
+    read = true,
+    write = true,
+    desc = "Max length currently available for the FIFO"
+  )
+  regBlock.reg(
+    fifoTailReg,
+    read = true,
+    write = true,
+    desc = "The tail register of the FIFO"
+  )
+  regBlock.reg(
+    fifoHeadReg,
+    read = true,
+    write = true,
+    desc = "The head register of the FIFO"
+  )
+  // regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
+  regBlock.reg(
+    enableMfpgaSteal,
+    read = true,
+    write = true,
+    desc = "Enables mFPGA stealing"
+  )
+  regBlock.reg(
+    currLen,
+    read = true,
+    write = true,
+    desc = "A register that holds the current length of the FIFO"
+  )
+  regBlock.reg(
+    queuesUtil,
+    read = true,
+    write = true,
+    desc = "A register that holds the lengths of different hardware queues"
+  )
+
+  val interruptCondition = (enableMfpgaSteal(63) =/= 0.U)
+
+  // queuesUtils register is only done for debugging small number of PEs to check the utilization of local BRAM queues per PE
+  if (peCount <= 8) {
+    val newQueuesUtil = Wire(UInt(64.W))
+    newQueuesUtil := io.lengths_of_hardware_queues.reduceLeft(Cat(_, _))
+    queuesUtil := newQueuesUtil
+  }
+
+  // Logic to decide whether to serve or get tasks from remote FPGAs
+  when(networkCongested || currLen > 16.U) {
+    io.serveRemote := true.B && maxLength =/= 0.U && !rPause && currLen > 16.U && enableMfpgaSteal(
+      0
+    ) =/= 0.U
+    io.getTasksFromRemote := false.B
+  }.otherwise {
+    io.serveRemote := false.B
+    io.getTasksFromRemote := true.B && maxLength =/= 0.U && !rPause && enableMfpgaSteal(
+      0
+    ) =/= 0.U
+  }
+
+  io.paused := rPause
+
+  // Contention Counter FSM
+  if (ignoreRequestSignals) {
+    when(
+      io.ntwDataUnitOccupancy
+        && contentionCounter =/= (peCount + vasCount).U
+    ) {
+      contentionCounter := contentionCounter + 1.U
+    }.elsewhen(
+      contentionCounter =/= 0.U
+        && !io.ntwDataUnitOccupancy
+    ) {
+      contentionCounter := contentionCounter - 1.U
+    }.otherwise {
+      contentionCounter := contentionCounter
+    }
+  } else {
+    when(
+      !io.connNetwork.ctrl.serveStealReq.ready &&
+        io.ntwDataUnitOccupancy
+        && contentionCounter =/= (peCount + vasCount).U
+    ) {
+      contentionCounter := contentionCounter + 1.U
+    }.elsewhen(
+      io.connNetwork.ctrl.serveStealReq.ready &&
+        contentionCounter =/= 0.U
+        && !io.ntwDataUnitOccupancy
+    ) {
+      contentionCounter := contentionCounter - 1.U
+    }.otherwise {
+      contentionCounter := contentionCounter
+    }
+  }
+
+  when(contentionCounter >= (contentionThresh + delta)) {
+    networkCongested := true.B
+  }.elsewhen(contentionCounter < (contentionThresh - delta)) {
+    networkCongested := false.B
+  }.otherwise {
+    networkCongested := networkCongested
+  }
+
+  // transition of FSM
+  when(stateReg === state.init) {
+
+    // `write_idle` (== no backing-store write awaiting its B response) must gate
+    // only operations that ACCESS the HBM-backed FIFO: continuing a wrapped (split)
+    // push, relocating the FIFO, pushing, and popping (a pop is a read-after-write
+    // on the queue and must observe committed pushes). It must NOT gate the
+    // buffer-only paths: giveAwayTask serves a task straight from the in-memory
+    // taskQueueBuffer and takeInTask buffers an incoming one -- neither touches the
+    // backing store. The original blanket `when(!io.write_idle){stay}` blocked those
+    // too, so a slow/contended write B-response wedged task dispatch entirely (e.g.
+    // a re-injected BFS continuation stuck in the buffer, never handed off -- the
+    // as-skitter hang). Gate per-transition instead.
+    when(splitPushPending && taskQueueBuffer.io.count =/= 0.U) {
+
+      when(io.write_idle) { stateReg := state.pushTaskMemAddress }
+
+    }.elsewhen(interruptCondition) {
+      when(io.write_idle) {
+        stateReg := state.processInterruptState
+        rPause := "hFFFFFFFFFFFFFFFF".U
+      }
+    }.elsewhen(
+      (currLen === maxLength && networkCongested) || maxLength < (nBeats.U + currLen)
+    ) {
+
+      when(io.write_idle) {
+        stateReg := state.extendFIFO
+        rPause := "hFFFFFFFFFFFFFFFF".U
+      }
+
+    }.elsewhen(networkCongested && taskQueueBuffer.io.count === nBeats.U) {
+
+      when(io.write_idle) { stateReg := state.pushTaskMemAddress }
+
+    }.elsewhen(networkCongested) {
+
+      stateReg := state.takeInTask
+
+    }.elsewhen(
+      !networkCongested && currLen =/= 0.U && taskQueueBuffer.io.count === 0.U
+    ) {
+
+      when(io.write_idle) { stateReg := state.popTaskMemAddress }
+
+    }.elsewhen(!networkCongested && taskQueueBuffer.io.count =/= 0.U) {
+
+      stateReg := state.giveAwayTask
+
+    }
+
+  }.elsewhen(stateReg === state.takeInTask) {
+
+    when(
+      taskQueueBuffer.io.count === (nBeats - 1).U && io.connNetwork.data.availableTask.valid
+    ) {
+
+      stateReg := state.pushTaskMemAddress
+
+    }.elsewhen(io.connNetwork.data.availableTask.valid && networkCongested) {
+
+      stateReg := state.takeInTask
+
+    }.elsewhen(!networkCongested || interruptCondition) {
+
+      stateReg := state.init
+
+    }
+
+  }.elsewhen(stateReg === state.pushTaskMemAddress) {
+
+    when(io.write_address.ready) {
+      stateReg := state.pushTaskMem
+      memDataCounter := pushBurstBeats
+      splitPushPending := pushBurstBeats < pushRequestedBeats
+    }
+
+  }.elsewhen(stateReg === state.pushTaskMem) {
+
+    when(io.write_data.ready && memDataCounter === 1.U) {
+      stateReg := state.init
+      popOrPush := false.B
+      currLen := currLen + 1.U
+      when(fifoTailReg < maxLength - 1.U) {
+        fifoTailReg := fifoTailReg + 1.U
+      }.otherwise {
+        fifoTailReg := 0.U
+      }
+
+    }.elsewhen(io.write_data.ready) {
+      memDataCounter := memDataCounter - 1.U
+      currLen := currLen + 1.U
+      when(fifoTailReg < maxLength - 1.U) {
+        fifoTailReg := fifoTailReg + 1.U
+      }.otherwise {
+        fifoTailReg := 0.U
+      }
+    }
+
+  }.elsewhen(stateReg === state.popTaskMemAddress) {
+
+    when(io.read_address.ready) {
+      stateReg := state.popTaskMem
+      memDataCounter := popBurstBeats
+    }
+
+  }.elsewhen(stateReg === state.popTaskMem) {
+
+    when(io.read_data.valid && memDataCounter === 1.U) {
+      stateReg := state.serveStealRequests
+      popOrPush := true.B
+
+      currLen := currLen - 1.U
+      when(fifoHeadReg < maxLength - 1.U) {
+        fifoHeadReg := fifoHeadReg + 1.U
+      }.otherwise {
+        fifoHeadReg := 0.U
+      }
+    }.elsewhen(io.read_data.valid) {
+      memDataCounter := memDataCounter - 1.U
+      currLen := currLen - 1.U
+      when(fifoHeadReg < maxLength - 1.U) {
+        fifoHeadReg := fifoHeadReg + 1.U
+      }.otherwise {
+        fifoHeadReg := 0.U
+      }
+    }
+
+  }.elsewhen(stateReg === state.giveAwayTask) {
+
+    when(io.connNetwork.data.qOutTask.ready) {
+      stateReg := state.init
+    }.elsewhen(networkCongested || interruptCondition) {
+      stateReg := state.init
+    }.otherwise {
+      stateReg := state.giveAwayTask
+    }
+
+  }.elsewhen(stateReg === state.serveStealRequests) {
+
+    when(io.connNetwork.ctrl.serveStealReq.ready) {
+      stateReg := state.giveAwayTask
+    }.elsewhen(networkCongested || interruptCondition) {
+      stateReg := state.init
+    }.elsewhen(procInterrupt =/= 0.U) {
+      stateReg := state.init
+    }
+
+  }.elsewhen(stateReg === state.extendFIFO) {
+
+    when(rPause === false.B) {
+
+      stateReg := state.init
+
+    }.otherwise {
+
+      stateReg := state.extendFIFO
+
+    }
+
+  }.elsewhen(stateReg === state.processInterruptState) {
+
+    when(rPause === false.B) {
+      stateReg := state.init
+    }.otherwise {
+      stateReg := state.processInterruptState
+    }
+
+  }
+
+  io.connNetwork.data.qOutTask.bits := taskQueueBuffer.io.deq.bits
+  io.write_data.bits := taskQueueBuffer.io.deq.bits
+
+  // Queue Outputs
+  io.read_address.valid := false.B
+  io.read_address.bits := 0.U
+  io.read_data.ready := false.B
+  io.write_address.valid := false.B
+  io.write_address.bits := 0.U
+  io.write_data.valid := false.B
+
+  // Data Network Outputs
+  io.connNetwork.data.availableTask.ready := false.B
+  io.connNetwork.data.qOutTask.valid := false.B
+
+  // Ctrl Network Outputs
+  io.connNetwork.ctrl.stealReq.valid := false.B
+  io.connNetwork.ctrl.serveStealReq.valid := false.B
+
+  // Internal Queue Buffer IO
+  taskQueueBuffer.io.enq.valid := false.B
+  taskQueueBuffer.io.enq.bits := 0.U
+
+  taskQueueBuffer.io.deq.ready := false.B
+
+  io.write_burst_len := 0.U
+  io.write_last := false.B
+  io.read_burst_len := 0.U
+
+  // Output of the FSM
+  when(stateReg === state.takeInTask) {
+
+    taskQueueBuffer.io.enq.bits := io.connNetwork.data.availableTask.bits // Update internal register value with taken task
+    io.connNetwork.data.availableTask.ready := taskQueueBuffer.io.enq.ready
+    taskQueueBuffer.io.enq.valid := io.connNetwork.data.availableTask.valid
+
+  }.elsewhen(stateReg === state.pushTaskMemAddress) {
+
+    io.write_address.valid := true.B
+    io.write_address.bits := (fifoTailReg << addrShift) + rAddr
+    io.write_burst_len := (pushBurstBeats - 1.U)(3, 0)
+
+  }.elsewhen(stateReg === state.pushTaskMem) {
+
+    io.write_data.valid := true.B
+    taskQueueBuffer.io.deq.ready := io.write_data.ready
+    when(memDataCounter === 1.U) {
+      io.write_last := true.B
+    }
+
+  }.elsewhen(stateReg === state.popTaskMemAddress) {
+
+    io.read_address.valid := true.B
+    io.read_address.bits := (fifoHeadReg << addrShift) + rAddr
+    io.read_burst_len := (popBurstBeats - 1.U)(3, 0)
+
+  }.elsewhen(stateReg === state.popTaskMem) {
+
+    io.read_data.ready := true.B
+    taskQueueBuffer.io.enq.bits := io.read_data.bits
+    taskQueueBuffer.io.enq.valid := io.read_data.valid
+
+  }.elsewhen(stateReg === state.giveAwayTask) {
+
+    io.connNetwork.data.qOutTask.valid := true.B
+    taskQueueBuffer.io.deq.ready := io.connNetwork.data.qOutTask.ready
+
+  }.elsewhen(stateReg === state.serveStealRequests) {
+
+    io.connNetwork.ctrl.serveStealReq.valid := true.B // Digest a steal request
+
+  }
+
+  // Reply to axi management operations.
+  when(regBlock.rdReq) {
+    regBlock.rdOk()
+  }
+
+  when(regBlock.wrReq) {
+    regBlock.wrOk()
+  }
+}
+
+// object virtualStealServer extends App {
+//   emitVerilog(
+//     new SchedulerServer(256, 4, 8, 2, 1, 64, false, 16)
+//   )
+// }

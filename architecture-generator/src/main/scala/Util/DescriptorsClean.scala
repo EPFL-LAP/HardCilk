@@ -166,6 +166,19 @@ case class TaskDescriptor(
     var mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     spawnServersCount: Int = 0, // Defaulted
     hasAXI: Boolean = true,
+    // When true, every PE instance of this task gets its OWN reserved HBM port
+    // for its main compute master (m_axi_gmem) -- never muxed with any other
+    // master. One port per PE instance. Use for bandwidth-critical PEs (e.g.
+    // countDecoupled's memReader) so they are never throttled by port sharing.
+    dedicatedAxiPort: Boolean = false,
+    // When > 0, the main compute masters (m_axi_gmem) of ALL this task's PE
+    // instances are CONSOLIDATED onto exactly this many reserved HBM ports,
+    // regardless of the PE count. The reserved port(s) form a flat mux carrying
+    // only these masters (each keeps a fair 1/k share) and are never re-muxed
+    // with unrelated masters. Use for PEs whose main port fires rarely (e.g.
+    // countDecoupled's taskInitiator reentry, which only writes on "done").
+    // Mutually exclusive with dedicatedAxiPort.
+    totalAxiPorts: Int = 0,
     participatesInLock: Boolean =
       false, // Whether this task's PEs get lock req/resp lanes
     lockPorts: Int = 1,
@@ -206,6 +219,10 @@ case class TaskDescriptor(
     require(
       isPow2(widthTask) && widthTask <= 1024,
       s"Task '$name': widthTask must be power of 2 and <= 1024"
+    )
+    require(
+      !(dedicatedAxiPort && totalAxiPorts > 0),
+      s"Task '$name': dedicatedAxiPort and totalAxiPorts are mutually exclusive"
     )
 
     if (peHDLPath.nonEmpty) {
@@ -301,15 +318,6 @@ case class FullSysGenDescriptor(
     j += numSchedulerServers
     println("J value after scheduler: " + j)
 
-    if (task.spawnServersCount > 0) {
-      for (i <- j until j + task.spawnServersCount) {
-        task.mgmtBaseAddresses.schedulerServersBaseAddresses =
-          task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ ((i << 6) + base)
-      }
-      j += task.spawnServersCount
-    }
-    println("J value after spawner servers: " + j)
-
     if (task.isCont) {
       val numAllocationServers = task.getNumServers("allocator")
       for (i <- j until j + numAllocationServers) {
@@ -357,9 +365,19 @@ case class FullSysGenDescriptor(
   }
 
   def getPortCount(port_type: String, task_name: String): Int = {
+    if (port_type == "spawn") {
+      return spawnList.iterator.map { case (srcTaskName, spawnedTasks) =>
+        if (srcTaskName == task_name) {
+          0
+        } else {
+          val srcTask = taskDescriptors.find(_.name == srcTaskName).get
+          spawnedTasks.count(_ == task_name) * srcTask.numProcessingElements
+        }
+      }.sum
+    }
+
     // Get the correct map based on the port_type
     val map = port_type match {
-      case "spawn"        => spawnList
       case "spawnNext"    => spawnNextList
       case "sendArgument" => sendArgumentList
       case "mallocIn"     => mallocList
@@ -378,15 +396,12 @@ case class FullSysGenDescriptor(
       sum += task.numProcessingElements
     }
 
-    // if the port_type is spawn, decrement the return value by the value returned by selfSpawnCount
-    val finalCount =
-      if (port_type == "spawn") sum - selfSpawnedCount(task_name) else sum
-
-    finalCount
+    sum
   }
 
   def getSystemConnectionsDescriptor(): SystemConnections = {
     // mutable map of aggregators from string to int initialized to zero
+    val aggregatorMapSpawn = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSendArg = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSpawnNext = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapMalloc = mutable.Map[String, Int]().withDefaultValue(0)
@@ -422,6 +437,7 @@ case class FullSysGenDescriptor(
             val spawnedTaskDescriptor =
               taskDescriptors.find(_.name == spawnedTask).get
             (0 until task.numProcessingElements).map { i =>
+              aggregatorMapSpawn(spawnedTask) += 1
               ConnectionDescriptor(
                 PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
                 PortDescriptor(
@@ -429,7 +445,7 @@ case class FullSysGenDescriptor(
                   "HardCilk",
                   0,
                   "taskInGlobal",
-                  i
+                  aggregatorMapSpawn(spawnedTask) - 1
                 ),
                 spawnedTaskDescriptor.widthTask,
                 "AXIS"
@@ -507,15 +523,6 @@ case class FullSysGenDescriptor(
     taskDescriptors.map(_.getNumServers("scheduler")).sum + taskDescriptors
       .map(_.getNumServers("memoryAllocator"))
       .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +
-      {
-        var spawner_count = 0
-        taskDescriptors.foreach(task => {
-          if (task.spawnServersCount > 0) {
-            spawner_count += task.spawnServersCount
-          }
-        })
-        spawner_count
-      } +
       {
         if (mFPGASynth || mFPGASimulation) 1 else 0
       } +

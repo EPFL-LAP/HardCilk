@@ -142,7 +142,7 @@ if (( START_STEP <= 1 )); then
     rm -rf hls_projects
     read -ra KERNELS <<< "${HLS_KERNELS[$BENCHMARK]}"
     bash build_hls_kernel/build_kernels.sh \
-      -d "$ROOT/hls-processing-elements/mfpga/$BENCHMARK" -f 200 -p xcu55c-fsvh2892-2L-e \
+      -d "$ROOT/hls-processing-elements/mfpga/$BENCHMARK" -f 300 -p xcu55c-fsvh2892-2L-e \
       -o "$ROOT/hls-kernel-output/$BENCHMARK" -k "${KERNELS[@]}"
   fi
 fi
@@ -152,7 +152,16 @@ if (( START_STEP <= 2 )); then
   source ~/.local/opt/hdlstuff/bin/activate-hdlstuff.sh
   rm -rf "$ROOT/HardCilk-output/${BENCHMARK}_hardcilk_output"
   cd "$ROOT/architecture-generator"
-  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p"
+  # Kernel-global start broadcast (simultaneous server release + deterministic
+  # watcher start gate). This script defaults it ON to match the verified build;
+  # set GLOBAL_START=0 to build the pre-feature design instead. (The emitter/Chisel
+  # flag itself stays default-OFF, so unit tests and other callers are unaffected.)
+  GLOBAL_START=${GLOBAL_START:-1}
+  GLOBAL_START_FLAG=""
+  if [[ "$GLOBAL_START" != "0" ]]; then
+    GLOBAL_START_FLAG="--global-start"
+  fi
+  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p ${GLOBAL_START_FLAG}"
 fi
 
 if (( START_STEP <= 3 )); then

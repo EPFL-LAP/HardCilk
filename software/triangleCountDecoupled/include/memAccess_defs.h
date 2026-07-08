@@ -31,21 +31,22 @@ struct __attribute__((packed))whileLoopMain_reentry0_cont0_task {
   addr_t _cont;
   addr_t A;
   addr_t B;
-  addr_t count;
+  addr_t count;       // running match count, carried in the closure (NOT a memory address)
+  addr_t count_final; // memory address the initiator writes the final count to when done
   uint32_t size;
   uint32_t i;
   uint32_t j;
   uint32_t a_i;
   uint32_t b_j;
-  uint8_t _padding[8];
 };
 
 struct whileLoopMain_reentry0_cont0_spawn_next {
   addr_t addr;
   whileLoopMain_reentry0_cont0_task data;
   uint32_t size;
-  uint32_t allow;
-  uint8_t _padding[48];
+  uint32_t allow0;
+  uint32_t allow1;
+  uint8_t _padding[44];
 };
 
 struct __attribute__((packed))whileLoopMain_exit0_task {
@@ -71,20 +72,22 @@ struct __attribute__((packed))whileLoopMain_task {
   addr_t _cont;
   addr_t A;
   addr_t B;
-  addr_t count;
+  addr_t count;       // running match count, carried in the closure (NOT a memory address)
+  addr_t count_final; // memory address to write the final count to when done
   uint32_t size;
-  uint8_t _padding[28];
+  uint8_t _padding[20];
 };
 
 struct __attribute__((packed))whileLoopMain_reentry0_task {
   addr_t _cont;
   addr_t A;
   addr_t B;
-  addr_t count;
+  addr_t count;       // running match count, carried in the closure (NOT a memory address)
+  addr_t count_final; // memory address to write the final count to when done
   uint32_t size;
   uint32_t i;
   uint32_t j;
   uint32_t a_i;
   uint32_t b_j;
-  uint8_t _padding[12];
+  uint8_t _padding[4];
 };

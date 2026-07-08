@@ -52,11 +52,11 @@
     {
       "dynamicMemAlloc": false,
       "generateArgOutWriteBuffer": false,
-      "hasAXI": true,
+      "hasAXI": false,
       "isCont": true,
       "isRoot": false,
       "name": "taskAdder_cont0",
-      "numProcessingElements": 1,
+      "numProcessingElements": 2,
       "peHDLPath": "../hls-kernel-output/countDecoupled/taskAdder_cont0",
       "sidesConfigs": [
         {
@@ -69,7 +69,7 @@
         {
           "capacityPhysicalQueue": 32,
           "capacityVirtualQueue": 128,
-          "numVirtualServers": 1,
+          "numVirtualServers": 2,
           "portWidth": 64,
           "sideType": "argumentNotifier"
         },
@@ -81,7 +81,7 @@
           "sideType": "allocator"
         }
       ],
-      "spawnServersCount": 1,
+      "spawnServersCount": 2,
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 512
@@ -94,10 +94,11 @@
       ],
       "generateSpawnNextWriteBuffer": false,
       "hasAXI": true,
+      "dedicatedAxiPort": true,
       "isCont": false,
       "isRoot": false,
       "name": "memReader",
-      "numProcessingElements": 1,
+      "numProcessingElements": 2,
       "peHDLPath": "../hls-kernel-output/countDecoupled/memReader",
       "sidesConfigs": [
         {
@@ -108,7 +109,7 @@
           "sideType": "scheduler"
         }
       ],
-      "spawnServersCount": 1,
+      "spawnServersCount": 2,
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 256
@@ -117,21 +118,22 @@
       "dynamicMemAlloc": false,
       "generateArgOutWriteBuffer": false,
       "hasAXI": true,
+      "totalAxiPorts": 1,
       "isCont": false,
       "isRoot": true,
       "name": "taskInitiator_reentry0",
-      "numProcessingElements": 1,
+      "numProcessingElements": 2,
       "peHDLPath": "../hls-kernel-output/countDecoupled/taskInitiator_reentry0",
       "sidesConfigs": [
         {
-          "capacityPhysicalQueue": 64,
+          "capacityPhysicalQueue": 256,
           "capacityVirtualQueue": 4096,
-          "numVirtualServers": 1,
+          "numVirtualServers": 2,
           "portWidth": 512,
           "sideType": "scheduler"
         }
       ],
-      "spawnServersCount": 1,
+      "spawnServersCount": 2,
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 512

@@ -11,6 +11,7 @@
   },
   "spawnList": {
     "whileLoopMain_reentry0": [
+      "memReader",
       "memReader"
     ],
     "whileLoopMain_reentry0_cont0": [
@@ -52,7 +53,7 @@
     {
       "dynamicMemAlloc": false,
       "generateArgOutWriteBuffer": false,
-      "hasAXI": true,
+      "hasAXI": false,
       "isCont": true,
       "isRoot": false,
       "name": "whileLoopMain_reentry0_cont0",
@@ -69,7 +70,7 @@
         {
           "capacityPhysicalQueue": 32,
           "capacityVirtualQueue": 128,
-          "numVirtualServers": 1,
+          "numVirtualServers": 2,
           "portWidth": 64,
           "sideType": "argumentNotifier"
         },
@@ -97,7 +98,7 @@
       "isCont": false,
       "isRoot": false,
       "name": "memReader",
-      "numProcessingElements": 1,
+      "numProcessingElements": 2,
       "peHDLPath": "../hls-kernel-output/triangleCountDecoupled/memReader",
       "sidesConfigs": [
         {
@@ -108,7 +109,7 @@
           "sideType": "scheduler"
         }
       ],
-      "spawnServersCount": 1,
+      "spawnServersCount": 2,
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 256
@@ -131,7 +132,7 @@
           "sideType": "scheduler"
         }
       ],
-      "spawnServersCount": 1,
+      "spawnServersCount": 2,
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 512

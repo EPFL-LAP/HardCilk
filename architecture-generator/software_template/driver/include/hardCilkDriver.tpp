@@ -47,14 +47,58 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
         return taskDescriptor.getCapacityVirtualQueue("scheduler");
     };
 
+    constexpr uint64_t schedulerBurstEntries = 16;
+    constexpr uint64_t schedulerBackingWritePageBytes = 4096;
+    auto roundUpSchedulerWrite = [](uint64_t bytes) -> uint64_t {
+        uint64_t rem = bytes % schedulerBackingWritePageBytes;
+        return rem == 0 ? bytes : bytes + schedulerBackingWritePageBytes - rem;
+    };
+    auto copySchedulerBackingPayload =
+        [&](uint64_t destAddr, const uint8_t *src, uint64_t bytes) {
+            uint64_t paddedBytes = roundUpSchedulerWrite(bytes);
+            if (paddedBytes == bytes) {
+                memory_->copyToDevice(destAddr, src, bytes);
+                return;
+            }
+
+            std::vector<uint8_t> padded(paddedBytes, 0);
+            std::memcpy(padded.data(), src, bytes);
+            memory_->copyToDevice(destAddr, padded.data(), padded.size());
+        };
+
     // Initialize the different servers
     for(auto &taskDescriptor : descriptor.taskDescriptors){
       
             // Log which task is being initialized
             printf("Initializing task %s\n", taskDescriptor.name.c_str());
 
+            // Split the root tasks across ALL of this task's scheduler servers
+            // (not just the first) so every steal-ring injection point is seeded
+            // from cycle 0 -- otherwise the servers/PEs downstream of the sole
+            // seeded server starve until work migrates around the steal ring.
+            // Contiguous split: servers [0, remainder) get one extra task.
+            const uint64_t numSchedulerServers =
+                taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.size();
+            const uint64_t totalRootTasks =
+                (taskDescriptor.isRoot && !no_base_task)
+                    ? static_cast<uint64_t>(base_task_data.size()) : 0;
+            auto rootShareOf = [&](uint64_t s) -> uint64_t {
+                if (totalRootTasks == 0 || numSchedulerServers == 0) return 0;
+                return totalRootTasks / numSchedulerServers +
+                       (s < totalRootTasks % numSchedulerServers ? 1 : 0);
+            };
+            auto rootStartOf = [&](uint64_t s) -> uint64_t {
+                if (numSchedulerServers == 0) return 0;
+                const uint64_t q = totalRootTasks / numSchedulerServers;
+                const uint64_t r = totalRootTasks % numSchedulerServers;
+                return s * q + std::min<uint64_t>(s, r);
+            };
+
             // Allocate memory for all the scheduler servers
-            for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++){
+            uint64_t schedulerServerIndex = 0;
+            for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); ++base_address, ++schedulerServerIndex){
+                const uint64_t root_task_count = rootShareOf(schedulerServerIndex);
+                const bool is_root_scheduler = root_task_count > 0;
                 uint64_t scheduler_capacity = taskDescriptor.getCapacityVirtualQueue("scheduler");
                 if (skipQueueZeroInEmu()) {
                     uint64_t physical_capacity = getPhysicalSchedulerCapacity(taskDescriptor);
@@ -70,6 +114,14 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // resize still fires, manageSchedulerServer prints a warning so the
                 // initial size can be raised further.)
                 scheduler_capacity *= 2;
+                if (is_root_scheduler &&
+                    root_task_count + schedulerBurstEntries > scheduler_capacity) {
+                    uint64_t grown_capacity =
+                        root_task_count + schedulerBurstEntries;
+                    printf("        Growing root scheduler backing queue for %s to %lu entries (%lu root tasks)\n",
+                           taskDescriptor.name.c_str(), grown_capacity, root_task_count);
+                    scheduler_capacity = grown_capacity;
+                }
                 // Allocate memory for the scheduler server
                 uint64_t addr = memory_->allocateMemFPGA(scheduler_capacity * taskDescriptor.widthTask/8, 512);
                 
@@ -88,16 +140,17 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // well-defined until then.
                 {
                     uint64_t queueBytes = scheduler_capacity * taskDescriptor.widthTask/8;
+                    uint64_t paddedQueueBytes = roundUpSchedulerWrite(queueBytes);
                     static const uint64_t kZeroChunkBytes = 16ull * 1024 * 1024;
                     static const std::vector<uint8_t> zeroChunk(kZeroChunkBytes, 0);
                     uint64_t filled = 0;
-                    while (filled < queueBytes) {
-                        uint64_t chunk = std::min<uint64_t>(kZeroChunkBytes, queueBytes - filled);
+                    while (filled < paddedQueueBytes) {
+                        uint64_t chunk = std::min<uint64_t>(kZeroChunkBytes, paddedQueueBytes - filled);
                         memory_->copyToDevice(addr + filled, zeroChunk.data(), chunk);
                         filled += chunk;
                     }
-                    printf("        Zero-filled %s scheduler backing queue (%lu bytes)\n",
-                           taskDescriptor.name.c_str(), queueBytes);
+                    printf("        Zero-filled %s scheduler backing queue (%lu bytes, %lu bytes written)\n",
+                           taskDescriptor.name.c_str(), queueBytes, paddedQueueBytes);
                 }
 
                 // Hold the server paused while programming its queue metadata.
@@ -124,21 +177,32 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 printf("        Data address start: 0x%lx, end: 0x%lx\n", addr, addr + scheduler_capacity * taskDescriptor.widthTask/8);
             }
             if(taskDescriptor.isRoot && !no_base_task){
-                // Read the address registered at the first virtual server of the task and write the data to that address
-                uint64_t data_queue_address = memory_->readReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_raddr_shift);
-                printf("        Writing root task data to the scheduler server with data at address %lx\n", data_queue_address);
+                // Seed EVERY scheduler server with its contiguous slice of the
+                // root tasks (see the rootShareOf/rootStartOf split above), so
+                // all steal-ring injection points -- and hence all initiator PEs
+                // -- have work from cycle 0. Each server writes to its own backing
+                // queue (raddr) and sets its own fifoTail/currLen to its share.
+                uint64_t seedServerIndex = 0;
+                for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); ++base_address, ++seedServerIndex){
+                    const uint64_t share = rootShareOf(seedServerIndex);
+                    const uint64_t start = rootStartOf(seedServerIndex);
+                    uint64_t data_queue_address = memory_->readReg64(*base_address + scheduler_server_raddr_shift);
 
+                    if (share > 0) {
+                        copySchedulerBackingPayload(
+                            data_queue_address,
+                            reinterpret_cast<const uint8_t*>(base_task_data.data() + start),
+                            share * sizeof(T));
+                    }
 
-                // Write the base task data to the first scheduler server
-                memory_->copyToDevice(data_queue_address, reinterpret_cast<const uint8_t*>(base_task_data.data()), base_task_data.size() * sizeof(T));
-                printf("        Wrote root task data to the scheduler server\n");
+                    // Set this server's live length to its share (0 for servers
+                    // that got no tasks when N < server count).
+                    memory_->writeReg64(*base_address + scheduler_server_fifoTailReg_shift, share);
+                    memory_->writeReg64(*base_address + scheduler_server_currLen_shift, share);
 
-                // Update the fifoTailReg of the first scheduler server
-                memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_fifoTailReg_shift, base_task_data.size());
-                memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_currLen_shift, base_task_data.size());
-
-                // Log the successful initialization information of the root scheduler server with indentation
-                printf("        Initialized root task at scheduler server at address 0x%lx with length 0x%lx, fifoHead 0x%lx, fifoTail 0x%lx, dataAddress 0x%lx\n", *(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()), taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, base_task_data.size(), data_queue_address);
+                    printf("        Seeded root scheduler server[%lu] at 0x%lx: %lu tasks (roots [%lu, %lu)) at dataAddress 0x%lx\n",
+                           seedServerIndex, static_cast<uint64_t>(*base_address), share, start, start + share, data_queue_address);
+                }
             }
             
             // Allocate memory for all the allocation servers
@@ -167,11 +231,12 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                     entries_remaining -= block_entries;
                 }
 
-                uint64_t continuation_queue_addr = memory_->allocateMemFPGA(
-                    allocator_capacity * descriptor.widthAddress/8, 512);
+                uint64_t continuation_queue_bytes = packedAllocatorAddressBytes(taskDescriptor.getCapacityVirtualQueue("allocator"), descriptor.widthAddress);
+                uint64_t continuation_queue_addr = memory_->allocateMemFPGA(continuation_queue_bytes, 512);
 
                 // Write the addresses to the continuation queue
-                memory_->copyToDevice(continuation_queue_addr, reinterpret_cast<const uint8_t*>(addresses.data()), addresses.size() * sizeof(uint64_t));
+                std::vector<uint8_t> packedAddresses = packAllocatorAddresses(addresses, descriptor.widthAddress);
+                memory_->copyToDevice(continuation_queue_addr, packedAddresses.data(), packedAddresses.size());
                 
                 memory_->writeReg64(*base_address + alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(*base_address + alloc_server_raddr_shift, continuation_queue_addr);
@@ -182,7 +247,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 printf("        continuation storage: %lu bank-local block(s), %lu entries\n",
                        taskDescriptor.mapServerAddressToClosureBaseAddress[*base_address].size(),
                        allocator_capacity);
-                printf("        continuation_queue_addr address start: 0x%lx, end: 0x%lx\n", continuation_queue_addr, continuation_queue_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8);
+                printf("        continuation_queue_addr address start: 0x%lx, end: 0x%lx\n", continuation_queue_addr, continuation_queue_addr + continuation_queue_bytes);
             }
 
             // Allocate memory for all the memory allocator servers
@@ -192,9 +257,9 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 printf("        Entry width of the memory allocator: %d Bytes\n", byte_count);
                 
                 
-                uint64_t address_bytes = descriptor.widthAddress/8ull;
+                uint64_t memory_allocator_queue_bytes = packedAllocatorAddressBytes(taskDescriptor.getCapacityVirtualQueue("memoryAllocator"), descriptor.widthAddress);
 
-                uint64_t  pre_allocated_memory_queue_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * address_bytes, 512);
+                uint64_t  pre_allocated_memory_queue_addr = memory_->allocateMemFPGA(memory_allocator_queue_bytes, 512);
                 uint64_t  pre_allocated_memory_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 512);
 
                 // We need to write zeros to the pre_allocated_memory_addr    
@@ -214,7 +279,8 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 printf("        Last address of the addresses vector: 0x%lx\n", addresses.back());
 
                 // Write the addresses to the pre-allocated memory queue
-                memory_->copyToDevice(pre_allocated_memory_queue_addr, reinterpret_cast<const uint8_t*>(addresses.data()), addresses.size() * sizeof(uint64_t));
+                std::vector<uint8_t> packedAddresses = packAllocatorAddresses(addresses, descriptor.widthAddress);
+                memory_->copyToDevice(pre_allocated_memory_queue_addr, packedAddresses.data(), packedAddresses.size());
 
                 memory_->writeReg64(*base_address + mem_alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(*base_address + mem_alloc_server_raddr_shift, pre_allocated_memory_queue_addr);
@@ -227,17 +293,16 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 memcmp(zeros.data(), read_zeros.data(), read_zeros.size());
 
                 // Read back the addresses to make sure they were written correctly
-                uint64_t read_addresses [taskDescriptor.getCapacityVirtualQueue("memoryAllocator")];
-                memset(read_addresses, -1, sizeof(read_addresses));
-                memory_->copyFromDevice(reinterpret_cast<uint8_t*>(read_addresses), pre_allocated_memory_queue_addr, sizeof(read_addresses));
-                memcmp(addresses.data(), read_addresses, sizeof(addresses));
+                std::vector<uint8_t> read_addresses(packedAddresses.size(), 0xFF);
+                memory_->copyFromDevice(read_addresses.data(), pre_allocated_memory_queue_addr, read_addresses.size());
+                memcmp(packedAddresses.data(), read_addresses.data(), packedAddresses.size());
 
 
                 // Log the successful initialization information of the memory allocator server with indentation
                 printf("        Initialized memory allocator server at address 0x%lx with length 0x%lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("memoryAllocator"));
                 // Log also the start and the end of the data address pre_allocated_memory_addr and pre_allocated_memory_queue_addr
                 printf("        pre_allocated_memory_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_addr, pre_allocated_memory_addr + taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count);
-                printf("        pre_allocated_memory_queue_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_queue_addr, pre_allocated_memory_queue_addr + taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * descriptor.widthAddress/8);
+                printf("        pre_allocated_memory_queue_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_queue_addr, pre_allocated_memory_queue_addr + memory_allocator_queue_bytes);
             } 
 
     }

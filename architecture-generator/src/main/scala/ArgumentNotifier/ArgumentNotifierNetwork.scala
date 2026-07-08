@@ -72,8 +72,19 @@ class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasN
   // Cut the network in `cutCount` parts
   assert(cutCount <= peCount)
 
+  val perServerQueueDepth = 8
   val arbs = io.connVAS.map(x => Module(new elastic.BasicArbiter(chiselTypeOf(x.bits), cutCount, chooserFn = elastic.Chooser.rr)))
   arbs.zip(io.connVAS).map(x => x._1.io.sink <> x._2)
+  arbs.foreach(x => x.io.select.deq())
+
+  val perCutServerQueues = Seq.fill(cutCount, vasNum)(
+    Module(new Queue(UInt(addrWidth.W), perServerQueueDepth))
+  )
+  for (cutIdx <- 0 until cutCount) {
+    for (serverIdx <- 0 until vasNum) {
+      perCutServerQueues(cutIdx)(serverIdx).io.deq :=> arbs(serverIdx).io.sources(cutIdx)
+    }
+  }
 
   val nElemsInLine = math.ceil(peCount.toDouble / cutCount.toDouble).toInt
   for (i <- 0 until cutCount) {
@@ -87,8 +98,9 @@ class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasN
     connectZeros(networkUnits(endIndex).io.addressIn.bits)
 
     val demux = Module(new elastic.Demux(UInt(addrWidth.W), vasNum))
-    arbs.foreach(x => x.io.select.deq())
-    arbs.zip(demux.io.sinks).map(x => x._2 :=> x._1.io.sources(i))
+    demux.io.sinks.zipWithIndex.foreach { case (sink, serverIdx) =>
+      sink :=> perCutServerQueues(i)(serverIdx).io.enq
+    }
     new elastic.Fork(networkUnits(startIndex).io.addressOut) {
       protected def onFork: Unit = {
         fork() :=> demux.io.source

@@ -105,10 +105,24 @@ class VitisModule(cfg: VitisModuleConfig) extends BlackBox {
         ).flatten
   })
 
-  def getPort(name: String) = io.elements.getOrElse(
-    name,
-    throw new RuntimeException(f"IO port not found: ${name}")
-  )
+  private def portNameAliases(name: String): Seq[String] = {
+    val taskOutGlobalWithIndex = raw"taskOutGlobal_(\d+)".r
+    name match {
+      case "taskOutGlobal" => Seq("taskOutGlobal", "taskOutGlobal1")
+      case taskOutGlobalWithIndex(index) =>
+        Seq(name, s"taskOutGlobal${index.toInt + 1}")
+      case _ => Seq(name)
+    }
+  }
+
+  def getPort(name: String) = portNameAliases(name)
+    .flatMap(io.elements.get)
+    .headOption
+    .getOrElse(
+      throw new RuntimeException(
+        f"IO port not found: ${name}; tried ${portNameAliases(name).mkString(", ")}"
+      )
+    )
 }
 
 class VitisWriteBufferModule(
@@ -137,6 +151,35 @@ class VitisWriteBufferModule(
     println(s"[HLS:HELPERS:112] PE Port: $name -> ${port.getClass.getSimpleName}")
   }
 
+  private val peTaskOut = ("taskOut", pe.io.elements.get("taskOut"))
+  private val peTaskOutGlobal = pe.io.elements
+    .filter(_._1.startsWith("taskOutGlobal"))
+    .map(x => (x._1, Some(x._2)))
+  private val taskOuts =
+    (Seq(peTaskOut) ++ peTaskOutGlobal.toSeq).filterNot(_._2.isEmpty)
+
+  private val spawnNextWriteBufferConfig = wSpawnNext.map(w =>
+    new WriteBufferConfig(
+      wAddr = fullSysGenDescriptor.widthAddress,
+      wData = w,
+      wAllow = (if (variableSpawn) 0 else 32),
+      wAllowData =
+        taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
+    )
+  )
+
+  private val argOutWriteBufferConfig = pe.io.elements
+    .get("argDataOut")
+    .map(_ =>
+      new WriteBufferConfig(
+        wAddr = fullSysGenDescriptor.widthAddress,
+        wData = cfg.writeBufferDataWidth,
+        wAllow = 32, // HardCoded?
+        wAllowData = Seq(fullSysGenDescriptor.widthAddress),
+        isRemoteWriteBuffer = cfg.hasRemoteWriteBuffer
+      )
+    )
+
   val io = IO(new chisel3.Record {
     val elements: SeqMap[String, Data] =
       SeqMap.from(
@@ -153,25 +196,18 @@ class VitisWriteBufferModule(
           if (cfg.is_ap_done) Some("ap_done" -> Output(Bool())) else None,
           if (cfg.is_ap_idle) Some("ap_idle" -> Output(Bool())) else None,
           if (cfg.is_ap_ready) Some("ap_ready" -> Output(Bool())) else None,
-          wSpawnNext.map(w =>
-            "m_axi_spawnNext" -> (axi4.Master(
-              new axi4.Config(
-                wAddr = fullSysGenDescriptor.widthAddress,
-                wData = w // width in bits
-              )
-            ))
+          spawnNextWriteBufferConfig.map(wbCfg =>
+            "m_axi_spawnNext" -> axi4.Master(wbCfg.cfgAxi)
           ),
-          pe.io.elements
-            .get("argDataOut")
-            .map(port => {
-              "m_axi_argOut" -> (axi4.Master(
-                new axi4.Config(
-                  wAddr = fullSysGenDescriptor.widthAddress,
-                  // Get data width from the task descriptor
-                  wData = cfg.writeBufferDataWidth
-                )
-              ))
-            }),
+          argOutWriteBufferConfig.map(wbCfg =>
+            "m_axi_argOut" -> axi4.Master(wbCfg.cfgAxi)
+          ),
+          argOutWriteBufferConfig.map(_ =>
+            "watcher_argOut_valid" -> Output(Bool())
+          ),
+          argOutWriteBufferConfig.map(_ =>
+            "watcher_argOut_ready" -> Output(Bool())
+          ),
           Some("ap_clk" -> Input(Clock())),
           Some("ap_rst_n" -> Input(Bool())),
           if(cfg.hasRemoteWriteBuffer) Some("fpgaId" -> Input(UInt(4.W))) else None,
@@ -180,34 +216,53 @@ class VitisWriteBufferModule(
         ).flatten
   })
 
-  def getPort(name: String) = io.elements.getOrElse(
-    name,
-    throw new RuntimeException(f"IO port not found: ${name}")
-  )
+  private def portNameAliases(name: String): Seq[String] = {
+    val taskOutGlobalWithIndex = raw"taskOutGlobal_(\d+)".r
+    name match {
+      case "taskOutGlobal" => Seq("taskOutGlobal", "taskOutGlobal1")
+      case taskOutGlobalWithIndex(index) =>
+        Seq(name, s"taskOutGlobal${index.toInt + 1}")
+      case _ => Seq(name)
+    }
+  }
 
-  private val peTaskOut = ("taskOut", pe.io.elements.get("taskOut"))
-  private val peTaskOutGlobal = pe.io.elements
-    .filter(_._1.startsWith("taskOutGlobal"))
-    .map(x => (x._1, Some(x._2)))
-  private val taskOuts =
-    (Seq(peTaskOut) ++ peTaskOutGlobal.toSeq).filterNot(_._2.isEmpty)
+  def getPort(name: String) = portNameAliases(name)
+    .flatMap(io.elements.get)
+    .headOption
+    .getOrElse(
+      throw new RuntimeException(
+        f"IO port not found: ${name}; tried ${portNameAliases(name).mkString(", ")}"
+      )
+    )
+
+  /** Return the handshake that the telemetry watcher should report for a PE port.
+    *
+    * Most wrapper ports are direct PE boundaries, so the public wrapper IO is the
+    * right signal. `argOut` is different when the PE also has `argDataOut`: the
+    * wrapper inserts a WriteBuffer and exposes the post-buffer allow stream as
+    * public `argOut`. For PE-status telemetry, use the pre-buffer raw PE boundary
+    * and require both coupled streams to be able to fire together.
+    */
+  def getWatcherStatusHandshake(name: String): (Bool, Bool) = {
+    if (name == "argOut" && pe.io.elements.get("argDataOut").isDefined) {
+      (
+        io.elements("watcher_argOut_valid").asInstanceOf[Bool],
+        io.elements("watcher_argOut_ready").asInstanceOf[Bool]
+      )
+    } else {
+      val port = getPort(name).asInstanceOf[axi4s.Interface]
+      (port.TVALID.asBool, port.TREADY.asBool)
+    }
+  }
 
   println(s"[HLS:HELPERS:166] ${pe.io.elements}")
 
   println(s"[HLS:HELPERS:168] ${peTaskOut}")
   println(s"[HLS:HELPERS:169] ${peTaskOutGlobal}")
 
-  wSpawnNext.foreach(w => {
+  spawnNextWriteBufferConfig.foreach(wbCfg => {
     val mWriteBuffer = Module(
-      new WriteBuffer(
-        new WriteBufferConfig(
-          wAddr = fullSysGenDescriptor.widthAddress,
-          wData = w,
-          wAllow = (if (variableSpawn) 0 else 32),
-          wAllowData =
-            taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
-        )
-      )
+      new WriteBuffer(wbCfg)
     )
 
     mWriteBuffer.s_pkg <> pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
@@ -244,19 +299,10 @@ class VitisWriteBufferModule(
 
   if (pe.io.elements.get("argDataOut").isDefined) {
     assert(cfg.hasArgumentWriteBuffer, "Found argDataOut in the PE but the task has no write buffer data width specified in the JSON!")
-    pe.io.elements
-      .get("argDataOut")
-      .map(port => {
+    argOutWriteBufferConfig
+      .map(wbCfg => {
         val mWriteBuffer = Module(
-          new WriteBuffer(
-            new WriteBufferConfig(
-              wAddr = fullSysGenDescriptor.widthAddress,
-              wData = cfg.writeBufferDataWidth,
-              wAllow = 32, // HardCoded?
-              wAllowData = Seq(fullSysGenDescriptor.widthAddress),
-              isRemoteWriteBuffer = cfg.hasRemoteWriteBuffer
-            )
-          )
+          new WriteBuffer(wbCfg)
         )
 
         mWriteBuffer.s_pkg <> pe
@@ -268,6 +314,13 @@ class VitisWriteBufferModule(
           .asInstanceOf[axi4.RawInterface]
         pe.getPort("argOut") <> mWriteBuffer.s_allows(0)
         mWriteBuffer.m_allows(0) <> io.elements.get("argOut").get
+
+        val rawArgOut = pe.getPort("argOut").asInstanceOf[axi4s.Interface]
+        val rawArgDataOut = pe.getPort("argDataOut").asInstanceOf[axi4s.Interface]
+        io.elements("watcher_argOut_valid").asInstanceOf[Bool] :=
+          rawArgOut.TVALID.asBool && rawArgDataOut.TVALID.asBool
+        io.elements("watcher_argOut_ready").asInstanceOf[Bool] :=
+          rawArgOut.TREADY.asBool && rawArgDataOut.TREADY.asBool
 
         if(cfg.hasRemoteWriteBuffer) {
           mWriteBuffer.fpgaId.get := RegNext(io.elements.get("fpgaId").get)

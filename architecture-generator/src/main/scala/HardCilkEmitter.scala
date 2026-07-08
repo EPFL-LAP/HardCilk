@@ -161,7 +161,8 @@ object HardCilkEmitter extends App {
         CppHeaderTemplate.generateCppHeader(
           systemDescriptor,
           s"$outputDirPathSC/projects/$jsonName/include",
-          numHbmPortExports
+          numHbmPortExports,
+          cfg.enableGlobalStart
         )
 
         // Generate the SystemC testbench

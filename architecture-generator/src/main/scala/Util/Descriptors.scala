@@ -208,14 +208,6 @@ case class FullSysGenDescriptor(
     }
     j += numSchedulerServers
 
-    if(task.spawnServersCount > 0) {
-      for (i <- j until j + task.spawnServersCount ) {
-        task.mgmtBaseAddresses.schedulerServersBaseAddresses = task.mgmtBaseAddresses.schedulerServersBaseAddresses :+ (i << 6)
-      }
-      j += task.spawnServersCount 
-    }
-
-
     if (task.isCont) {
       val numAllocationServers = task.getNumServers("allocator")
       for (i <- j until j + numAllocationServers) {
@@ -362,16 +354,7 @@ case class FullSysGenDescriptor(
   def getNumConfigPorts(): Int = {
     taskDescriptors.map(_.getNumServers("scheduler")).sum + taskDescriptors
       .map(_.getNumServers("memoryAllocator"))
-      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +  
-      {
-        var spawner_count = 0
-        taskDescriptors.foreach(task => {
-          if(task.spawnServersCount > 0) {
-            spawner_count += task.spawnServersCount
-          }
-        })
-        spawner_count
-      }
+      .sum + taskDescriptors.map(_.getNumServers("allocator")).sum
   }
 
   def getSystemAXIPortsNames(reduce_axi: Int): List[String] = {

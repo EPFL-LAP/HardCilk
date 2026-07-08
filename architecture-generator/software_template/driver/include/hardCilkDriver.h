@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <memIO.h>
+#include <csignal>
 #include <cstring>
 #include <cmath>
 
@@ -35,11 +36,17 @@ public:
     #include "hardCilkDriver.tpp"
 
     int startSystem();
+    // Address of the kernel-global start-broadcast register (releases all scheduler
+    // servers on one cycle); computed from the descriptor's server layout.
+    uint64_t globalRunRegAddr() const;
     void managementLoop();
 
 
     int setReturnAddr(uint64_t addr);
 
+    static bool stopRequested();
+    static void clearStopRequested();
+    static void requestStop(int signal);
 
 
     ~hardCilkDriver();
@@ -66,8 +73,13 @@ protected:
     int manageSchedulerServer(uint64_t base_address, TaskDescriptor taskDescriptor);
     int manageAllocationServer(uint64_t base_address, TaskDescriptor taskDescriptor);
     int manageMemoryAllocatorServer(uint64_t base_address, TaskDescriptor taskDescriptor);
+    uint64_t packedAllocatorAddressBytes(uint64_t addressCount, uint64_t widthAddress) const;
+    std::vector<uint8_t> packAllocatorAddresses(const std::vector<uint64_t> &addresses, uint64_t widthAddress) const;
 
     int waitPaused(uint64_t addr);
+    static void installSignalHandlers();
+
+    static volatile std::sig_atomic_t stop_requested_;
 
     
 

@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using Addr = uint64_t;
@@ -35,13 +36,14 @@ struct __attribute__((packed)) TriangleCountDecoupledRootTask
   Addr cont;
   Addr A;
   Addr B;
-  Addr count;
+  Addr count;       // running match count (starts at 0), carried in the closure
+  Addr count_final; // memory address the finished initiator writes the result to
   uint32_t size;
   uint32_t i;
   uint32_t j;
   uint32_t a_i;
   uint32_t b_j;
-  uint8_t _padding[12];
+  uint8_t _padding[4];
 };
 
 static_assert(sizeof(TriangleCountDecoupledRootTask) ==
@@ -59,10 +61,12 @@ public:
   TriangleCountDecoupledDriver(Memory *memory, uint32_t size,
                                uint32_t num_instances = 1,
                                double watchdog_s = 600.0,
-                               bool fast_mode = false)
+                               bool fast_mode = false,
+                               std::string xclbin_path = std::string())
       : hardCilkDriver(memory), size_(std::max<uint32_t>(1, size)),
         num_instances_(std::max<uint32_t>(1, num_instances)),
-        watchdog_s_(watchdog_s), fast_mode_(fast_mode) {}
+        watchdog_s_(watchdog_s), fast_mode_(fast_mode),
+        xclbin_path_(std::move(xclbin_path)) {}
 
   static int run_cpu_test_bench(uint32_t size)
   {
@@ -138,7 +142,8 @@ public:
       r.cont = done_addr;
       r.A = A_addr;
       r.B = B_addr;
-      r.count = count_addr;
+      r.count = 0;               // running value, accumulated in the closure
+      r.count_final = count_addr; // final result + done flag land here (8-byte store)
       r.size = size_;
       r.i = 0;
       r.j = 0;
@@ -450,11 +455,7 @@ private:
       // populated from the descriptor below so switching PE counts needs no host edit.
       std::vector<hardcilk_telemetry::WatcherPe> watcherPes;
       {
-        std::vector<std::string> candidates;
-        if (const char *e = std::getenv("TCD_HBM_DESCRIPTOR"))
-          candidates.push_back(e);
-        candidates.push_back("triangleCountDecoupled.hbmports.json");
-        candidates.push_back("../triangleCountDecoupled.hbmports.json");
+        std::vector<std::string> candidates = hbmDescriptorCandidates();
         std::string descPath, descJson, triedPaths;
         for (const auto &c : candidates)
         {
@@ -676,11 +677,7 @@ private:
     //   [16:24) u64 json_length   [24:32) u64 beats_offset (32-aligned)
     //   [32 : 32+json_length) JSON descriptor, then zero pad to beats_offset.
     {
-      std::vector<std::string> candidates;
-      if (const char *e = std::getenv("TCD_HBM_DESCRIPTOR"))
-        candidates.push_back(e);
-      candidates.push_back("triangleCountDecoupled.hbmports.json");    // run from workspace
-      candidates.push_back("../triangleCountDecoupled.hbmports.json"); // run from build folder
+      std::vector<std::string> candidates = hbmDescriptorCandidates();
       std::string descPath, descJson, triedPaths;
       for (const auto &c : candidates)
       {
@@ -796,6 +793,13 @@ private:
     uint64_t polls = 0;
     while (true)
     {
+      if (stopRequested())
+      {
+        std::cerr << "[triangleCountDecoupled] interrupted by user; aborting poll "
+                     "(after " << polls << " polls)\n";
+        return -1;
+      }
+
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 
@@ -892,6 +896,14 @@ private:
     uint64_t polls = 0;
     while (remaining > 0)
     {
+      if (stopRequested())
+      {
+        std::cerr << "[triangleCountDecoupled] interrupted by user; aborting with "
+                  << remaining << "/" << count_addrs.size()
+                  << " instances not done (after " << polls << " polls)\n";
+        return -1;
+      }
+
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 
@@ -977,4 +989,40 @@ private:
   uint32_t num_instances_;
   double watchdog_s_;
   bool fast_mode_;
+  std::string xclbin_path_;
+
+  static bool endsWith(const std::string &s, const std::string &suffix)
+  {
+    return s.size() >= suffix.size() &&
+           s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+  }
+
+  static std::string matchingHbmDescriptorPath(const std::string &xclbinPath)
+  {
+    if (xclbinPath.empty())
+      return std::string();
+
+    const std::string suffix = ".xclbin";
+    if (endsWith(xclbinPath, suffix))
+      return xclbinPath.substr(0, xclbinPath.size() - suffix.size()) +
+             ".hbmports.json";
+
+    return xclbinPath + ".hbmports.json";
+  }
+
+  std::vector<std::string> hbmDescriptorCandidates() const
+  {
+    std::vector<std::string> candidates;
+
+    const std::string matching = matchingHbmDescriptorPath(xclbin_path_);
+    if (!matching.empty())
+      candidates.push_back(matching);
+
+    if (const char *e = std::getenv("TCD_HBM_DESCRIPTOR"))
+      candidates.push_back(e);
+
+    candidates.push_back("triangleCountDecoupled.hbmports.json");    // run from workspace
+    candidates.push_back("../triangleCountDecoupled.hbmports.json"); // run from build folder
+    return candidates;
+  }
 };

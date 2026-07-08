@@ -32,7 +32,11 @@ class HardCilk(
     unitedHbm: Boolean,
     isSimulation: Boolean,
     argumentNotifierCutCount: Int,
-    override val addressTransformFlag: Boolean = false // Made public for trait
+    override val addressTransformFlag: Boolean = false, // Made public for trait
+    // Opt-in kernel-global start broadcast (default OFF -> byte-identical to the
+    // pre-feature design). When ON: one host-writable register releases all
+    // scheduler servers on the same cycle and anchors the watcher start gate.
+    enableGlobalStart: Boolean = false
 ) extends Module
     with HasHBMInterconnect
     with HardCilkHasMfpgaSupport { // <-- MIXIN THE TRAIT HERE
@@ -69,7 +73,7 @@ class HardCilk(
   val cfgXDMA = axi4.Config(wId = 4, wAddr = 64, wData = 512)
 
   val builder =
-    new HardCilkBuilder(fullSysGenDescriptor, debug, argumentNotifierCutCount)
+    new HardCilkBuilder(fullSysGenDescriptor, debug, argumentNotifierCutCount, enableGlobalStart)
 
   val blueprint = builder.defineBlueprint()
 
@@ -109,6 +113,40 @@ class HardCilk(
     notifierMap,
     remoteStreamToMemMap
   )
+  // ---- Kernel-global start broadcast register --------------------------------
+  // One host-writable 64-bit register whose bit0 ("globalRun") fans out to every
+  // scheduler server's io_globalRun AND to the telemetry watcher's start_gate. The
+  // host clears each server's rPause while this is 0, then writes it 1 once so ALL
+  // servers leave pause on the SAME cycle (instead of one-at-a-time as each rPause
+  // write lands over the slow hw_emu AXI-lite path). Sits on the last demux port
+  // (index == getNumConfigPorts), host address (getNumConfigPorts << 6) + base.
+  //
+  // Resets to 0: the system is HELD until the host's single release write, so
+  // startSystem() MUST write this to 1 (it does). This 0->1 edge is also the
+  // watcher's start gate (see connectWatcher) -- a deterministic "compute starts
+  // now" anchor, so cycle_count 0 == release and the first accept can never be
+  // dropped (the gate leads the first dispatch by many cycles).
+  val globalRunGate: Option[Bool] =
+    if (!enableGlobalStart) None
+    else Some {
+      val globalRunReg = RegInit(0.U(64.W))
+      val globalRunBlock =
+        new axi4.lite.components.RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
+      demux.m_axil(fullSysGenDescriptor.getNumConfigPorts()) :=> globalRunBlock.s_axil
+      globalRunBlock.base(0x00)
+      globalRunBlock.reg(
+        globalRunReg,
+        read = true,
+        write = true,
+        desc = "Kernel-global start broadcast: bit0 releases all scheduler servers + watcher"
+      )
+      when(globalRunBlock.rdReq) { globalRunBlock.rdOk() }
+      when(globalRunBlock.wrReq) { globalRunBlock.wrOk() }
+      val gr = globalRunReg(0)
+      schedulerMap.values.foreach { sched => sched.io_globalRun.get := gr }
+      gr
+    }
+
   connectPEs(peMap)
 
   val portsToExport = builder.connectSubsystems(
@@ -224,7 +262,12 @@ class HardCilk(
 
   private def instantiateManagementDemux(): axi4.lite.components.Demux = {
     val registerBlockSize = 6
-    val numMasters = fullSysGenDescriptor.getNumConfigPorts()
+    // +1 master for the kernel-global start-broadcast register (a RegisterBlock at
+    // demux index == getNumConfigPorts(), connected in the body below) ONLY when the
+    // feature is enabled. All existing server config ports keep their indices/
+    // addresses; this one lands right after. Off -> unchanged master count.
+    val numMasters =
+      fullSysGenDescriptor.getNumConfigPorts() + (if (enableGlobalStart) 1 else 0)
     val axiCfgCtrl = axi4.Config(
       wAddr = numMasters + registerBlockSize,
       wData = 64,
@@ -322,14 +365,6 @@ class HardCilk(
         demux.m_axil(i) :=> taskSched.io_internal.axi_mgmt_vss(i - j)
       }
       j += task.getNumServers("scheduler")
-
-      // Connect Scheduler Spawner Management (if any)
-      if (taskSched.spawnerServerMgmt.isDefined) {
-        for (i <- j until j + task.spawnServersCount) {
-          demux.m_axil(i) :=> taskSched.spawnerServerMgmt.get(i - j)
-        }
-        j += task.spawnServersCount
-      }
 
       // Connect Closure Allocator Management (if any)
       if (closureAllocatorMap.contains(task.name)) {
@@ -608,12 +643,14 @@ class HardCilk(
     watcher.io.elements("start_addr").asInstanceOf[UInt] := BigInt(wc.startAddr).U(64.W)
 
     // --- Tap each monitored PE's in/out queue handshakes ---
-    // Each status pin is 2 bits carrying the RAW AXIS handshake: bit0 = valid,
+    // Each status pin is 2 bits carrying the PE-boundary AXIS handshake: bit0 = valid,
     // bit1 = ready (matches the HLS QueueStatus{valid,ready} struct packing).
     // From these the viewer derives empty(=!valid), full(=valid&&!ready), and the
     // transfer events consumed(in_valid&&in_ready) / pushed(out_valid&&out_ready).
     // in_* is the consumer side (PE's input), out_* is the producer side (PE's
-    // output) -- so valid/ready mean opposite things on the two queues.
+    // output) -- so valid/ready mean opposite things on the two queues. For
+    // write-buffered PE outputs, `out_*` deliberately taps the pre-buffer raw PE
+    // completion boundary rather than the post-buffer downstream drain boundary.
     //
     // Every status bit is passed through a SINGLE uniform RegNext stage so (a)
     // the long PE->watcher path is broken for timing and (b) all bits share the
@@ -625,13 +662,10 @@ class HardCilk(
       pes.zipWithIndex.foreach { case (pe, i) =>
         val inIf =
           pe.getPort(mon.inPort).asInstanceOf[chext.amba.axi4s.Interface]
-        val outIf =
-          pe.getPort(mon.outPort).asInstanceOf[chext.amba.axi4s.Interface]
+        val (outValid, outReady) = pe.getWatcherStatusHandshake(mon.outPort)
 
         val inValid = inIf.TVALID
         val inReady = inIf.TREADY
-        val outValid = outIf.TVALID
-        val outReady = outIf.TREADY
 
         // Reset value 0 (NOT a bare RegNext): an uninitialized register starts as
         // X in simulation, and that X propagates through the watcher into its AXI
@@ -645,39 +679,33 @@ class HardCilk(
       }
     }
 
-    // --- Start gate: the watcher stays idle until the spawn scheduler dispatches its
-    // first task (the first fire of any scheduler's taskOut). This anchors the
-    // telemetry timeline to compute start instead of FPGA programming. All
-    // watcher-scoped: no effect on benchmarks without a watcherConfig.
+    // --- Start gate ---
+    // With the global-start feature ON: drive the gate from the kernel-global
+    // broadcast (globalRunGate). globalRun is the host's single "go" write in
+    // startSystem(): it resets to 0 (watcher idle, all scheduler servers held) and
+    // rises exactly once when the host releases the system. That 0->1 edge is a
+    // DETERMINISTIC compute-start anchor -- cycle_count 0 == release -- and it leads
+    // the first task dispatch by many cycles (servers must read HBM, fill buffers,
+    // and serve a steal before any accept), so the first accept has a wide margin
+    // and can never be dropped.
     //
-    // CRITICAL: the gate must reach the watcher at least one cycle BEFORE the very
-    // first accept is observable, otherwise that accept is lost. The first task the
-    // scheduler dispatches IS the root task, and the root PE can accept it in the
-    // same cycle it is dispatched (combinational taskIn ready, L=0). The status taps
-    // delay that accept by one RegNext, so an L=0 accept dispatched at cycle T is
-    // observable at the watcher at T+1.
-    //
-    // Matching the gate to the SAME 1-cycle delay (a registered latch, gate high at
-    // T+1) is NOT enough in practice: the watcher HLS samples the scalar `start_gate`
-    // one pipeline stage later than the partitioned status arrays, so a gate that is
-    // only coincident with the accept still misses it by that internal skew (observed:
-    // initiator accepts undercounted by exactly 1 = the root task). So drive the gate
-    // a full cycle EARLY by OR-ing the latch with the combinational firstDispatch:
-    // gate high at T (dispatch cycle) while the accept lands at T+1, giving one cycle
-    // of margin that absorbs the internal skew. firstDispatch covers cycle T; the
-    // RegInit latch holds the gate from T+1 onward. firstDispatch is (TVALID&&TREADY),
-    // driven 0 out of reset, so the gate is X-free at startup. Starting the timeline
-    // one cycle before the first dispatch is harmless (cycle_count is just anchored a
-    // cycle earlier).
-    val firstDispatch =
-      schedulerMap.values
-        .flatMap(s => s.io_export.taskOut.map(t => t.TVALID.asBool && t.TREADY.asBool))
-        .toSeq
-        .reduceOption(_ || _)
-        .getOrElse(false.B)
-    val startedLatch = RegInit(false.B)
-    when(firstDispatch) { startedLatch := true.B }
-    watcher.getPort("start_gate") := (startedLatch || firstDispatch).asUInt
+    // With the feature OFF (default): fall back to the original heuristic -- the
+    // gate opens on the first scheduler dispatch, driven a cycle EARLY by OR-ing the
+    // registered latch with the combinational firstDispatch so the T+1 accept isn't
+    // lost to the watcher HLS's internal sampling skew. This path is byte-identical
+    // to the pre-feature design.
+    val startGate: Bool = globalRunGate.getOrElse {
+      val firstDispatch =
+        schedulerMap.values
+          .flatMap(s => s.io_export.taskOut.map(t => t.TVALID.asBool && t.TREADY.asBool))
+          .toSeq
+          .reduceOption(_ || _)
+          .getOrElse(false.B)
+      val startedLatch = RegInit(false.B)
+      when(firstDispatch) { startedLatch := true.B }
+      startedLatch || firstDispatch
+    }
+    watcher.getPort("start_gate") := startGate.asUInt
 
     // --- Per-HBM-port bandwidth + address taps ---
     // For each exported compute master we register, with reset-init 0 (same X-startup
@@ -700,10 +728,19 @@ class HardCilk(
         val rb = Wire(UInt(16.W))
         rb := Mux(m.ar.fire, (m.ar.bits.len +& 1.U) << m.ar.bits.size, 0.U)
         watcher.getPort(watcher.rbytesPin(p)) := RegNext(rb, 0.U(16.W))
+        // Region tap = a 20-bit window anchored at the top MEANINGFUL HBM bit. HBM
+        // has only widthAXIAddress (34) address bits, so bits >= 34 are always zero
+        // on every port (wide 64-bit masters included) -- there's nothing to learn
+        // there. So take addr[33:14] uniformly on all ports: one consistent 16 KB
+        // granularity, focused on the bits that actually vary, instead of the old
+        // fixed addr[39:20] that wasted 6 bits on guaranteed zeros everywhere.
+        val addrHi =
+          math.min(fullSysGenDescriptor.widthAXIAddress - 1, m.aw.bits.addr.getWidth - 1)
+        val addrLo = addrHi - 19
         watcher.getPort(watcher.awaddrPin(p)) :=
-          chisel3.util.RegEnable(m.aw.bits.addr(39, 20), 0.U(20.W), m.aw.fire)
+          chisel3.util.RegEnable(m.aw.bits.addr(addrHi, addrLo), 0.U(20.W), m.aw.fire)
         watcher.getPort(watcher.araddrPin(p)) :=
-          chisel3.util.RegEnable(m.ar.bits.addr(39, 20), 0.U(20.W), m.ar.fire)
+          chisel3.util.RegEnable(m.ar.bits.addr(addrHi, addrLo), 0.U(20.W), m.ar.fire)
       } else {
         watcher.getPort(watcher.wbytesPin(p)) := 0.U
         watcher.getPort(watcher.rbytesPin(p)) := 0.U

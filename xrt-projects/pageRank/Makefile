@@ -48,6 +48,13 @@ VPP_LDFLAGS := --optimize 2 -R 2
 VPP_BASE_CONFIG := $(TMP_CFG)
 include ../../scripts/xclbin_incremental_checkpoint.mk
 VPP_LDFLAGS += $(VPP_CONFIG_FLAG)
+# hw_emu only: link with debug info so xsim honors the waveform hooks (xrt.ini
+# debug_mode + the host's pre/post TCL). Without -g the emulator prints
+# "None of the Kernels compiled in the waveform enabled mode" and emits no
+# .wdb/VCD. Scoped to hw_emu so real-HW builds are unaffected.
+ifeq ($(TARGET),hw_emu)
+VPP_LDFLAGS += -g
+endif
 
 #--- Input .xo files ---
 XO_DIR      := ./xo

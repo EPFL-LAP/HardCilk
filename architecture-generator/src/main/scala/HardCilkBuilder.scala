@@ -25,7 +25,8 @@ object HardCilkBuilder {
 /**
  * A pure Scala helper that describes how to assemble the HardCilk system.
  */
-class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: Int) {
+class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: Int,
+    enableGlobalStart: Boolean = false) {
 
   import HardCilkBuilder.PortToExport
 
@@ -74,7 +75,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         argRouteServersCreateTasks =
           task.sidesConfigs.length > 2 || (task.isCont && task.spawnServersCount > 0),
         taskId = task.taskId,
-        mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth
+        mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth,
+        enableGlobalStart = enableGlobalStart
       ))
     }.toMap
 
@@ -82,7 +84,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       .filter(t => desc.getPortCount("spawnNext", t.name) > 0)
       .map { task =>
         task.name -> (() => new Allocator(
-          addrWidth = desc.widthAddress,
+          addrWidth = desc.widthAXIAddress, // HBM address width (34): continuations pack/address natively at HBM width
           peCount = desc.getPortCount("spawnNext", task.name),
           vcasCount = task.getNumServers("allocator"),
           queueDepth = task.getCapacityPhysicalQueue("allocator"),
@@ -93,6 +95,16 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     val argNotifierFactories = desc.taskDescriptors
       .filter(t => desc.getPortCount("sendArgument", t.name) > 0)
       .map { task =>
+        val argPeCount = desc.getPortCount("sendArgument", task.name)
+        val argServerCount = task.getNumServers("argumentNotifier")
+        // cutCount = number of parallel collector lanes in the notifier network.
+        // Size it to min(peCount, servers): the servers are the absorption ceiling
+        // (each drains ~1 continuation/cycle), and the network needs one lane per
+        // server to keep them all fed -- more lanes than servers just back up at the
+        // per-server arbiters, fewer funnels PEs through a shared lane and caps the
+        // whole continuation-firing stage at 1/cycle (the old global default of 1).
+        // Never exceed peCount (asserted in ArgumentNotifierNetwork).
+        val argCut = math.max(1, math.min(argPeCount, argServerCount))
         task.name -> (() => new ArgumentNotifier(
           addrWidth =
             if (task.variableSpawn)
@@ -101,11 +113,11 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
               desc.widthAddress,
           taskWidth = task.widthTask,
           queueDepth = task.getCapacityPhysicalQueue("argumentNotifier"),
-          peCount = desc.getPortCount("sendArgument", task.name),
-          argRouteServersNumber = task.getNumServers("argumentNotifier"),
+          peCount = argPeCount,
+          argRouteServersNumber = argServerCount,
           contCounterWidth = desc.widthContCounter,
           pePortWidth = 64, // <-- HARDCODED
-          cutCount = argCutCount,
+          cutCount = argCut,
           multiDecrease = task.variableSpawn,
           mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
           taskID = task.taskId
@@ -116,7 +128,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       .filter(t => desc.getPortCount("mallocIn", t.name) > 0)
       .map { task =>
         task.name -> (() => new Allocator(
-          addrWidth = desc.widthAddress,
+          addrWidth = desc.widthAXIAddress, // HBM address width (34): continuations pack/address natively at HBM width
           peCount = desc.getPortCount("mallocIn", task.name),
           vcasCount = task.getNumServers("memoryAllocator"),
           queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),

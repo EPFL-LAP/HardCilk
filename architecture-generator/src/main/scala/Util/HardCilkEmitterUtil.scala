@@ -197,7 +197,8 @@ object HardCilkEmitterUtil {
           reduceAxi = flags.reduce_axi,
           unitedHbm = true,
           isSimulation = isSimulation,
-          argumentNotifierCutCount = 1
+          argumentNotifierCutCount = 1,
+          enableGlobalStart = flags.enableGlobalStart
         )
         numHbmPortExports = module.numHbmPortExports
         module

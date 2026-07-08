@@ -10,26 +10,33 @@ import chext.amba.axi4
 import chext.amba.axi4s
 import chext.amba.axi4.Ops._
 import chext.amba.axi4s.Casts._
-import chext.bundles.Bundle2
 
 class WriteBufferCounterConfig(
     val wAddr: Int,
     val wData: Int,
     val wAllow: Int,
-    val wAllowData: Seq[Int]
+    val wAllowData: Seq[Int],
+    val wId: Int = 6,
+    val bufferDepth: Int = 128
 ) {
 
-  assert(isPow2(wData) && wData >= 8, "Data payload must be sized power of 2 and at least 8 bits.")
+  assert(
+    isPow2(wData) && wData >= 8,
+    "Data payload must be sized power of 2 and at least 8 bits."
+  )
   assert(nAllow >= 1, "There must be at least 1 type to pass through")
+  assert(bufferDepth >= 1, "Buffer depth must be at least 1")
 
   def nAllow = wAllowData.size
 
   val cfgAxi = axi4.Config(
     wAddr = wAddr,
-    wData = wData
+    wData = wData,
+    wId = wId
   )
 
-  val cfgAxisAllows = wAllowData.map(w => axi4s.Config(wData = w, onlyRV = true))
+  val cfgAxisAllows =
+    wAllowData.map(w => axi4s.Config(wData = w, onlyRV = true))
 }
 
 // Be careful with the order of the fields in the bundle (MST - LSB)
@@ -56,6 +63,21 @@ class WriteBufferCounter(
 
   // Interface
   val m_axi = IO(axi4.Master(cfg = cfgAxi))
+  private val robCfgIn = cfgAxi.copy(wId = 0, read = false)
+  private val robCfgOut = cfgAxi.copy(read = false)
+  private val m_axi_single_id = Wire(axi4.Master(cfg = robCfgIn))
+
+  private val writeRob = Module(new WriteROB(robCfgIn, robCfgOut))
+  m_axi_single_id :=> writeRob.io.from_master
+  writeRob.io.to_slave.asFull.aw :=> m_axi.asFull.aw
+  writeRob.io.to_slave.asFull.w :=> m_axi.asFull.w
+  m_axi.asFull.b :=> writeRob.io.to_slave.asFull.b
+
+  if (cfgAxi.read) {
+    m_axi.asFull.ar.noenq()
+    m_axi.asFull.r.nodeq()
+  }
+
   val s_pkg = IO(
     axi4s.Slave(cfg =
       axi4s.Config(
@@ -69,25 +91,28 @@ class WriteBufferCounter(
   val m_allows = cfgAxisAllows.map(c => IO(axi4s.Master(c)))
 
   // Implementation
-  private val m_axi_ = axi4.full.MasterBuffer(m_axi.asFull, axi4.BufferConfig(b = 8))
-  private val s_pkg_ = elastic.SourceBuffer(s_pkg.asLite, 4)
-  private val s_allows_ = s_allows.map(p => elastic.SourceBuffer(p.asLite, 8))
+  private val m_axi_ =
+    axi4.full.MasterBuffer(m_axi_single_id.asFull, axi4.BufferConfig(b = 8))
+
+  private val s_pkg_ = elastic.SourceBuffer(s_pkg.asLite, bufferDepth)
+  private val s_allows_ =
+    s_allows.map(p => elastic.SourceBuffer(p.asLite, bufferDepth))
   private val m_allows_ = m_allows.map(p => elastic.SinkBuffer(p.asLite, 8))
 
-  m_axi_.ar.noenq()
-  m_axi_.r.nodeq()
   m_axi_.aw.noenq()
   m_axi_.w.noenq()
   m_axi_.b.nodeq()
 
-  // To Memory
-  private val mAddrStrbGen = Module(new axi4.full.components.AddressStrobeGenerator(wAddr, wData))
-  private val pkgPayload = Wire(chiselTypeOf(s_pkg_))
   private val numNext = Wire(Vec(nAllow, DecoupledIO(UInt(wAllow.W))))
 
   private val s_pkg_payload = s_pkg_.bits.asTypeOf(wb_t)
   when(s_pkg_.fire) {
-    printf("WriteBuffer: addr = %x, data = %x, size = %x, allow = ", s_pkg_payload.addr, s_pkg_payload.data, s_pkg_payload.size)
+    printf(
+      "WriteBuffer: addr = %x, data = %x, size = %x, allow = ",
+      s_pkg_payload.addr,
+      s_pkg_payload.data,
+      s_pkg_payload.size
+    )
     for (i <- 0 until nAllow) {
       printf(" %x", s_pkg_payload.allow(i))
     }
@@ -96,54 +121,34 @@ class WriteBufferCounter(
 
   new elastic.Fork(s_pkg_) {
     protected def onFork: Unit = {
-      fork() :=> pkgPayload
-
-      new elastic.Transform(fork(), mAddrStrbGen.source) {
-        protected def onTransform: Unit = {
-          out.addr := in.asTypeOf(wb_t).addr
-          out.size := in.asTypeOf(wb_t).size
-          out.burst := axi4.BurstType.INCR
-          out.len := 0.U
-        }
-      }
-
-      numNext.zipWithIndex.foreach(x => {
-        new elastic.Transform(fork(), elastic.SinkBuffer(x._1, 4)) {
-          protected def onTransform: Unit = {
-            out := in.asTypeOf(wb_t).allow(x._2)
-          }
-        }
-      })
-    }
-  }
-
-  private val toAxi = Wire(DecoupledIO(new Bundle2(chiselTypeOf(pkgPayload.bits), chiselTypeOf(mAddrStrbGen.sink.bits))))
-  new elastic.Join(toAxi) {
-    protected def onJoin: Unit = {
-      out._1 := join(pkgPayload)
-      out._2 := join(mAddrStrbGen.sink)
-    }
-  }
-
-  new elastic.Fork(toAxi) {
-    protected def onFork: Unit = {
       new elastic.Transform(fork(), m_axi_.aw) {
         protected def onTransform: Unit = {
+          val payload = in.asTypeOf(wb_t)
           out := 0.U.asTypeOf(out)
-          out.addr := in._2.addr
+          out.addr := payload.addr
           out.burst := axi4.BurstType.INCR
-          out.size := in._1.asTypeOf(wb_t).size
+          out.len := 0.U
+          out.size := payload.size
         }
       }
 
       new elastic.Transform(fork(), m_axi_.w) {
         protected def onTransform: Unit = {
+          val payload = in.asTypeOf(wb_t)
           out := 0.U.asTypeOf(out)
-          out.data := in._1.asTypeOf(wb_t).data << (in._2.lowerByteIndex * 8.U)
-          out.strb := in._2.strb
-          out.last := in._2.last
+          out.data := payload.data
+          out.strb := Fill(wData / 8, 1.U(1.W))
+          out.last := true.B
         }
       }
+
+      numNext.zipWithIndex.foreach(x => {
+        new elastic.Transform(fork(), elastic.SinkBuffer(x._1, bufferDepth)) {
+          protected def onTransform: Unit = {
+            out := in.asTypeOf(wb_t).allow(x._2)
+          }
+        }
+      })
     }
   }
 

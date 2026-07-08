@@ -2,65 +2,48 @@ package Allocator
 
 import chisel3._
 import chisel3.util._
-import chisel3.ChiselEnum
 
+// PE tap unit of the allocator address ring.
+//
+// This is a registered shift-register stage (like SchedulerNetworkDataUnit): it
+// carries an (address, valid) pair one hop around the closed ring each cycle.
+// When a valid address passes and the local PE can accept it, the address is
+// tapped off to the PE and the slot is cleared; otherwise it is passed along so
+// it can circulate to another PE.
 class AllocatorNetworkUnitIO(addrWidth: Int) extends Bundle {
-  val addressIn = Flipped(DecoupledIO(UInt(addrWidth.W)))
-  val addressOut = DecoupledIO(UInt(addrWidth.W))
+  val addressIn = Input(UInt(addrWidth.W))
+  val validIn = Input(Bool())
+  val addressOut = Output(UInt(addrWidth.W))
+  val validOut = Output(Bool())
+
+  // Tap to the local PE's CAS server / queue.
   val casAddressOut = DecoupledIO(UInt(addrWidth.W))
 }
 
 class AllocatorNetworkUnit(addrWidth: Int) extends Module {
   val io = IO(new AllocatorNetworkUnitIO(addrWidth))
 
-  object state extends ChiselEnum {
-    val takeInAddress = Value(0.U)
-    val giveAddr = Value(1.U)
-  }
+  val addrReg = RegInit(0.U(addrWidth.W))
+  val validReg = RegInit(false.B)
 
-  val stateReg = RegInit(state.takeInAddress)
-  val addressReg = RegInit(0.U(addrWidth.W))
-  val priorityReg = RegInit(true.B)
-
-  io.addressIn.ready := false.B
-  io.addressOut.valid := false.B
-  io.addressOut.bits := addressReg
   io.casAddressOut.valid := false.B
-  io.casAddressOut.bits := addressReg
+  io.casAddressOut.bits := io.addressIn
 
-  when(stateReg === state.takeInAddress) {
-    when(io.addressIn.valid) {
-      addressReg := io.addressIn.bits
-      stateReg := state.giveAddr
-    }
-  }.elsewhen(stateReg === state.giveAddr) {
-    when(io.addressOut.ready || io.casAddressOut.ready) {
-      stateReg := state.takeInAddress
-      priorityReg := ~priorityReg
-    }
+  when(io.casAddressOut.ready && io.validIn) {
+    // Local PE takes the passing address off the ring.
+    validReg := false.B
+    addrReg := 0.U
+    io.casAddressOut.valid := true.B
+    io.casAddressOut.bits := io.addressIn
+  }.elsewhen(io.validIn) {
+    // Pass the address along the ring so it can reach another PE.
+    validReg := true.B
+    addrReg := io.addressIn
   }.otherwise {
-    stateReg := state.takeInAddress
+    validReg := false.B
+    addrReg := 0.U
   }
 
-  when(stateReg === state.takeInAddress) {
-    io.addressIn.ready := true.B
-  }.elsewhen(stateReg === state.giveAddr) {
-    when(io.addressOut.ready && io.casAddressOut.ready) {
-      when(priorityReg) {
-        when(io.casAddressOut.ready) {
-          io.casAddressOut.valid := true.B
-        }
-      }.otherwise {
-        when(io.addressOut.ready) {
-          io.addressOut.valid := true.B
-        }
-      }
-    }.otherwise {
-      when(io.casAddressOut.ready) {
-        io.casAddressOut.valid := true.B
-      }.elsewhen(io.addressOut.ready) {
-        io.addressOut.valid := true.B
-      }
-    }
-  }
+  io.addressOut := addrReg
+  io.validOut := validReg
 }

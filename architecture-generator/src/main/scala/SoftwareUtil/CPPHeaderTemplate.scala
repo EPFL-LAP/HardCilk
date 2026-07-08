@@ -3,7 +3,7 @@ import Descriptors._
 import java.io.PrintWriter
 
 object CppHeaderTemplate {
-  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String, reduceAxi: Int): Unit = {
+  def generateCppHeader(descriptor: FullSysGenDescriptor, headerFileDirectory: String, reduceAxi: Int, enableGlobalStart: Boolean = false): Unit = {
     // Generate TaskDescriptor class
     val taskDescriptorClass =
       s"""
@@ -131,6 +131,14 @@ object CppHeaderTemplate {
        |    uint64_t getMfpgaBaseAddress() const
        |    {
        |        return (0x${descriptor.getMfpgaBaseAddress().toHexString.toUpperCase} + 4 * 0x40);
+       |    }
+       |
+       |    // True when the kernel was built with the global-start broadcast (--global-start).
+       |    // The host writes the release register only then; otherwise the RTL has no such
+       |    // register and startSystem() behaves exactly as before.
+       |    bool getGlobalRunEnabled() const
+       |    {
+       |        return ${if (enableGlobalStart) "true" else "false"};
        |    }
        |
        |

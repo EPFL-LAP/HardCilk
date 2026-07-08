@@ -3,7 +3,6 @@ package Scheduler
 import chisel3._
 import chisel3.util._
 import Util._
-import chisel3.ChiselEnum
 
 class GlobalTaskBufferIO(taskWidth: Int) extends Bundle {
   val in = Flipped(DecoupledIO(UInt(taskWidth.W)))
@@ -11,45 +10,27 @@ class GlobalTaskBufferIO(taskWidth: Int) extends Bundle {
 }
 
 class GlobalTaskBuffer(taskWidth: Int, peCount: Int) extends Module {
-  object State extends ChiselEnum {
-    val readTask = Value(0.U)
-    val writeTaskNtw = Value(1.U)
-  }
 
   val io = IO(new GlobalTaskBufferIO(taskWidth))
-
-  val buffer = RegInit(0.U(taskWidth.W))
-  val stateReg = RegInit(State.readTask)
-  val tasksGivenAwayCount = RegInit(0.U(32.W))
-
-  io.connStealNtw.data.qOutTask.bits := buffer
+  // No need for buffer. We always try to push the task, and keep track of how many credits we need to consume later
+  io.connStealNtw.data.qOutTask.valid := io.in.valid
+  io.connStealNtw.data.qOutTask.bits := io.in.bits
+  io.in.ready := io.connStealNtw.data.qOutTask.ready
   io.connStealNtw.data.availableTask.ready := false.B
-  io.connStealNtw.data.qOutTask.valid := false.B
-  io.in.ready := false.B
-  io.connStealNtw.ctrl.serveStealReq.valid := false.B
   io.connStealNtw.ctrl.stealReq.valid := false.B
 
-  when(stateReg === State.readTask) {
-    io.in.ready := true.B
-    when(io.in.valid) {
-      buffer := io.in.bits
-      stateReg := State.writeTaskNtw
-      when(tasksGivenAwayCount < peCount.U) {
-        tasksGivenAwayCount := tasksGivenAwayCount + 1.U
-      }
-    }
-  }.elsewhen(stateReg === State.writeTaskNtw) {
-    io.connStealNtw.data.qOutTask.valid := true.B
-    when(io.connStealNtw.data.qOutTask.ready) {
-      stateReg := State.readTask
-    }
-  }
+  // TODO: This should be sized according to the ring size. If this ring is >16, this might not be sufficient and can overflow!
+  val servedRequestCount = RegInit(0.U(32.W))
+  val pushedTask = io.in.valid && io.in.ready
 
-  when(tasksGivenAwayCount > 0.U && (stateReg =/= State.readTask || ~io.in.valid)) {
-    io.connStealNtw.ctrl.serveStealReq.valid := true.B
-    when(io.connStealNtw.ctrl.serveStealReq.ready) {
-      tasksGivenAwayCount := tasksGivenAwayCount - 1.U
-    }
+  io.connStealNtw.ctrl.serveStealReq.valid := pushedTask || servedRequestCount > 0.U
+  val servedRequest =
+    io.connStealNtw.ctrl.serveStealReq.valid && io.connStealNtw.ctrl.serveStealReq.ready
+
+  when(servedRequest && !pushedTask) {
+    servedRequestCount := servedRequestCount - 1.U
+  }.elsewhen(pushedTask && !servedRequest) {
+    servedRequestCount := servedRequestCount + 1.U
   }
 
 }

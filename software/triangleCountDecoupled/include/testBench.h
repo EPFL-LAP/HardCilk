@@ -73,7 +73,8 @@ inline int run_triangle_count_decoupled_benchmark(
       args.xclbin_path, kernel_name,
       [&](Memory *m) {
         TriangleCountDecoupledDriver driver(m, args.size, args.num_instances,
-                                            args.watchdog_s, args.fast_mode);
+                                            args.watchdog_s, args.fast_mode,
+                                            args.xclbin_path);
         return driver.run_test_bench();
       },
       args.wave);

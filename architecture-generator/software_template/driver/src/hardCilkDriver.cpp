@@ -1,10 +1,63 @@
 #include "hardCilkDriver.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <sstream>
+
+namespace
+{
+constexpr uint64_t kSchedulerBackingWritePageBytes = 4096;
+
+uint64_t roundUpSchedulerBackingWrite(uint64_t bytes)
+{
+    uint64_t rem = bytes % kSchedulerBackingWritePageBytes;
+    return rem == 0 ? bytes : bytes + kSchedulerBackingWritePageBytes - rem;
+}
+
+uint64_t roundDownSchedulerBackingWrite(uint64_t addr)
+{
+    return addr & ~(kSchedulerBackingWritePageBytes - 1);
+}
+
+void copyPageCoveredFromDevice(Memory *memory, uint8_t *dest, uint64_t srcAddr,
+                               uint64_t bytes)
+{
+    if (bytes == 0)
+        return;
+
+    uint64_t pageAddr = roundDownSchedulerBackingWrite(srcAddr);
+    uint64_t pageOffset = srcAddr - pageAddr;
+    uint64_t paddedBytes = roundUpSchedulerBackingWrite(pageOffset + bytes);
+    std::vector<uint8_t> padded(paddedBytes);
+    memory->copyFromDevice(padded.data(), pageAddr, padded.size());
+    std::memcpy(dest, padded.data() + pageOffset, bytes);
+}
+
+void copyPagePaddedToDevice(Memory *memory, uint64_t destAddr,
+                            const uint8_t *src, uint64_t bytes)
+{
+    if (bytes == 0)
+        return;
+
+    uint64_t paddedBytes = roundUpSchedulerBackingWrite(bytes);
+    if (paddedBytes == bytes)
+    {
+        memory->copyToDevice(destAddr, src, bytes);
+        return;
+    }
+
+    std::vector<uint8_t> padded(paddedBytes, 0);
+    std::memcpy(padded.data(), src, bytes);
+    memory->copyToDevice(destAddr, padded.data(), padded.size());
+}
+} // namespace
+
+volatile std::sig_atomic_t hardCilkDriver::stop_requested_ = 0;
 
 hardCilkDriver::hardCilkDriver(Memory *memory)
 {
+    installSignalHandlers();
     memory_ = memory;
     // sanityCheck();
 }
@@ -13,12 +66,137 @@ hardCilkDriver::~hardCilkDriver()
 {
 }
 
+void hardCilkDriver::requestStop(int signal)
+{
+    if (stop_requested_)
+    {
+        // Second Ctrl-C: the graceful path did not unwind in time (typically the
+        // process is blocked inside a device read/DMA that swallowed the first
+        // interrupt). Restore the default disposition and re-raise so the process
+        // actually terminates instead of appearing to hang forever.
+        std::signal(signal, SIG_DFL);
+        std::raise(signal);
+        return;
+    }
+    stop_requested_ = 1;
+    // printf/std::cerr are NOT async-signal-safe; calling them from a signal
+    // handler is undefined and can itself deadlock. Use write(2) so the first
+    // Ctrl-C gives immediate feedback -- previously it set the flag silently, so
+    // any poll loop that ignored the flag looked frozen with no output.
+    static const char msg[] =
+        "\n[hardCilk] interrupt received; stopping after the current poll "
+        "(press Ctrl-C again to force quit)\n";
+    ssize_t written = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    (void)written;
+}
+
+bool hardCilkDriver::stopRequested()
+{
+    return stop_requested_ != 0;
+}
+
+void hardCilkDriver::clearStopRequested()
+{
+    stop_requested_ = 0;
+}
+
+void hardCilkDriver::installSignalHandlers()
+{
+    std::signal(SIGINT, hardCilkDriver::requestStop);
+    std::signal(SIGTERM, hardCilkDriver::requestStop);
+}
+
+
+uint64_t hardCilkDriver::packedAllocatorAddressBytes(uint64_t addressCount, uint64_t widthAddress) const
+{
+    // Continuation pointers pack at the 34-bit HBM/device address width (matches
+    // the HW allocator's widthAXIAddress), not the 64-bit internal widthAddress.
+    const uint64_t continuationAddressWidth = 34; // HBM/device address width
+    const uint64_t memDataWidth = 256;            // HBM beat / task width
+    (void)widthAddress;
+    // closures are memDataWidth-bit aligned => drop log2(memDataWidth/8) low bits
+    const uint64_t addressAlignmentBits = __builtin_ctzll(memDataWidth / 8);
+    const uint64_t compactAddressBits = continuationAddressWidth - addressAlignmentBits;
+    assert(compactAddressBits > 0 && compactAddressBits <= 64);
+
+    const uint64_t addressesPerBeat = 256 / compactAddressBits;
+    assert(addressesPerBeat > 0);
+
+    return ((addressCount + addressesPerBeat - 1) / addressesPerBeat) * 32;
+}
+
+std::vector<uint8_t> hardCilkDriver::packAllocatorAddresses(const std::vector<uint64_t> &addresses, uint64_t widthAddress) const
+{
+    // Continuation pointers pack at the 34-bit HBM/device address width (matches
+    // the HW allocator's widthAXIAddress), not the 64-bit internal widthAddress.
+    const uint64_t continuationAddressWidth = 34; // HBM/device address width
+    const uint64_t memDataWidth = 256;            // HBM beat / task width
+    (void)widthAddress;
+    // closures are memDataWidth-bit aligned => drop log2(memDataWidth/8) low bits
+    const uint64_t addressAlignmentBits = __builtin_ctzll(memDataWidth / 8);
+    const uint64_t compactAddressBits = continuationAddressWidth - addressAlignmentBits;
+    const uint64_t addressesPerBeat = 256 / compactAddressBits;
+
+    std::vector<uint8_t> packedAddresses(packedAllocatorAddressBytes(addresses.size(), widthAddress), 0);
+
+    for (uint64_t i = 0; i < addresses.size(); i++)
+    {
+        uint64_t compactAddress = addresses[i] >> addressAlignmentBits;
+        uint64_t addressBaseBit = (i / addressesPerBeat) * 256 + (i % addressesPerBeat) * compactAddressBits;
+
+        for (uint64_t bit = 0; bit < compactAddressBits; bit++)
+        {
+            if (((compactAddress >> bit) & 1ull) != 0)
+            {
+                packedAddresses[(addressBaseBit + bit) / 8] |= 1u << ((addressBaseBit + bit) % 8);
+            }
+        }
+    }
+
+    return packedAddresses;
+}
+
 /**
  * @brief Start the system by writing to the rPause registers of the different servers.
  * This MUST be called after init_system has been called.
  */
+// Address of the kernel-global start-broadcast register (see SchedulerServer
+// globalRun / HardCilk.scala). It sits on the demux port right after all server
+// config ports: index == getNumConfigPorts(), so its address mirrors the
+// generator's `j` walk: (numConfigPorts << 6) + base, where base is the first
+// scheduler server's address (index 0 -> address == base).
+uint64_t hardCilkDriver::globalRunRegAddr() const
+{
+    uint64_t numConfigPorts = 0;
+    uint64_t base = 0;
+    bool haveBase = false;
+    for (const auto &task : descriptor.taskDescriptors)
+    {
+        if (!haveBase && !task.mgmtBaseAddresses.schedulerServersBaseAddresses.empty())
+        {
+            base = task.mgmtBaseAddresses.schedulerServersBaseAddresses.front();
+            haveBase = true;
+        }
+        numConfigPorts += task.getNumServers("scheduler");
+        if (task.isCont)
+            numConfigPorts += task.getNumServers("allocator");
+        if (task.dynamicMemAlloc)
+            numConfigPorts += task.getNumServers("memoryAllocator");
+    }
+    return (numConfigPorts << 6) + base;
+}
+
 int hardCilkDriver::startSystem()
 {
+    // Kernel-global start broadcast (only present when the kernel was built with
+    // --global-start). Hold it LOW before clearing any rPause so the per-server
+    // rPause writes below (sequential over AXI-lite, ~hundreds of emu cycles apart)
+    // only ARM the servers; none actually run yet. When the feature is off there is
+    // no such register, so skip the writes and behave exactly as before.
+    const bool globalRunEnabled = descriptor.getGlobalRunEnabled();
+    const uint64_t globalRunAddr = globalRunEnabled ? globalRunRegAddr() : 0;
+    if (globalRunEnabled)
+        memory_->writeReg64(globalRunAddr, 0x0);
 
     for (auto taskDescriptor = descriptor.taskDescriptors.begin(); taskDescriptor != descriptor.taskDescriptors.end(); taskDescriptor++)
     {
@@ -38,6 +216,11 @@ int hardCilkDriver::startSystem()
             memory_->writeReg64(*base_address + mem_alloc_server_rpause_shift, 0x0);
         }
     }
+
+    // Release: every scheduler server sees globalRun rise on the same cycle, so all
+    // PEs start together (removes the ~800-cycle-per-server hw_emu startup skew).
+    if (globalRunEnabled)
+        memory_->writeReg64(globalRunAddr, 0x1);
     return 0;
 }
 
@@ -89,6 +272,11 @@ void hardCilkDriver::managementLoop()
 {
     while (true)
     {
+        if (stopRequested())
+        {
+            std::cerr << "Interrupted; leaving management loop cleanly.\n";
+            break;
+        }
         if (checkPaused() == 0)
         {
             managePausedServer();
@@ -190,12 +378,13 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     // past small-graph testing even with the initial allocation zeroed.
     {
         uint64_t newBytes = 2 * maxLength * taskDescriptor.widthTask / 8;
+        uint64_t paddedNewBytes = roundUpSchedulerBackingWrite(newBytes);
         static const uint64_t kZeroChunkBytes = 16ull * 1024 * 1024;
         static const std::vector<uint8_t> zeroChunk(kZeroChunkBytes, 0);
         uint64_t filled = 0;
-        while (filled < newBytes)
+        while (filled < paddedNewBytes)
         {
-            uint64_t chunk = std::min<uint64_t>(kZeroChunkBytes, newBytes - filled);
+            uint64_t chunk = std::min<uint64_t>(kZeroChunkBytes, paddedNewBytes - filled);
             memory_->copyToDevice(new_addr + filled, zeroChunk.data(), chunk);
             filled += chunk;
         }
@@ -211,19 +400,19 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
         // dequeue order so the resized FIFO can restart with head=0.
         uint64_t firstEntries = std::min(currLen, maxLength - fifoHead);
         uint64_t firstBytes = firstEntries * entryBytes;
-        memory_->copyFromDevice(data.data(), addr + fifoHead * entryBytes, firstBytes);
+        copyPageCoveredFromDevice(memory_, data.data(), addr + fifoHead * entryBytes, firstBytes);
 
         uint64_t secondEntries = currLen - firstEntries;
         if (secondEntries > 0)
         {
-            memory_->copyFromDevice(data.data() + firstBytes, addr, secondEntries * entryBytes);
+            copyPageCoveredFromDevice(memory_, data.data() + firstBytes, addr, secondEntries * entryBytes);
         }
     }
 
     // Write the data to the new address
     if (liveBytes > 0)
     {
-        memory_->copyToDevice(new_addr, data.data(), liveBytes);
+        copyPagePaddedToDevice(memory_, new_addr, data.data(), liveBytes);
     }
 
     // Write the new address to the rAddress register
@@ -282,7 +471,8 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
     assert(addresses.size() == size);
 
     // Write the addresses to the continuation queue
-    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(addresses.data()), addresses.size() * sizeof(uint64_t));
+    std::vector<uint8_t> packedAddresses = packAllocatorAddresses(addresses, descriptor.widthAddress);
+    memory_->copyToDevice(addr, packedAddresses.data(), packedAddresses.size());
 
     // Write the new addresses to the continuation queue
     memory_->writeReg64(base_address + alloc_server_availableSize_shift, size);
@@ -327,7 +517,8 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
     assert(addresses.size() == size);
 
     // Write the addresses to the continuation queue
-    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(addresses.data()), addresses.size() * sizeof(uint64_t));
+    std::vector<uint8_t> packedAddresses = packAllocatorAddresses(addresses, descriptor.widthAddress);
+    memory_->copyToDevice(addr, packedAddresses.data(), packedAddresses.size());
 
     // Write the new addresses to the continuation queue
     memory_->writeReg64(base_address + mem_alloc_server_availableSize_shift, size);

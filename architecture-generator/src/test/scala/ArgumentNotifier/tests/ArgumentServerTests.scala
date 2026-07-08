@@ -176,8 +176,8 @@ class ArgumentServerTests
     s.data.availableTask.valid.poke(false.B)
     s.data.availableTask.bits.poke(0.U)
     s.data.qOutTask.ready.poke(qReady.B)
-    s.ctrl.serveStealReq.ready.poke(true.B)
-    s.ctrl.stealReq.ready.poke(stealReady.B)
+    s.ctrl.serveStealReq.ready.poke(stealReady.B)
+    s.ctrl.stealReq.ready.poke(true.B)
     if (qReady && s.data.qOutTask.valid.peek().litToBoolean) 1 else 0
   }
 

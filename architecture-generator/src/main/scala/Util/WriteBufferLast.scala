@@ -16,7 +16,7 @@ class WriteBufferLastConfig(
     val wAddr: Int,
     val wData: Int,
     val wAllowData: Seq[Int],
-    val nOutstanding: Int = 63
+    val nOutstanding: Int = 64
 ) {
 
   assert(isPow2(wData) && wData >= 8, "Data payload must be sized power of 2 and at least 8 bits.")

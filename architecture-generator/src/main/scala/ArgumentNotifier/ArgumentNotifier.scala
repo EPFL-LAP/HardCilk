@@ -19,7 +19,8 @@ class ArgumentNotifierIO(
     peCount: Int
 ) extends Bundle {
 
-  implicit val axisCfgAddress: axi4s.Config = axi4s.Config(wData = pePortWidth, onlyRV = true)
+  implicit val axisCfgAddress: axi4s.Config =
+    axi4s.Config(wData = pePortWidth, onlyRV = true)
 
   val argIn = Vec(peCount, axi4s.Slave(axisCfgAddress))
   val done = Output(Bool())
@@ -45,14 +46,20 @@ class ArgumentNotifier(
     taskID: Int,
     override val mfpgaSupport: Boolean,
     debug: Boolean = false,
-    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
-) extends Module with  NotifierHasMfpgaSupport {
+    override val axisCfgTaskAndReq: axi4s.Config =
+      axi4s.Config(wData = 512, wDest = 4)
+) extends Module
+    with NotifierHasMfpgaSupport {
 
   print(f"ArgumentNotifier: addrWidth: ${addrWidth} \n")
   print(f"ArgumentNotifier: pePortWidth: ${pePortWidth} \n")
 
-  val io_export = IO(new ArgumentNotifierIO(pePortWidth = pePortWidth, peCount = peCount))
-  val connStealNtw = IO(Vec(argRouteServersNumber, Flipped(new SchedulerNetworkClientIO(taskWidth))))
+  val io_export = IO(
+    new ArgumentNotifierIO(pePortWidth = pePortWidth, peCount = peCount)
+  )
+  val connStealNtw = IO(
+    Vec(argRouteServersNumber, Flipped(new SchedulerNetworkClientIO(taskWidth)))
+  )
 
   assert(argRouteServersNumber > 0)
 
@@ -76,7 +83,7 @@ class ArgumentNotifier(
         counterWidth = contCounterWidth,
         sysAddressWidth = addrWidth,
         tagBitsShift = log2Ceil(taskWidth / 8),
-        wId = 2,
+        wId = 5,
         multiDecrease = multiDecrease,
         mfpgaSupport = mfpgaSupport,
         taskID = taskID
@@ -87,7 +94,9 @@ class ArgumentNotifier(
   io_export.done := argRouteServers.map(_.io.done).reduce(_ || _)
 
   val nAxiPorts = 2 * argRouteServersNumber
-  val axi_full_argRoute = IO(Vec(nAxiPorts, axi4.full.Master(argRouteServers.head.io.m_axi_counter.cfg)))
+  val axi_full_argRoute = IO(
+    Vec(nAxiPorts, axi4.full.Master(argRouteServers.head.io.m_axi_counter.cfg))
+  )
 
   for (i <- 0 until argRouteServersNumber) {
     argRouteServers(i).io.connNetwork <> argSide.io.connVAS(i)
@@ -96,27 +105,39 @@ class ArgumentNotifier(
 
   for (i <- 0 until argRouteServersNumber) {
     argRouteServers(i).io.m_axi_counter :=> axi_full_argRoute(i)
-    argRouteServers(i).io.m_axi_task :=> axi_full_argRoute(i + argRouteServersNumber)
+    argRouteServers(i).io.m_axi_task :=> axi_full_argRoute(
+      i + argRouteServersNumber
+    )
   }
 
   val axis_stream_converters_in =
-    Seq.fill(peCount)(Module(new AxisDataWidthConverter(dataWidthIn = pePortWidth, dataWidthOut = addrWidth)))
+    Seq.fill(peCount)(
+      Module(
+        new AxisDataWidthConverter(
+          dataWidthIn = pePortWidth,
+          dataWidthOut = addrWidth
+        )
+      )
+    )
   for (i <- 0 until peCount) {
     axis_stream_converters_in(i).io.dataOut.asLite <> argSide.io.connPE(i)
     io_export.argIn(i).asLite <> axis_stream_converters_in(i).io.dataIn.asLite
   }
 
   // DEBUG
-  if(debug) {
+  if (debug) {
     val argInCounter = Module(new Counter64(peCount))
     for (i <- 0 until peCount) {
-      argInCounter.io.signals(i) := (io_export.argIn(i).asLite.valid & io_export.argIn(i).asLite.ready)
+      argInCounter.io.signals(i) := (io_export.argIn(i).asLite.valid & io_export
+        .argIn(i)
+        .asLite
+        .ready)
     }
     dontTouch(argInCounter.io.counter)
   }
   // DEBUG
 
-  if(mfpgaSupport){
+  if (mfpgaSupport) {
     buildMfpgaConnections()
   }
 }
@@ -145,4 +166,3 @@ object ArgumentNotifierEmitter extends App {
     Array("--disable-all-randomization")
   )
 }
-

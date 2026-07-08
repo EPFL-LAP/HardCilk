@@ -98,20 +98,73 @@ trait HasHBMInterconnect extends Module {
     }
 
     val peInterfaceGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    // PEs whose descriptor sets dedicatedAxiPort get their MAIN compute master
+    // (m_axi_gmem) pulled onto its OWN reserved HBM port -- one port per PE
+    // instance, never muxed with any other master (PATH 1 direct passthrough).
+    // Their write-buffer ports (spawnNext/argOut), if any, still ride the shared
+    // pool. Everything else is unchanged.
+    val dedicatedGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    // totalAxiPorts consolidation: (portCount, mainMasterGroups) per task whose
+    // descriptor sets totalAxiPorts > 0. The main masters of ALL its PEs are
+    // pulled out of the shared pool (like dedicated) and later packed onto
+    // exactly `portCount` reserved front ports as a flat mux. Each main master
+    // is its own single-interface group so the port-mapping JSON keeps the true
+    // per-PE owner/role. portCount is capped at the master count.
+    val consolidatedTaskGroups = new ArrayBuffer[(Int, Seq[HbmInterfaceGroup])]()
 
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       peMap.get(task.name).foreach { peArray =>
+        val consolidateMain = !task.dedicatedAxiPort && task.totalAxiPorts > 0
+        val taskMainGroups = new ArrayBuffer[HbmInterfaceGroup]()
         peArray.zipWithIndex.foreach { case (pe, peIndex) =>
           val rolePorts = peOwnedPorts(pe, task)
           if (rolePorts.nonEmpty) {
-            peInterfaceGroups.addOne(
-              HbmInterfaceGroup(
-                s"pe:${task.name}:$peIndex",
-                rolePorts.map(_._2),
-                rolePorts.map(_._1)
+            if (task.dedicatedAxiPort) {
+              val (mainPorts, otherPorts) = rolePorts.partition(_._1 == "main")
+              mainPorts.foreach { case (role, iface) =>
+                dedicatedGroups.addOne(
+                  HbmInterfaceGroup(s"pe:${task.name}:$peIndex", Seq(iface), Seq(role))
+                )
+              }
+              if (otherPorts.nonEmpty) {
+                peInterfaceGroups.addOne(
+                  HbmInterfaceGroup(
+                    s"pe:${task.name}:$peIndex",
+                    otherPorts.map(_._2),
+                    otherPorts.map(_._1)
+                  )
+                )
+              }
+            } else if (consolidateMain) {
+              val (mainPorts, otherPorts) = rolePorts.partition(_._1 == "main")
+              mainPorts.foreach { case (role, iface) =>
+                taskMainGroups.addOne(
+                  HbmInterfaceGroup(s"pe:${task.name}:$peIndex", Seq(iface), Seq(role))
+                )
+              }
+              if (otherPorts.nonEmpty) {
+                peInterfaceGroups.addOne(
+                  HbmInterfaceGroup(
+                    s"pe:${task.name}:$peIndex",
+                    otherPorts.map(_._2),
+                    otherPorts.map(_._1)
+                  )
+                )
+              }
+            } else {
+              peInterfaceGroups.addOne(
+                HbmInterfaceGroup(
+                  s"pe:${task.name}:$peIndex",
+                  rolePorts.map(_._2),
+                  rolePorts.map(_._1)
+                )
               )
-            )
+            }
           }
+        }
+        if (consolidateMain && taskMainGroups.nonEmpty) {
+          val portCount = math.min(task.totalAxiPorts, taskMainGroups.size)
+          consolidatedTaskGroups.addOne((portCount, taskMainGroups.toSeq))
         }
       }
     }
@@ -148,13 +201,6 @@ trait HasHBMInterconnect extends Module {
           schedulerInterfaceGroups.addOne(
             HbmInterfaceGroup(s"scheduler:${task.name}:vss:$portIndex", Seq(port), Seq("ring"))
           )
-        }
-        scheduler.spawnerServerAXI.foreach { ports =>
-          ports.zipWithIndex.foreach { case (port, portIndex) =>
-            schedulerInterfaceGroups.addOne(
-              HbmInterfaceGroup(s"scheduler:${task.name}:spawner:$portIndex", Seq(port), Seq("spawner"))
-            )
-          }
         }
       }
     }
@@ -193,14 +239,33 @@ trait HasHBMInterconnect extends Module {
       argumentNotifierMap.get(task.name).foreach { notifier =>
         val serverCount = task.getNumServers("argumentNotifier")
         for (serverIndex <- 0 until serverCount) {
-          val ports = Seq(
-            notifier.axi_full_argRoute(serverIndex),
-            notifier.axi_full_argRoute(serverIndex + serverCount)
+          // Emit the counter (RMW) master and the task (read) master as SEPARATE
+          // one-interface groups so assignGroupsToHbmPorts can place them on
+          // different HBM ports. Grouped together they land on one port and share
+          // its single read-data channel: every completing continuation needs a
+          // counter read AND a task read, so at 1 beat/cycle the notifier releases
+          // only one ready task per 2 cycles -> the whole decoupled loop is pinned
+          // at II=2. On separate ports the two reads return in parallel (II=1).
+          // (argRoute(i) = m_axi_counter, argRoute(i+serverCount) = m_axi_task; see
+          //  ArgumentNotifier.scala.)
+          val counterPort = notifier.axi_full_argRoute(serverIndex)
+          val taskPort = notifier.axi_full_argRoute(serverIndex + serverCount)
+          argumentNotifierGroups.addOne(
+            HbmInterfaceGroup(
+              s"argumentNotifier:${task.name}:$serverIndex#counter",
+              Seq(counterPort),
+              Seq("counter")
+            )
           )
           argumentNotifierGroups.addOne(
-            HbmInterfaceGroup(s"argumentNotifier:${task.name}:$serverIndex", ports)
+            HbmInterfaceGroup(
+              s"argumentNotifier:${task.name}:$serverIndex#task",
+              Seq(taskPort),
+              Seq("task")
+            )
           )
-          interfacesArgumentNotifier.addAll(ports)
+          interfacesArgumentNotifier.addOne(counterPort)
+          interfacesArgumentNotifier.addOne(taskPort)
         }
       }
     }
@@ -220,6 +285,30 @@ trait HasHBMInterconnect extends Module {
 
     val numHBMPorts = reduceAxi
     val hbmSlaves = Seq.fill(numHBMPorts)(new ArrayBuffer[axi4.full.Interface]())
+
+    // Reserve one HBM port per dedicated-PE main master at the FRONT (slots
+    // 0..numDedicated-1). These are removed from the shared pool above, so the
+    // proportional PE/server allocation below only distributes the REMAINING
+    // ports. Each dedicated port carries exactly one master -> PATH 1.
+    val numDedicated = dedicatedGroups.size
+    // Reserved front ports = dedicated (1 master each) + consolidated
+    // (totalAxiPorts). Both are pulled out of the shared pool; the proportional
+    // PE/server allocation below starts at `numReserved`.
+    val numConsolidated = consolidatedTaskGroups.map(_._1).sum
+    val numReserved = numDedicated + numConsolidated
+    require(
+      numReserved < numHBMPorts,
+      s"dedicatedAxiPort/totalAxiPorts requested $numReserved reserved port(s) but only " +
+        s"$numHBMPorts HBM port(s) exist; leave at least one for schedulers/servers"
+    )
+    val remainingPorts = numHBMPorts - numReserved
+    dedicatedGroups.zipWithIndex.foreach { case (g, i) =>
+      hbmSlaves(i).addAll(g.interfaces)
+    }
+    if (numDedicated > 0)
+      println(s"[HBM:Interconnect] Reserved $numDedicated dedicated PE port(s) (0..${numDedicated - 1})")
+    if (numConsolidated > 0)
+      println(s"[HBM:Interconnect] Reserved $numConsolidated consolidated PE port(s) (${numDedicated}..${numReserved - 1})")
 
     val totalPorts =
       interfacesPE.length + interfacesMemoryAllocator.length + interfacesScheduler.length + interfacesClosureAllocator.length + interfacesArgumentNotifier.length + interfacesRemoteMemAccess.length
@@ -263,12 +352,22 @@ trait HasHBMInterconnect extends Module {
       }
     }
 
+    // Pack each consolidating task's main masters onto its reserved port block,
+    // split as evenly as possible. Each reserved port becomes a flat, shape-
+    // uniform mux -> PATH 2 (native ids, no ProtocolConverter), and is never
+    // re-muxed with the shared pool below.
+    var consolCursor = numDedicated
+    consolidatedTaskGroups.foreach { case (portCount, groups) =>
+      assignGroupsToHbmPorts(groups, consolCursor, portCount)
+      consolCursor += portCount
+    }
+
     if (totalPorts > 0) {
       val serverGroups =
         memoryAllocatorGroups ++ schedulerInterfaceGroups ++ closureAllocatorGroups ++
           argumentNotifierGroups ++ remoteMemAccessGroups
 
-      val numPortsPerMux = totalPorts.toDouble / numHBMPorts.toDouble
+      val numPortsPerMux = totalPorts.toDouble / remainingPorts.toDouble
       val requestedPeMux =
         if (interfacesPE.nonEmpty)
           math.ceil(interfacesPE.length.toDouble / numPortsPerMux).toInt
@@ -276,14 +375,14 @@ trait HasHBMInterconnect extends Module {
           0
       val peMux =
         math.min(
-          numHBMPorts,
+          remainingPorts,
           math.max(0, requestedPeMux)
         ) match {
-          case mux if serverGroups.nonEmpty && mux == numHBMPorts && numHBMPorts > 1 =>
-            numHBMPorts - 1
+          case mux if serverGroups.nonEmpty && mux == remainingPorts && remainingPorts > 1 =>
+            remainingPorts - 1
           case mux => mux
         }
-      val serverMux = numHBMPorts - peMux
+      val serverMux = remainingPorts - peMux
 
       // Decompose every PE-owned master into its OWN assignable unit, then group
       // by exact (wData, wId) shape. A single PE can own masters of different
@@ -322,14 +421,14 @@ trait HasHBMInterconnect extends Module {
                 math.round(peMux.toDouble * groups.map(_.size).sum / totalPeIfaces).toInt
               )
             )
-          assignGroupsToHbmPorts(groups, portCursor, share)
+          assignGroupsToHbmPorts(groups, numReserved + portCursor, share)
           portCursor += share
         }
       } else {
         // More distinct shapes than available PE ports: cannot isolate them all.
         // Keep the original per-PE packing; the remaining mixed ports fall back to
         // PATH 3 (and warn) rather than silently corrupting ids.
-        assignGroupsToHbmPorts(peInterfaceGroups.toSeq, 0, peMux)
+        assignGroupsToHbmPorts(peInterfaceGroups.toSeq, numReserved, peMux)
       }
       // Shape-aware server allocation: group by wData (not (wData, wId))
       // since different wId values can be harmonized by zero-extension (PATH 2b).
@@ -344,10 +443,11 @@ trait HasHBMInterconnect extends Module {
       if (serverByDataWidth.length <= serverMux && serverGroups.nonEmpty) {
         // Enough server ports to give every data-width class its own
         // contiguous, proportional block.
-        var portCursor = peMux
+        val serverFirst = numReserved + peMux
+        var portCursor = serverFirst
         serverByDataWidth.zipWithIndex.foreach { case ((_, groups), idx) =>
           val classesLeft = serverByDataWidth.length - idx
-          val portsLeft   = serverMux - (portCursor - peMux)
+          val portsLeft   = serverMux - (portCursor - serverFirst)
           val share =
             if (idx == serverByDataWidth.length - 1) portsLeft
             else math.max(
@@ -361,11 +461,13 @@ trait HasHBMInterconnect extends Module {
           portCursor += share
         }
       } else {
-        assignGroupsToHbmPorts(serverGroups.toSeq, peMux, serverMux)
+        assignGroupsToHbmPorts(serverGroups.toSeq, numReserved + peMux, serverMux)
       }
 
       // ---- Port allocation summary ------------------------------------
-      println(s"[HBM:Interconnect] Port budget: $peMux PE ports (0..${peMux - 1}), $serverMux server ports ($peMux..${peMux + serverMux - 1})")
+      if (numDedicated > 0)
+        println(s"[HBM:Interconnect] Dedicated PE ports: $numDedicated (0..${numDedicated - 1})")
+      println(s"[HBM:Interconnect] Port budget: $peMux PE ports (${numReserved}..${numReserved + peMux - 1}), $serverMux server ports (${numReserved + peMux}..${numReserved + peMux + serverMux - 1})")
       peByShape.foreach { case ((dw, id), gs) =>
         println(s"[HBM:Interconnect]   PE shape (wData=$dw, wId=$id): ${gs.map(_.size).sum} interfaces")
       }
@@ -453,6 +555,8 @@ trait HasHBMInterconnect extends Module {
           roleOf.put(iface, role)
         }
       }
+      regOwners(dedicatedGroups.toSeq)
+      regOwners(consolidatedTaskGroups.flatMap(_._2).toSeq)
       regOwners(peInterfaceGroups.toSeq)
       regOwners(schedulerInterfaceGroups.toSeq)
       regOwners(memoryAllocatorGroups.toSeq)

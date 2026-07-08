@@ -2,92 +2,47 @@ package Allocator
 
 import chisel3._
 import chisel3.util._
-import chisel3.ChiselEnum
 
+// VCAS injection unit of the allocator address ring.
+//
+// This is a registered shift-register stage (like SchedulerNetworkDataUnit): it
+// carries an (address, valid) pair one hop around the closed ring each cycle.
+// When an empty slot passes and the local VCAS has a free address to hand out,
+// the address is injected into the ring; otherwise a valid slot is passed along.
 class AllocatorServerNetworkUnitIO(addrWidth: Int) extends Bundle {
-  val addressIn0 = Flipped(DecoupledIO(UInt(addrWidth.W)))
+  // Ring shift-register ports (non-elastic, like the scheduler network).
+  val addressIn = Input(UInt(addrWidth.W))
+  val validIn = Input(Bool())
+  val addressOut = Output(UInt(addrWidth.W))
+  val validOut = Output(Bool())
+
+  // Free addresses supplied by the local VCAS server.
   val addressIn1 = Flipped(DecoupledIO(UInt(addrWidth.W)))
-  val addressOut = DecoupledIO(UInt(addrWidth.W))
 }
 
 class AllocatorServerNetworkUnit(addrWidth: Int) extends Module {
   val io = IO(new AllocatorServerNetworkUnitIO(addrWidth))
 
-  object state extends ChiselEnum {
-    val takeInAddress0 = Value(0.U)
-    val takeInAddress1 = Value(1.U)
-    val giveAddr = Value(2.U)
-  }
+  val addrReg = RegInit(0.U(addrWidth.W))
+  val validReg = RegInit(false.B)
 
-  val stateReg = RegInit(state.takeInAddress0)
-  val addressReg = RegInit(0.U(addrWidth.W))
-  val priorityReg = RegInit(true.B)
-
-  io.addressIn0.ready := false.B
   io.addressIn1.ready := false.B
-  io.addressOut.valid := false.B
-  io.addressOut.bits := addressReg
 
-  when(stateReg === state.takeInAddress0) {
-
-    when(io.addressIn0.valid) {
-
-      priorityReg := ~priorityReg
-      stateReg := state.giveAddr
-      addressReg := io.addressIn0.bits
-
-    }.elsewhen(io.addressIn1.valid) {
-
-      priorityReg := ~priorityReg
-      stateReg := state.takeInAddress1
-
-    }
-
-  }.elsewhen(stateReg === state.takeInAddress1) {
-
-    when(io.addressIn1.valid) {
-
-      priorityReg := ~priorityReg
-      stateReg := state.giveAddr
-      addressReg := io.addressIn1.bits
-
-    }.elsewhen(io.addressIn0.valid) {
-
-      priorityReg := ~priorityReg
-      stateReg := state.takeInAddress0
-
-    }
-
-  }.elsewhen(stateReg === state.giveAddr) {
-
-    when(io.addressOut.ready) {
-
-      when(priorityReg) {
-
-        stateReg := state.takeInAddress0
-
-      }.otherwise {
-
-        stateReg := state.takeInAddress1
-
-      }
-
-    }
-
-  }
-
-  when(stateReg === state.takeInAddress0) {
-
-    io.addressIn0.ready := true.B
-
-  }.elsewhen(stateReg === state.takeInAddress1) {
-
+  when(io.validIn) {
+    // Pass the passing address along the ring (occupied slots have priority so
+    // in-flight addresses are never dropped).
+    validReg := true.B
+    addrReg := io.addressIn
+  }.elsewhen(io.addressIn1.valid) {
+    // Empty slot: inject a fresh free address from the local VCAS.
+    validReg := true.B
+    addrReg := io.addressIn1.bits
     io.addressIn1.ready := true.B
-
-  }.elsewhen(stateReg === state.giveAddr) {
-
-    io.addressOut.valid := true.B
-
+  }.otherwise {
+    validReg := false.B
+    addrReg := 0.U
   }
 
+  io.addressOut := addrReg
+  io.validOut := validReg
 }

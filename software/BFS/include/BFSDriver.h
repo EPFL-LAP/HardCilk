@@ -1000,12 +1000,28 @@ private:
   int managementLoopBFS(Addr cont_base, Addr visited_base, Addr distance_base, int vertex_count, int true_max_dist)
   {
     const auto start = std::chrono::high_resolution_clock::now();
-    const auto deadline = std::chrono::high_resolution_clock::now() +
-                          std::chrono::duration<double>(watchdog_s_);
-    auto next_progress = start;
+    const auto deadline = start + std::chrono::duration<double>(watchdog_s_);
+    const bool is_emulation = std::getenv("XCL_EMULATION_MODE") != nullptr;
+
+    // Stall detection mirrors BellmanFord: if the kernel makes no observable
+    // forward progress for STALL_WINDOW seconds, bail out before the full
+    // watchdog. "Progress" is any change in the continuation counters, BFS
+    // level/frontier state, or finalized visited count. Keep this out of
+    // fast_mode, and relax it heavily under emulation where wall-clock time is
+    // much less meaningful.
+    const double stall_window_s = is_emulation ? 120.0 : 1.0;
+    const auto sample_period = std::chrono::milliseconds(250);
+    auto next_sample = start;
+    auto last_change = start;
+    bool have_signature = false;
+    uint32_t last_counter = 0;
+    uint32_t last_distance = 0;
+    uint32_t last_frontier = 0;
+    uint32_t last_active = 0;
+    size_t last_visited = 0;
+
     uint32_t done = 0;
     uint64_t iters = 0;
-    const bool is_emulation = std::getenv("XCL_EMULATION_MODE") != nullptr;
     while (true)
     {
       if (!fast_mode_ && checkPaused() == 0)
@@ -1027,10 +1043,40 @@ private:
       }
 
       auto now = std::chrono::high_resolution_clock::now();
-      if (!fast_mode_ && now >= next_progress)
+      if (!fast_mode_ && now >= next_sample)
       {
+        next_sample = now + sample_period;
+
+        BFS_args cont = readContinuation(cont_base);
+        size_t visited = countVisited(visited_base, vertex_count);
         printProgress(cont_base, visited_base, vertex_count, start);
-        next_progress = now + std::chrono::microseconds(10);
+
+        bool changed = !have_signature || cont.counter != last_counter ||
+                       cont.currentDistance != last_distance ||
+                       cont.frontier_length != last_frontier ||
+                       cont.active != last_active || visited != last_visited;
+        if (changed)
+        {
+          have_signature = true;
+          last_counter = cont.counter;
+          last_distance = cont.currentDistance;
+          last_frontier = cont.frontier_length;
+          last_active = cont.active;
+          last_visited = visited;
+          last_change = now;
+        }
+        else if (std::chrono::duration<double>(now - last_change).count() >=
+                 stall_window_s)
+        {
+          t_kernel_done_ = now;
+          std::cerr << "[BFS] STALL: no progress for " << stall_window_s
+                    << "s (dist=" << cont.currentDistance
+                    << " frontier=" << cont.frontier_length
+                    << " active=" << cont.active << " visited=" << visited
+                    << "/" << vertex_count
+                    << "). Exiting early for debug.\n";
+          return -1;
+        }
       }
 
       if (now > deadline)

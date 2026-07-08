@@ -329,12 +329,11 @@ class ArgumentServer(
       }
     }
 
-    io.connStealNtw.ctrl.serveStealReq.valid := false.B
-
     io.connStealNtw.ctrl.stealReq.valid := false.B
+    io.connStealNtw.ctrl.serveStealReq.valid := false.B
     when(rTaskCount.notZero) {
-      io.connStealNtw.ctrl.stealReq.valid := true.B
-      when(io.connStealNtw.ctrl.stealReq.ready) {
+      io.connStealNtw.ctrl.serveStealReq.valid := true.B
+      when(io.connStealNtw.ctrl.serveStealReq.ready) {
         rTaskCount.dec()
       }
     }

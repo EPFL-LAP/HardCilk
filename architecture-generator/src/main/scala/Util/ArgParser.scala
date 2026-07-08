@@ -16,7 +16,10 @@ case class BuilderConfig(
   json_path: String = "",
   // additional small flags that the HardCilk constructor sometimes uses
   argumentNotifierCutCount: Int = 1,
-  addressTransformFlag: Boolean = false
+  addressTransformFlag: Boolean = false,
+  // Opt-in kernel-global start broadcast (releases all scheduler servers on one
+  // cycle + anchors the watcher start gate). Default OFF == pre-feature design.
+  enableGlobalStart: Boolean = false
 )
 
 object ArgParser {
@@ -74,6 +77,9 @@ object ArgParser {
       opt[Unit]("addr-transform")
         .action((_, c) => c.copy(addressTransformFlag = true))
         .text("enable address transform for exported HBM AXI ports"),
+      opt[Unit]("global-start")
+        .action((_, c) => c.copy(enableGlobalStart = true))
+        .text("enable the kernel-global start broadcast (simultaneous server release + watcher start gate)"),
       help("help").text("Prints this help text")
     )
   }

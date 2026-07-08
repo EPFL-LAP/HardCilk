@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define N_whileLoopMain_reentry0_cont0 1
-#define N_memReader 1
+#define N_memReader 2
 #define N_whileLoopMain_reentry0 1
 
 // The STATUS word is ap_uint<48> packed 4 bits/PE => at most 12 monitored PE slots.
@@ -61,7 +61,13 @@ struct PEStatus
 #define PORTS_PER_BW 15 // 15 x 8-bit + 8-bit header = 128 bits
 #define N_BW_SUB 3      // ceil(MAX_HBM_PORTS / PORTS_PER_BW)
 #define BWQ_DEPTH 8     // 2*N_BW_SUB + 1 (addr) = 7 bundles/window, fits 8
-#define WATCHER_BURST_LEN 16
+// 64-beat bursts (was 16). The write bus pays a fixed ~1-cycle AW/restart bubble
+// per burst, so 16-beat bursts capped sustained drain at 16/17=94% -- just under
+// the runner's 1-beat/cycle peak, which is the entire cause of dropped STATUS
+// frames. 64 beats amortizes the bubble to 64/65=98.5%, so the drain sustains
+// ~1 beat/cycle on the single shared bus and dq stops accumulating. 64 beats =
+// 2 KiB (< AXI 4 KiB boundary) so no burst splitting on the page-aligned region.
+#define WATCHER_BURST_LEN 64
 #define WATCHER_FLUSH_TIMEOUT 16
 
 #define H_NULL 0
@@ -103,7 +109,7 @@ void watcher_runner(
 struct watcher_burst_cmd
 {
   uint64_t addr;
-  ap_uint<5> count;
+  ap_uint<8> count; // holds up to WATCHER_BURST_LEN (64); was ap_uint<5> for 16
 };
 
 // Helper: write a burst command to the selected channel's cmd queue.
@@ -127,15 +133,17 @@ static void watcher_route_cmd(
   }
 }
 
-// Distributor (telemetry fix #1): drains write_queue at II=1 and round-robins
-// each WATCHER_BURST_LEN-beat burst across the 8 channels' data+cmd queues. The
-// 8 channels are distinct AXI IDs to the SAME physical telemetry port; routing
-// consecutive bursts to different channels lets several bursts be in flight at
-// once, so the port's write-data channel stays saturated and the per-burst
-// dispatch latency that throttled the old single serial writer is hidden. A
-// global write_idx keeps the host readback stream contiguous. Drains at 1 beat/cycle,
-// matching the sampler's peak, so write_queue never backs up -> no dropped
-// frames. No telemetry is subsampled.
+// Distributor: drains write_queue at II=1 and round-robins each
+// WATCHER_BURST_LEN-beat burst across the 8 channels' data+cmd queues. The 8
+// channels are distinct AXI IDs to the SAME physical telemetry port (one shared
+// W bus, verified: never 2 channels write in the same cycle). They do NOT add
+// bandwidth; they overlap so the per-burst AW/restart bubble is hidden down to
+// ~1 idle cycle between bursts. With 16-beat bursts that 1-cycle bubble capped
+// sustained drain at 16/17=94%, just under the runner's 1-beat/cycle peak, so
+// dq slowly filled during bursts and the runner eventually dropped STATUS frames.
+// WATCHER_BURST_LEN=64 amortizes the bubble (64/65=98.5%) so the single bus
+// sustains ~1 beat/cycle and matches the sampler's peak. A global write_idx keeps
+// the host readback stream contiguous. No telemetry is subsampled.
 void watcher_distributor(
     hls::stream<ap_uint<256>> &write_queue,
     hls::stream<ap_uint<256>> &dq0, hls::stream<ap_uint<256>> &dq1,
@@ -149,8 +157,8 @@ void watcher_distributor(
     uint64_t start_addr)
 {
   static ap_uint<3> port = 0;
-  static ap_uint<5> burst_count = 0;
-  static ap_uint<5> idle_count = 0;
+  static ap_uint<8> burst_count = 0; // must reach WATCHER_BURST_LEN (64)
+  static ap_uint<5> idle_count = 0;  // only reaches WATCHER_FLUSH_TIMEOUT (16)
   static uint64_t write_idx = 0;
 
   while (true)
@@ -171,7 +179,7 @@ void watcher_distributor(
       case 6: dq6.write(beat); break;
       default: dq7.write(beat); break;
       }
-      ap_uint<5> next_count = burst_count + 1;
+      ap_uint<8> next_count = burst_count + 1;
       if (next_count == WATCHER_BURST_LEN)
       {
         watcher_burst_cmd cmd;
@@ -211,10 +219,17 @@ void watcher_distributor(
 }
 
 // One writer per channel; the 8 instances run concurrently in the dataflow
-// region. Full queues still issue WATCHER_BURST_LEN-beat bursts. Idle-flushed
-// partials issue only cmd.count beats, rather than padding the remaining slots
-// into physical writes; otherwise the regular BW samples amplify into a nearly
-// continuous telemetry write stream.
+// region. Full queues issue WATCHER_BURST_LEN-beat bursts; idle-flushed partials
+// issue only cmd.count beats. The loop bound is cmd.count (NOT a fixed
+// WATCHER_BURST_LEN with an `if (i < cmd.count)` guard): the fixed bound spun the
+// full 16 II=1 cycles even for a tiny partial, so during bursty-but-unsaturated
+// telemetry the writers wasted (16-count) cycles per burst and could not drain the
+// distributor's dq fast enough -> dq filled -> the distributor head-of-line-blocked
+// -> write_queue backed up -> the runner stalled and dropped STATUS transitions.
+// A cmd.count-bounded loop drains a partial in exactly count cycles. Vitis still
+// infers a (variable-length, count-beat) burst -- the count==16 full-burst path is
+// byte-identical to before, so peak throughput is unchanged; the tripcount pragma
+// bounds the schedule. VERIFY burst inference held in the synth report after edits.
 #define WATCHER_WRITER_FN(ID)                                                                  \
   static void watcher_writer_##ID(ap_uint<256> *mem,                                           \
                                   hls::stream<watcher_burst_cmd> &cmd_queue,                    \
@@ -223,14 +238,12 @@ void watcher_distributor(
     while (true)                                                                               \
     {                                                                                          \
       watcher_burst_cmd cmd = cmd_queue.read();                                                \
-      for (int i = 0; i < WATCHER_BURST_LEN; i++)                                              \
+      for (int i = 0; i < (int)cmd.count; i++)                                                 \
       {                                                                                        \
+        _Pragma("HLS loop_tripcount min = 1 max = 64")                                         \
         _Pragma("HLS pipeline II = 1")                                                         \
-        if (i < cmd.count)                                                                     \
-        {                                                                                      \
-          ap_uint<256> beat = data_queue.read();                                               \
-          mem[cmd.addr + i] = beat;                                                            \
-        }                                                                                      \
+        ap_uint<256> beat = data_queue.read();                                                 \
+        mem[cmd.addr + i] = beat;                                                              \
       }                                                                                        \
     }                                                                                          \
   }
@@ -265,14 +278,14 @@ void watcher(
     ap_uint<1> start_gate[1])             // first-task-dispatch from the spawn scheduler
 {
   // Memory Write Port: AXI4 Master (256-bit beats)
-#pragma HLS INTERFACE mode = m_axi port = mem_0 bundle = gmem channel = 0 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
-#pragma HLS INTERFACE mode = m_axi port = mem_1 bundle = gmem channel = 1 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
-#pragma HLS INTERFACE mode = m_axi port = mem_2 bundle = gmem channel = 2 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
-#pragma HLS INTERFACE mode = m_axi port = mem_3 bundle = gmem channel = 3 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
-#pragma HLS INTERFACE mode = m_axi port = mem_4 bundle = gmem channel = 4 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
-#pragma HLS INTERFACE mode = m_axi port = mem_5 bundle = gmem channel = 5 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
-#pragma HLS INTERFACE mode = m_axi port = mem_6 bundle = gmem channel = 6 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
-#pragma HLS INTERFACE mode = m_axi port = mem_7 bundle = gmem channel = 7 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 16 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_0 bundle = gmem channel = 0 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_1 bundle = gmem channel = 1 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_2 bundle = gmem channel = 2 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_3 bundle = gmem channel = 3 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_4 bundle = gmem channel = 4 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_5 bundle = gmem channel = 5 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_6 bundle = gmem channel = 6 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
+#pragma HLS INTERFACE mode = m_axi port = mem_7 bundle = gmem channel = 7 offset = direct latency = 48 num_write_outstanding = 16 max_write_burst_length = 64 max_widen_bitwidth = 256
 #pragma HLS INTERFACE mode = ap_none port = start_addr
 #pragma HLS INTERFACE ap_ctrl_none port = return
 
@@ -309,12 +322,18 @@ void watcher(
   hls::stream<ap_uint<2>> memReader_status_out_stream[N_memReader];
   hls::stream<ap_uint<2>> reentry0_status_in_stream[N_whileLoopMain_reentry0];
   hls::stream<ap_uint<2>> reentry0_status_out_stream[N_whileLoopMain_reentry0];
-#pragma HLS stream variable = cont0_status_in_stream depth = 32
-#pragma HLS stream variable = cont0_status_out_stream depth = 32
-#pragma HLS stream variable = memReader_status_in_stream depth = 32
-#pragma HLS stream variable = memReader_status_out_stream depth = 32
-#pragma HLS stream variable = reentry0_status_in_stream depth = 32
-#pragma HLS stream variable = reentry0_status_out_stream depth = 32
+// Burst-absorbing depth. Root cause of dropped STATUS frames is NOT write
+// bandwidth (measured: writers idle ~98%, HBM never backpressures) but shallow
+// FIFOs that cannot ride out correlated status-change bursts (runner emits at
+// its 1-beat/cycle ceiling for ~110-cyc stretches while avg demand is ~0.15).
+// These streams are 2-bit, so deep is nearly free; sized to hold the worst
+// observed burst so a tap never has to drop when the runner briefly stalls.
+#pragma HLS stream variable = cont0_status_in_stream depth = 256
+#pragma HLS stream variable = cont0_status_out_stream depth = 256
+#pragma HLS stream variable = memReader_status_in_stream depth = 256
+#pragma HLS stream variable = memReader_status_out_stream depth = 256
+#pragma HLS stream variable = reentry0_status_in_stream depth = 256
+#pragma HLS stream variable = reentry0_status_out_stream depth = 256
 #pragma HLS ARRAY_PARTITION variable = cont0_status_in_stream complete dim = 1
 #pragma HLS ARRAY_PARTITION variable = cont0_status_out_stream complete dim = 1
 #pragma HLS ARRAY_PARTITION variable = memReader_status_in_stream complete dim = 1
@@ -324,17 +343,22 @@ void watcher(
   hls::stream<ap_uint<1>> gate_stream;
 #pragma HLS stream variable = gate_stream depth = 32
   hls::stream<ap_uint<256>> write_queue;
-#pragma HLS stream variable = write_queue depth = 256
+// Runner's escape valve. Drain ceiling is a hard 1 beat/cycle (single shared
+// m_axi `gmem` bundle -- the 8 writer channels serialize, never 2 at once), which
+// equals the runner's 1-beat/cycle peak. During a burst the bus saturates (~93%)
+// but the ~7% arbitration overhead makes it briefly fall behind; this queue must
+// hold that integral so the runner never stalls and never drops a status frame.
+#pragma HLS stream variable = write_queue depth = 1024
   // Per-channel data + cmd queues; the 8 writers drain these concurrently.
   hls::stream<ap_uint<256>> dq0, dq1, dq2, dq3, dq4, dq5, dq6, dq7;
-#pragma HLS stream variable = dq0 depth = 64
-#pragma HLS stream variable = dq1 depth = 64
-#pragma HLS stream variable = dq2 depth = 64
-#pragma HLS stream variable = dq3 depth = 64
-#pragma HLS stream variable = dq4 depth = 64
-#pragma HLS stream variable = dq5 depth = 64
-#pragma HLS stream variable = dq6 depth = 64
-#pragma HLS stream variable = dq7 depth = 64
+#pragma HLS stream variable = dq0 depth = 128
+#pragma HLS stream variable = dq1 depth = 128
+#pragma HLS stream variable = dq2 depth = 128
+#pragma HLS stream variable = dq3 depth = 128
+#pragma HLS stream variable = dq4 depth = 128
+#pragma HLS stream variable = dq5 depth = 128
+#pragma HLS stream variable = dq6 depth = 128
+#pragma HLS stream variable = dq7 depth = 128
   hls::stream<watcher_burst_cmd> cq0, cq1, cq2, cq3, cq4, cq5, cq6, cq7;
 #pragma HLS stream variable = cq0 depth = 8
 #pragma HLS stream variable = cq1 depth = 8
@@ -639,26 +663,25 @@ void watcher_runner(
 }
 
 void whileLoopMain_reentry0_cont0(
-    void *mem,
     hls::stream<whileLoopMain_reentry0_cont0_task> &taskIn,
     hls::stream<whileLoopMain_reentry0_task> &taskOutGlobal)
 {
 
 #pragma HLS INTERFACE mode = axis port = taskIn
 #pragma HLS INTERFACE mode = axis port = taskOutGlobal
-#pragma HLS INTERFACE mode = m_axi port = mem
 #pragma HLS INTERFACE ap_ctrl_none port = return
 #pragma HLS PIPELINE II = 1 style = flp
-// Intentionally ignores the count RMW dependency: the next iteration must fetch
-// memory operands before it can revisit this count address, which should give
-// the writeback time to commit in this generated pipeline.
-#pragma HLS DEPENDENCE variable = mem inter false
 
   whileLoopMain_reentry0_cont0_task args = taskIn.read();
 
+  // The count lives in the closure now -- no HBM accumulator, so this PE needs no
+  // AXI port at all. The recursion is a single sequential chain
+  // (reentry0(i,j) -> memReaders -> cont0(i,j) -> reentry0(...)), so bumping the
+  // carried running value is the exact accumulation with no RMW hazard.
+  addr_t count = args.count;
   if ((args.a_i == args.b_j))
   {
-    (MEM_IN(mem, args.count, int)++);
+    count++;
     (args.i++);
     (args.j++);
   }
@@ -677,7 +700,8 @@ void whileLoopMain_reentry0_cont0(
   whileLoopMain_reentry0_args0._cont = args._cont;
   whileLoopMain_reentry0_args0.A = args.A;
   whileLoopMain_reentry0_args0.B = args.B;
-  whileLoopMain_reentry0_args0.count = args.count;
+  whileLoopMain_reentry0_args0.count = count;
+  whileLoopMain_reentry0_args0.count_final = args.count_final;
   whileLoopMain_reentry0_args0.size = args.size;
   whileLoopMain_reentry0_args0.i = args.i;
   whileLoopMain_reentry0_args0.j = args.j;
@@ -747,6 +771,7 @@ void whileLoopMain(
   whileLoopMain_reentry0_args1.A = args.A;
   whileLoopMain_reentry0_args1.B = args.B;
   whileLoopMain_reentry0_args1.count = args.count;
+  whileLoopMain_reentry0_args1.count_final = args.count_final;
   whileLoopMain_reentry0_args1.size = args.size;
   whileLoopMain_reentry0_args1.i = i;
   whileLoopMain_reentry0_args1.j = j;
@@ -758,18 +783,20 @@ void whileLoopMain(
 void whileLoopMain_reentry0(
     void *mem,
     hls::stream<whileLoopMain_reentry0_task> &taskIn,
-    hls::stream<memReader_task> &taskOutGlobal,
+    hls::stream<memReader_task> &taskOutGlobal1,
+    hls::stream<memReader_task> &taskOutGlobal2,
     hls::stream<uint64_t> &closureIn,
     hls::stream<whileLoopMain_reentry0_cont0_spawn_next> &spawnNext)
 {
 
 #pragma HLS INTERFACE mode = m_axi port = mem
 #pragma HLS INTERFACE mode = axis port = taskIn
-#pragma HLS INTERFACE mode = axis port = taskOutGlobal
+#pragma HLS INTERFACE mode = axis port = taskOutGlobal1
+#pragma HLS INTERFACE mode = axis port = taskOutGlobal2
 #pragma HLS INTERFACE mode = axis port = closureIn
 #pragma HLS INTERFACE mode = axis port = spawnNext
 #pragma HLS INTERFACE ap_ctrl_none port = return
-#pragma HLS PIPELINE II = 2 style = flp
+#pragma HLS PIPELINE II = 1 style = flp
 
   whileLoopMain_reentry0_task args = taskIn.read();
 
@@ -785,6 +812,7 @@ void whileLoopMain_reentry0(
     SN_whileLoopMain_reentry0_cont0c.i = args.i;
     SN_whileLoopMain_reentry0_cont0c.size = args.size;
     SN_whileLoopMain_reentry0_cont0c.count = args.count;
+    SN_whileLoopMain_reentry0_cont0c.count_final = args.count_final;
     SN_whileLoopMain_reentry0_cont0c.B = args.B;
     SN_whileLoopMain_reentry0_cont0c.A = args.A;
     SN_whileLoopMain_reentry0_cont0c.a_i = args.a_i;
@@ -793,23 +821,30 @@ void whileLoopMain_reentry0(
     SN_whileLoopMain_reentry0_cont0.addr = SN_whileLoopMain_reentry0_cont0c_k;
     SN_whileLoopMain_reentry0_cont0.data = SN_whileLoopMain_reentry0_cont0c;
     SN_whileLoopMain_reentry0_cont0.size = 6;
-    SN_whileLoopMain_reentry0_cont0.allow = SN_whileLoopMain_reentry0_cont0c_cnt;
+    SN_whileLoopMain_reentry0_cont0.allow0 = 1;
+    SN_whileLoopMain_reentry0_cont0.allow1 = 1;
     spawnNext.write(SN_whileLoopMain_reentry0_cont0);
 
     memReader_task memReader_args2;
     memReader_args2._cont = SN_whileLoopMain_reentry0_cont0c_k + offsetof(whileLoopMain_reentry0_cont0_task, a_i);
     memReader_args2.mem = args.A;
     memReader_args2.idx = args.i;
-    taskOutGlobal.write(memReader_args2);
+    taskOutGlobal1.write(memReader_args2);
 
     memReader_task memReader_args3;
     memReader_args3._cont = SN_whileLoopMain_reentry0_cont0c_k + offsetof(whileLoopMain_reentry0_cont0_task, b_j);
     memReader_args3.mem = args.B;
     memReader_args3.idx = args.j;
-    taskOutGlobal.write(memReader_args3);
+    taskOutGlobal2.write(memReader_args3);
   }
   else
   {
-    MEM_OUT(mem, args.count + sizeof(int32_t), int32_t, 1);
+    // Done: commit the final count + done flag as ONE 8-byte store so the host can
+    // never observe done=1 with a stale result (avoids the write-reorder hazard of
+    // two separate stores on the same port). Little-endian layout:
+    //   bytes [0..3] = final count   (host reads int32 @ count_final)
+    //   bytes [4..7] = done flag = 1 (host polls int32 @ count_final + 4)
+    uint64_t done_word = ((uint64_t)1 << 32) | (uint32_t)args.count;
+    MEM_OUT(mem, args.count_final, uint64_t, done_word);
   }
 }

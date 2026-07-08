@@ -4,10 +4,22 @@ import chisel3._
 import Util._
 import scala.math._
 
-class SchedulerLocalNetworkIO(peCount: Int, vssCount: Int, vasCount: Int, taskWidth: Int, queueDepth: Int) extends Bundle {
+class SchedulerLocalNetworkIO(
+    peCount: Int,
+    vssCount: Int,
+    vasCount: Int,
+    taskWidth: Int,
+    queueDepth: Int
+) extends Bundle {
   val connPE = Vec(peCount, new DequeInterface(taskWidth, queueDepth))
-  val connVSS = Vec(vssCount, new SchedulerNetworkClientIO(taskWidth)) // Connection to virtual steal server.
-  val connVAS = Vec(vasCount, new SchedulerNetworkClientIO(taskWidth)) // Connection to virtual argument servers.
+  val connVSS = Vec(
+    vssCount,
+    new SchedulerNetworkClientIO(taskWidth)
+  ) // Connection to virtual steal server.
+  val connVAS = Vec(
+    vasCount,
+    new SchedulerNetworkClientIO(taskWidth)
+  ) // Connection to virtual argument servers.
   val ntwDataUnitOccupancyVSS = Vec(vssCount, Output(Bool()))
   val lengths_of_hardware_queues = Vec(peCount, Output(UInt(8.W)))
 }
@@ -23,10 +35,17 @@ class SchedulerLocalNetwork(
     spawnsItself: Boolean,
     successiveNetworkConfig: Boolean
 ) extends Module {
-  val io = IO(new SchedulerLocalNetworkIO(peCount, vssCount, vasCount, taskWidth, queueDepth))
+  val io = IO(
+    new SchedulerLocalNetworkIO(
+      peCount,
+      vssCount,
+      vasCount,
+      taskWidth,
+      queueDepth
+    )
+  )
 
-  //assert(peCount >= vssCount)
-
+  // assert(peCount >= vssCount)
 
   // Create an array of indicies for the VSSs to be attached to in the stealing network,
   // the indicies should be between the indicies of the PEs with a mod operation.
@@ -39,7 +58,9 @@ class SchedulerLocalNetwork(
   }
 
   // Instantiate the stealing network.
-  val stealNet = Module(new SchedulerNetwork(taskWidth, peCount + vasCount + vssCount, vssIndicies))
+  val stealNet = Module(
+    new SchedulerNetwork(taskWidth, peCount + vasCount + vssCount, vssIndicies)
+  )
 
   var minLengthThresh = min(max((0.2 * queueDepth).asInstanceOf[Int], 1), 8)
 
@@ -67,21 +88,37 @@ class SchedulerLocalNetwork(
     )
   )
 
-  // Instantiate the task queues.
-  // N.B. The plus two for the queueDepth is a quick (and less complex) solution for the circular queue pointer arithmetic
-  val taskQueues = Seq.fill(peCount)(Module(new Deque(taskWidth, queueDepth + 2, qRamReadLatency, qRamWriteLatency)))
+  if (successiveNetworkConfig) {
+    // Instantiate the task queues.
+    // N.B. The plus two for the queueDepth is a quick (and less complex) solution for the circular queue pointer arithmetic
+    val taskQueues = Seq.fill(peCount)(
+      Module(
+        new Deque(taskWidth, queueDepth + 2, qRamReadLatency, qRamWriteLatency)
+      )
+    )
 
-  // Connect the task queues to the output of the module (connPE)
-  for (i <- 0 until peCount) {
-    taskQueues(i).io.connVec(0) <> io.connPE(i) // connVec(0) has priority in popping.
+    // Connect the task queues to the output of the module (connPE)
+    for (i <- 0 until peCount) {
+      taskQueues(i).io.connVec(0) <> io.connPE(
+        i
+      ) // connVec(0) has priority in popping.
 
-    
-    io.lengths_of_hardware_queues(i) := taskQueues(i).io.connVec(0).currLength
-  }
+      io.lengths_of_hardware_queues(i) := taskQueues(i).io.connVec(0).currLength
+    }
 
-  // Connect the stealing servers to the task queues
-  for (i <- 0 until peCount) {
-    taskQueues(i).io.connVec(1) <> stealServers(i).io.connQ
+    // Connect the stealing servers to the task queues
+    for (i <- 0 until peCount) {
+      taskQueues(i).io.connVec(1) <> stealServers(i).io.connQ.get
+    }
+  } else {
+    // Connect the PEs directly to the client
+    for (i <- 0 until peCount) {
+      stealServers(i).io.toPE.get <> io.connPE(
+        i
+      ) // connVec(0) has priority in popping.
+
+      io.lengths_of_hardware_queues(i) := stealServers(i).io.toPE.get.currLength
+    }
   }
 
   // Connect the stealNetwork to the stealing servers
@@ -135,7 +172,13 @@ class SchedulerLocalNetwork(
         // println("\t\tConnecting a vss")
         stealNet.io.connSS(i) <> io.connVSS(vssIndex)
         vssIndex += 1
-        vasAddedToTheChainFlag = 0
+        // Keep the flag SET after a scheduler server (vss) so the next node is a PE,
+        // not a spawner (vas). On the shift ring a spawner can only inject into an
+        // EMPTY upstream slot; placing a PE (drain) directly upstream of every spawner
+        // lets the spawner drain even when the ring is congested. Equivalently, this
+        // puts the spawner UPSTREAM of the scheduler, so the scheduler can pull the
+        // spawner's tasks back out instead of starving it of injection slots.
+        vasAddedToTheChainFlag = 1
       } else if (vasIndex < vasCount && vasAddedToTheChainFlag == 0) {
         // println("\t\tConnecting a vas")
         vasAddedToTheChainFlag = 1
@@ -156,5 +199,63 @@ class SchedulerLocalNetwork(
 
   for (i <- 0 until vssCount) {
     stealNet.io.ntwDataUnitOccupancyVSS(i) <> io.ntwDataUnitOccupancyVSS(i)
+  }
+
+  if (!successiveNetworkConfig && vssCount > 1) {
+    val placement = Array.fill(peCount + vssCount + vasCount)("empty")
+    var vssIndex = 0
+    var ssIndex = 0
+    var vasIndex = 0
+    var vasAddedToTheChainFlag = 0
+    for (i <- 0 until (peCount + vssCount + vasCount)) {
+      if (vssIndicies.contains(i)) {
+        placement(i) = "vss"
+        vssIndex += 1
+        vasAddedToTheChainFlag = 1 // match the connection loop: a PE follows a vss, not a vas
+      } else if (vasIndex < vasCount && vasAddedToTheChainFlag == 0) {
+        placement(i) = "vas"
+        vasIndex += 1
+        vasAddedToTheChainFlag = 1
+      } else if (ssIndex < peCount) {
+        placement(i) = "pe"
+        ssIndex += 1
+        vasAddedToTheChainFlag = 0
+      } else if (vasIndex < vasCount) {
+        placement(i) = "vas"
+        vasIndex += 1
+      }
+    }
+
+    val schedulerSlots = placement.zipWithIndex.collect { case ("vss", i) => i }
+    for (i <- schedulerSlots.indices) {
+      val start = schedulerSlots(i)
+      val end = schedulerSlots((i + 1) % schedulerSlots.length)
+      val slotsBetween =
+        if (start < end) placement.slice(start + 1, end)
+        else
+          placement
+            .slice(start + 1, placement.length) ++ placement.slice(0, end)
+      require(
+        slotsBetween.contains("pe"),
+        s"SchedulerLocalNetwork placement has no PE between scheduler servers: ${placement.mkString(" -> ")}"
+      )
+    }
+
+    val spawnerSlots = placement.zipWithIndex.collect { case ("vas", i) => i }
+    if (spawnerSlots.length > 1) {
+      for (i <- spawnerSlots.indices) {
+        val start = spawnerSlots(i)
+        val end = spawnerSlots((i + 1) % spawnerSlots.length)
+        val slotsBetween =
+          if (start < end) placement.slice(start + 1, end)
+          else
+            placement
+              .slice(start + 1, placement.length) ++ placement.slice(0, end)
+        require(
+          slotsBetween.contains("pe"),
+          s"SchedulerLocalNetwork placement has no PE between spawner servers: ${placement.mkString(" -> ")}"
+        )
+      }
+    }
   }
 }

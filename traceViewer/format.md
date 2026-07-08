@@ -197,7 +197,7 @@ bits `[8 + k*4 +: 4]`. Within a PE's 4 bits (LSB first):
 bit 0 : in_valid   (input queue: a task is being presented to the PE)
 bit 1 : in_ready   (input queue: the PE can accept a task this cycle)
 bit 2 : out_valid  (output queue: the PE is presenting a result)
-bit 3 : out_ready  (output queue: downstream can accept the result)
+bit 3 : out_ready  (output queue: the PE can retire the result)
 ```
 
 PE index → name is described by the embedded descriptor's `pes[]` table. The
@@ -222,8 +222,14 @@ STALLED  : in_valid == 1 && in_ready == 0 (task available, PE can't take it)
 ACTIVE   : in_valid == 1 && in_ready == 1 (task consumed this cycle)
 ```
 
-Also useful: a **task consumed** event = `in_valid && in_ready`; a **result pushed**
+Also useful: a **task consumed** event = `in_valid && in_ready`; a **result retired**
 event = `out_valid && out_ready`.
+
+For PE outputs wrapped by generated write buffers, `out_*` is the pre-buffer/raw PE
+completion boundary. If the PE emits coupled streams, such as `argDataOut` plus
+`argOut`, the watcher reports the combined fire condition: all coupled streams valid
+and all coupled streams ready. Downstream drain stalls after the write buffer become
+visible here only when backpressure fills the intervening buffer.
 
 ### Timing model
 STATUS bundles are **edge-triggered**: the watcher emits one when the 48-bit status
