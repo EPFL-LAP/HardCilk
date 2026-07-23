@@ -3,8 +3,8 @@
 // Shared, design-agnostic helpers for the free-running telemetry watcher's STATUS
 // stream. Everything here is DERIVED from the <design>.hbmports.json descriptor that
 // the architecture generator emits (and the host embeds in the trace header), so the
-// host needs no per-design edits when the PE count per task changes -- only the JSON
-// (numProcessingElements) and the watcher HLS N_ defines move.
+// host needs no per-design edits when the selected taps change. The watcher HLS
+// always exposes twenty-two generic physical slots; the descriptor maps them.
 
 #include <cstdint>
 #include <cstdlib>
@@ -16,20 +16,37 @@
 namespace hardcilk_telemetry
 {
 
-// One 32-byte beat carries two independent 128-bit bundles; a STATUS bundle packs the
-// monitored PEs' handshake bits, 4 bits per PE, at bit [peNumber*4 +: 4].
+// One 32-byte beat carries two independent 128-bit bundles; a STATUS bundle packs
+// twenty-two generic four-bit slots at bit [peNumber*4 +: 4]. Only descriptor
+// entries with kind="pe" use the canonical input/output PE handshake layout.
 static constexpr std::size_t kBeatBytes = 32;
 static constexpr int kStatusSlotBits = 4;
-// The STATUS word is 48 bits => at most 12 PE slots (12 * 4). The generator enforces
+// The STATUS field is 88 bits => at most 22 slots (22 * 4). The generator enforces
 // the same cap at build time; this mirrors it for a defensive host-side check.
-static constexpr int kMaxStatusPes = 48 / kStatusSlotBits;
+static constexpr int kMaxStatusPes = 88 / kStatusSlotBits;
 
 struct WatcherPe
 {
   int peNumber = 0;       // STATUS bit slot (== bit offset / 4)
+  std::string kind;       // pe for canonical PE slots, packed for all other field mixes
   std::string task;       // monitored task name (label + memReader-balance key)
   std::string statusPrefix;
+  int indexInTask = 0;
 };
+
+inline bool isSchedulerCongestionTap(const WatcherPe &pe)
+{
+  return pe.kind == "schedulerCongestion" ||
+         pe.statusPrefix == "sched_congested" ||
+         pe.statusPrefix == "schedulerCongestion";
+}
+
+inline bool isInternalHandshakeTap(const WatcherPe &pe)
+{
+  return (!pe.kind.empty() && pe.kind != "pe") ||
+         pe.task.rfind("internal:", 0) == 0 ||
+         pe.task.rfind("argumentCache:", 0) == 0;
+}
 
 // Extract a quoted string value for `key` from the object starting at `from`.
 inline std::string extractString(const std::string &s, std::size_t from,
@@ -50,10 +67,22 @@ inline std::string extractString(const std::string &s, std::size_t from,
   return s.substr(q1 + 1, q2 - q1 - 1);
 }
 
+inline int extractInt(const std::string &s, std::size_t from, const char *key,
+                      int fallback = 0)
+{
+  const auto k = s.find(key, from);
+  if (k == std::string::npos)
+    return fallback;
+  const auto colon = s.find(':', k);
+  if (colon == std::string::npos)
+    return fallback;
+  return static_cast<int>(std::strtol(s.c_str() + colon + 1, nullptr, 10));
+}
+
 // Parse the "pes" array of a <design>.hbmports.json descriptor. Minimal hand parser
-// (no JSON dependency): the entries are flat objects, so the first ']' after the
-// "pes" key closes the array, which excludes the later "ports" array (whose masters
-// also carry a "peNumber"). Returns PEs in file order == STATUS slot order.
+// (no JSON dependency): find the matching bracket for the pes array while allowing
+// nested scheduler-reference arrays. This excludes the later ports array (whose
+// masters also carry a peNumber). Returns entries in STATUS-slot order.
 inline std::vector<WatcherPe> parseWatcherPes(const std::string &json)
 {
   std::vector<WatcherPe> pes;
@@ -63,7 +92,33 @@ inline std::vector<WatcherPe> parseWatcherPes(const std::string &json)
   const auto lb = json.find('[', pesKey);
   if (lb == std::string::npos)
     return pes;
-  const auto rb = json.find(']', lb);
+  std::size_t rb = std::string::npos;
+  unsigned depth = 0;
+  bool inString = false;
+  bool escaped = false;
+  for (std::size_t i = lb; i < json.size(); ++i)
+  {
+    const char c = json[i];
+    if (inString)
+    {
+      if (escaped)
+        escaped = false;
+      else if (c == '\\')
+        escaped = true;
+      else if (c == '"')
+        inString = false;
+      continue;
+    }
+    if (c == '"')
+      inString = true;
+    else if (c == '[')
+      ++depth;
+    else if (c == ']' && --depth == 0)
+    {
+      rb = i;
+      break;
+    }
+  }
   if (rb == std::string::npos)
     return pes;
   const std::string block = json.substr(lb, rb - lb);
@@ -81,7 +136,9 @@ inline std::vector<WatcherPe> parseWatcherPes(const std::string &json)
                       : static_cast<int>(std::strtol(block.c_str() + colon + 1,
                                                      nullptr, 10));
     pe.task = extractString(block, p, "\"task\"");
+    pe.kind = extractString(block, p, "\"kind\"");
     pe.statusPrefix = extractString(block, p, "\"statusPrefix\"");
+    pe.indexInTask = extractInt(block, p, "\"indexInTask\"");
     pes.push_back(std::move(pe));
     pos = p + 1;
   }
@@ -101,7 +158,8 @@ struct StatusConservation
   std::vector<uint64_t> outputs;
   bool havePrev = false;
   uint64_t prevCycle = 0;
-  uint64_t prevStatus = 0;
+  uint64_t prevStatusLow = 0;
+  uint32_t prevStatusHigh = 0;
   std::size_t statusSamples = 0;
 
   StatusConservation() = default;
@@ -110,7 +168,7 @@ struct StatusConservation
   {
   }
 
-  void consumeSample(uint64_t cycle, uint64_t status48)
+  void consumeSample(uint32_t cycle, uint64_t statusLow, uint32_t statusHigh)
   {
     if (havePrev && cycle >= prevCycle)
     {
@@ -118,8 +176,10 @@ struct StatusConservation
       for (std::size_t idx = 0; idx < pes.size(); ++idx)
       {
         const int k = pes[idx].peNumber; // STATUS bit slot
-        const uint32_t nib =
-            static_cast<uint32_t>((prevStatus >> (k * kStatusSlotBits)) & 0xF);
+        const uint32_t nib = k < 16
+                                 ? static_cast<uint32_t>(
+                                       (prevStatusLow >> (k * kStatusSlotBits)) & 0xF)
+                                 : ((prevStatusHigh >> ((k - 16) * kStatusSlotBits)) & 0xF);
         const bool in_v = nib & 1, in_r = (nib >> 1) & 1;
         const bool out_v = (nib >> 2) & 1, out_r = (nib >> 3) & 1;
         if (in_v && in_r)
@@ -130,7 +190,8 @@ struct StatusConservation
     }
     havePrev = true;
     prevCycle = cycle;
-    prevStatus = status48;
+    prevStatusLow = statusLow;
+    prevStatusHigh = statusHigh;
     ++statusSamples;
   }
 
@@ -150,9 +211,12 @@ struct StatusConservation
         }
         if ((lo & 0xFF) != 1) // STATUS header == 1
           continue;
-        const uint64_t status48 = (lo >> 8) & 0xFFFFFFFFFFFFULL;
-        const uint64_t cycle = (lo >> 56) | (hi << 8);
-        consumeSample(cycle, status48);
+        // STATUS bits [95:8] are split across the two host words. Slots 0..15
+        // occupy statusLow; slots 16..21 occupy the low 24 bits of statusHigh.
+        const uint64_t statusLow = (lo >> 8) | (hi << 56);
+        const uint32_t statusHigh = static_cast<uint32_t>((hi >> 8) & 0xFFFFFF);
+        const uint32_t cycle = static_cast<uint32_t>(hi >> 32);
+        consumeSample(cycle, statusLow, statusHigh);
       }
     }
   }
@@ -174,12 +238,22 @@ struct StatusConservation
       return;
     }
 
-    std::cout << "[telemetry] STATUS conservation (handshake-cycles; memReader is "
-                 "strictly 1-in/1-out, so its delta should be 0):\n";
+    std::cout << "[telemetry] STATUS conservation for real PE handshakes "
+                 "(handshake-cycles; memReader is strictly 1-in/1-out, so its "
+                 "delta should be 0):\n";
     long long memReaderImbalance = 0;
     bool sawMemReader = false;
+    bool sawRealPe = false;
+    bool sawSchedulerTap = false;
     for (std::size_t idx = 0; idx < pes.size(); ++idx)
     {
+      if (isSchedulerCongestionTap(pes[idx]) || isInternalHandshakeTap(pes[idx]))
+      {
+        sawSchedulerTap = sawSchedulerTap || isSchedulerCongestionTap(pes[idx]);
+        continue;
+      }
+
+      sawRealPe = true;
       const long long d =
           static_cast<long long>(outputs[idx]) - static_cast<long long>(accepts[idx]);
       std::cout << "[telemetry]   PE " << pes[idx].peNumber << " " << pes[idx].task
@@ -191,15 +265,34 @@ struct StatusConservation
         memReaderImbalance += (d < 0 ? -d : d);
       }
     }
+    if (!sawRealPe)
+      std::cout << "[telemetry] STATUS conservation: no real PE rows monitored.\n";
+
+    if (sawSchedulerTap)
+    {
+      std::cout << "[telemetry] Scheduler congestion is packed by explicit JSON "
+                   "slot mapping; decode individual bits using the embedded descriptor.\n";
+      for (std::size_t idx = 0; idx < pes.size(); ++idx)
+      {
+        if (!isSchedulerCongestionTap(pes[idx]))
+          continue;
+        std::cout << "[telemetry]   slot " << pes[idx].peNumber << " "
+                  << pes[idx].task << " (packed congestion bits)\n";
+      }
+    }
+
     if (!sawMemReader)
       std::cout << "[telemetry] STATUS conservation: no memReader PE monitored; "
                    "deltas reported, no balance assertion applied.\n";
     else if (memReaderImbalance != 0)
+    {
+      std::cout.flush();
       std::cerr << "[telemetry] !! STATUS conservation off by " << memReaderImbalance
                 << " cycles across memReader PEs -> the watcher DROPPED STATUS frames "
                    "(lossy status telemetry); treat per-cycle status counts as "
                    "approximate. Duplicated/lost TASKS stay PE-balanced, so this is a "
                    "telemetry-integrity signal, not proof of a compute bug.\n";
+    }
     else
       std::cout << "[telemetry] STATUS conservation OK (memReader balanced; no dropped "
                    "status frames detected).\n";

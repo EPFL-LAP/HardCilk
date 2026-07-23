@@ -478,7 +478,7 @@ private:
           uint64_t beats_off = (32 + jlen + 31) & ~uint64_t(31);
           char hdr[32] = {0};
           std::memcpy(hdr, "HCKTRACE", 8);
-          uint32_t ver = 1;
+          uint32_t ver = 2;
           // offset 12: u32 flags. bit0 = run mode (1 = hw_emu/sw_emu, 0 = real HW).
           uint32_t flags = isEmulation() ? 0x1u : 0x0u;
           std::memcpy(hdr + 8, &ver, 4);
@@ -673,7 +673,7 @@ private:
     // in the cwd. If it is missing we print a LOUD warning and fall back to a
     // headerless trace (beats at offset 0) -- that is a misconfiguration, not a mode.
     // Layout when present (see traceViewer/format.md §0):
-    //   [0:8)  magic "HCKTRACE"   [8:12) u32 version=1   [12:16) u32 flags
+    //   [0:8)  magic "HCKTRACE"   [8:12) u32 version=2   [12:16) u32 flags
     //   [16:24) u64 json_length   [24:32) u64 beats_offset (32-aligned)
     //   [32 : 32+json_length) JSON descriptor, then zero pad to beats_offset.
     {
@@ -700,7 +700,7 @@ private:
         uint64_t beats_off = (32 + jlen + 31) & ~uint64_t(31); // 32-byte align
         char hdr[32] = {0};
         std::memcpy(hdr, "HCKTRACE", 8);
-        uint32_t ver = 1;
+        uint32_t ver = 2;
         // offset 12: u32 flags. bit0 = run mode (1 = hw_emu/sw_emu, 0 = real HW).
         uint32_t flags = isEmulation() ? 0x1u : 0x0u;
         std::memcpy(hdr + 8, &ver, 4);

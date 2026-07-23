@@ -7,6 +7,7 @@ import Descriptors._
 import Scheduler._
 import Allocator._
 import ArgumentNotifier._
+import NewArgumentNotifier._
 import HLSHelpers._
 import scala.collection.mutable.ArrayBuffer
 
@@ -55,6 +56,7 @@ trait HasHBMInterconnect extends Module {
       schedulerMap: Map[String, Scheduler],
       closureAllocatorMap: Map[String, Allocator],
       argumentNotifierMap: Map[String, ArgumentNotifier],
+      newArgumentNotifierMap: Map[String, ArgumentNetworks],
       memoryAllocatorMap: Map[String, Allocator],
       spawnNextWBMap: Map[String, Seq[WriteBuffer]],
       sendArgumentWBMap: Map[String, Seq[WriteBuffer]],
@@ -85,12 +87,18 @@ trait HasHBMInterconnect extends Module {
         task: TaskDescriptor
     ): Seq[(String, axi4.full.Interface)] = {
       val ports = new ArrayBuffer[(String, axi4.full.Interface)]()
-      pe.io.elements
-        .get("m_axi_spawnNext")
-        .foreach(p => ports.addOne(("spawnNext", p.asInstanceOf[axi4.RawInterface].asFull)))
-      pe.io.elements
-        .get("m_axi_argOut")
-        .foreach(p => ports.addOne(("argOut", p.asInstanceOf[axi4.RawInterface].asFull)))
+      val spawnTerminatesInNewNotifier = fullSysGenDescriptor.spawnNextList
+        .getOrElse(task.name, Nil)
+        .exists(name => newArgumentNotifierMap.contains(name))
+      val updateTerminatesInNewNotifier = fullSysGenDescriptor.sendArgumentList
+        .getOrElse(task.name, Nil)
+        .exists(name => newArgumentNotifierMap.contains(name))
+      if (!spawnTerminatesInNewNotifier)
+        pe.io.elements.get("m_axi_spawnNext").foreach(p =>
+          ports.addOne(("spawnNext", p.asInstanceOf[axi4.RawInterface].asFull)))
+      if (!updateTerminatesInNewNotifier)
+        pe.io.elements.get("m_axi_argOut").foreach(p =>
+          ports.addOne(("argOut", p.asInstanceOf[axi4.RawInterface].asFull)))
       if (task.hasAXI) {
         ports.addOne(("main", pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull))
       }
@@ -168,7 +176,6 @@ trait HasHBMInterconnect extends Module {
         }
       }
     }
-
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       spawnNextWBMap.get(task.name).foreach { wbArray =>
         wbArray.zipWithIndex.foreach { case (wb, wbIndex) =>
@@ -267,6 +274,23 @@ trait HasHBMInterconnect extends Module {
           interfacesArgumentNotifier.addOne(counterPort)
           interfacesArgumentNotifier.addOne(taskPort)
         }
+      }
+    }
+
+    newArgumentNotifierMap.foreach { case (taskName, notifier) =>
+      notifier.m_axi_slow.zipWithIndex.foreach { case (port, index) =>
+        argumentNotifierGroups.addOne(
+          HbmInterfaceGroup(
+            s"newArgumentNotifier:$taskName:slow:$index",
+            Seq(port), Seq("slow")))
+        interfacesArgumentNotifier.addOne(port)
+      }
+      notifier.m_axi_evict.zipWithIndex.foreach { case (port, index) =>
+        argumentNotifierGroups.addOne(
+          HbmInterfaceGroup(
+            s"newArgumentNotifier:$taskName:evict:$index",
+            Seq(port), Seq("evict")))
+        interfacesArgumentNotifier.addOne(port)
       }
     }
 
@@ -564,47 +588,48 @@ trait HasHBMInterconnect extends Module {
       regOwners(argumentNotifierGroups.toSeq)
       regOwners(remoteMemAccessGroups.toSeq)
 
-      // ---- STATUS PE# table -------------------------------------------------
-      // The watcher's 48-bit STATUS word packs the monitored groups CONTIGUOUSLY in
-      // monitored order: group g starts right after the previous group's PEs, so with
-      // one PE each the layout is adder:0, memReader:1, initiator:2 (no gaps). This
-      // MUST match the watcher HLS, which advances its pack offset by the running
-      // sum of the per-group N_ defines (memAccess.cpp: base = N_g0, then N_g0+N_g1),
-      // and the host StatusConservation, which numbers PEs 0..NPE-1 the same way.
-      // Emitting exactly `peCount` entries per group (the real instantiated count)
-      // makes this table an accurate map of the live STATUS slots and the true number
-      // of monitored PEs present.
-      // 48-bit STATUS word, 4 bits/PE -> at most 12 monitored PE slots. Must match
-      // MAX_STATUS_PES in the watcher HLS (memAccess.cpp).
-      val MaxStatusPes = 12
-      val monitored: Seq[(String, String)] =
-        fullSysGenDescriptor.watcherConfig.toSeq
-          .flatMap(_.monitored.map(m => (m.taskName, m.statusPrefix)))
-      val peBase = scala.collection.mutable.LinkedHashMap[String, Int]()
-      val pesEntries = scala.collection.mutable.ArrayBuffer[String]()
-      var peCursor = 0
-      monitored.foreach { case (taskName, statusPrefix) =>
-        val peCount = peMap.get(taskName).map(_.length).getOrElse(0)
-        peBase(taskName) = peCursor
-        for (i <- 0 until peCount)
-          pesEntries += s"""    {"peNumber": ${peCursor + i}, "task": "$taskName", "statusPrefix": "$statusPrefix", "indexInTask": $i}"""
-        peCursor += peCount
+      // ---- Explicit physical STATUS-slot table ------------------------------
+      // Each descriptor element maps directly to one of the fixed HLS status_0..21
+      // nibbles. The generated trace descriptor preserves the complete mapping so
+      // hosts/viewers never infer connectivity from PE counts or HLS array names.
+      val slots = fullSysGenDescriptor.watcherConfig.toSeq.flatMap(_.statusSlots)
+      val peSlots = scala.collection.mutable.Map[(String, Int), Int]()
+      val pesEntries = slots.zipWithIndex.map { case (slot, slotIndex) =>
+        val label = if (slot.label.nonEmpty) slot.label else s"statusSlot:$slotIndex"
+        val fieldsJson = slot.fields.map { field =>
+          val t = field.target
+          val selectorJson = t.kind match {
+            case "pe" | "slowUpdateHandler" | "evictionSaver" =>
+              s",\"port\":\"${t.port}\""
+            case "schedulerServer" =>
+              s",\"signal\":\"${t.signal}\""
+            case "argumentServer" =>
+              s""","port":"${t.port}","lane":${t.lane}"""
+            case _ => "" // rejected by descriptor validation before elaboration
+          }
+          s"""{"encoding":"${field.encoding}","target":{"kind":"${t.kind}","taskName":"${t.taskName}","index":${t.index}$selectorJson}}"""
+        }.mkString(",")
+        val peTargets = slot.fields.map(_.target).filter(_.kind == "pe")
+        // The host's PE conservation view interprets a canonical PE nibble as
+        // two ready/valid handshakes in descriptor order: input, then output.
+        // Keep every other legal packing visible as a generic packed slot.
+        val isPeSlot = slot.fields.size == 2 &&
+          slot.fields.forall(_.encoding == "readyValid2") &&
+          peTargets.size == slot.fields.size &&
+          peTargets.forall(t => t.taskName == peTargets.head.taskName && t.index == peTargets.head.index)
+        if (isPeSlot) {
+          val pe = peTargets.head
+          peSlots((pe.taskName, pe.index)) = slotIndex
+          s"""    {"peNumber": $slotIndex, "kind": "pe", "label": "$label", "task": "${pe.taskName}", "statusPrefix": "$label", "indexInTask": ${pe.index}, "fields": [$fieldsJson]}"""
+        } else {
+          s"""    {"peNumber": $slotIndex, "kind": "packed", "label": "$label", "task": "watcher:packed", "statusPrefix": "$label", "indexInTask": 0, "fields": [$fieldsJson]}"""
+        }
       }
-      if (peCursor > MaxStatusPes)
-        throw new RuntimeException(
-          s"watcher monitors $peCursor PEs total (" +
-            monitored
-              .map { case (t, _) => s"$t=${peMap.get(t).map(_.length).getOrElse(0)}" }
-              .mkString(", ") +
-            s") but the 48-bit STATUS word holds at most $MaxStatusPes (4 bits/PE). " +
-            "Reduce numProcessingElements on the monitored tasks (and the matching N_ " +
-            "defines in memAccess.cpp), or widen the STATUS word in the watcher HLS."
-        )
       val pesJson = pesEntries.mkString(",\n")
 
       // Map a port master's owner string to the STATUS PE# it belongs to, or None
       // for shared servers (scheduler/allocator/argumentNotifier) that are not a
-      // single monitored PE. Per-PE kinds carry the PE instance index as the 3rd
+      // single selected PE. Per-PE kinds carry the PE instance index as the 3rd
       // colon field (before any '#interface' suffix).
       val perPeKinds = Set("pe", "spawnNextWB", "sendArgumentWB")
       def peNumberOf(owner: String): Option[Int] = {
@@ -612,12 +637,7 @@ trait HasHBMInterconnect extends Module {
         if (parts.length >= 3 && perPeKinds.contains(parts(0))) {
           val task   = parts(1)
           val idxStr = parts(2).takeWhile(_ != '#')
-          (peBase.get(task), scala.util.Try(idxStr.toInt).toOption) match {
-            case (Some(base), Some(idx))
-                if idx < peMap.get(task).map(_.length).getOrElse(0) =>
-              Some(base + idx)
-            case _ => None
-          }
+          scala.util.Try(idxStr.toInt).toOption.flatMap(idx => peSlots.get((task, idx)))
         } else None
       }
 
@@ -641,7 +661,8 @@ $mastersJson
         s"""{
   "design": "${fullSysGenDescriptor.name}",
   "numComputePorts": ${hbmSlaves.count(_.nonEmpty)},
-  "note": "'pes' is the STATUS PE# table (watcher monitored order; the STATUS bundle numbers PEs the same way). Each port master carries 'role' (main = the m_axi_gmem compute port; argOut/argDataOut/spawnNext = argument/continuation write-buffer ports; ring/spawner = scheduler ports) and 'peNumber' = the STATUS PE# that owns it, or null for shared servers (scheduler/allocator/argumentNotifier). port index == watcher BW_READ/BW_WRITE tap index. owner = '<kind>:<task>:<index>[#<role>]'.",
+  "note": "'pes' is the configured physical STATUS-slot table. Each port master carries 'role' (main = the m_axi_gmem compute port; argOut/argDataOut/spawnNext = argument/continuation write-buffer ports; ring/spawner = scheduler ports) and 'peNumber' = the selected STATUS slot that owns it, or null for shared servers (scheduler/allocator/argumentNotifier). port index == watcher BW_READ/BW_WRITE tap index. owner = '<kind>:<task>:<index>[#<role>]'.",
+  "statusSlotSchema": {"slotBits": 4, "fieldOrder": "lowToHigh", "encodings": {"boolean1": {"bits": 1}, "readyValid2": {"bits": 2, "bit0": "valid", "bit1": "ready"}}},
   "pes": [
 $pesJson
   ],

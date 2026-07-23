@@ -175,23 +175,73 @@ class SchedulerRingInvariantTests extends AnyFlatSpec with ChiselScalatestTester
 
       val first = BigInt("9100", 16)
       val second = BigInt("9101", 16)
+      val third = BigInt("9102", 16)
 
       val (firstIn, firstOut, _, _) =
         stepGlobalTaskBuffer(dut, inValid = true, inBits = first, qOutReady = false)
-      sAssert(!firstIn, "first input task was accepted while qOutTask was backpressured")
+      sAssert(firstIn, "first input task was not buffered")
       sAssert(!firstOut, "task output fired while qOutTask was backpressured")
 
-      val (firstAccepted, firstQOut, firstBits, _) =
-        stepGlobalTaskBuffer(dut, inValid = true, inBits = first, qOutReady = true)
-      sAssert(firstAccepted, "first task was not accepted when qOutTask became ready")
-      sAssert(firstQOut, "first task did not output when qOutTask became ready")
+      val (secondIn, secondOut, _, _) =
+        stepGlobalTaskBuffer(dut, inValid = true, inBits = second, qOutReady = false)
+      sAssert(secondIn, "second input task was not buffered")
+      sAssert(!secondOut, "task output fired while qOutTask was backpressured")
+
+      val (thirdBlocked, thirdOutBlocked, _, _) =
+        stepGlobalTaskBuffer(dut, inValid = true, inBits = third, qOutReady = false)
+      sAssert(!thirdBlocked, "third input task was accepted into a full two-entry buffer")
+      sAssert(!thirdOutBlocked, "task output fired while qOutTask was backpressured")
+
+      val (thirdAccepted, firstQOut, firstBits, _) =
+        stepGlobalTaskBuffer(dut, inValid = true, inBits = third, qOutReady = true)
+      sAssert(thirdAccepted, "pipelined queue did not accept while dequeuing from full")
+      sAssert(firstQOut, "first buffered task did not output")
       sAssert(firstBits == first, s"firstBits=0x${firstBits.toString(16)}")
 
-      val (secondIn, secondQOut, secondBits, _) =
-        stepGlobalTaskBuffer(dut, inValid = true, inBits = second, qOutReady = true)
-      sAssert(secondIn, "second input task was not accepted")
+      val (_, secondQOut, secondBits, _) =
+        stepGlobalTaskBuffer(dut, qOutReady = true)
       sAssert(secondQOut, "second task did not output")
       sAssert(secondBits == second, s"secondBits=0x${secondBits.toString(16)}")
+
+      val (_, thirdQOut, thirdBits, _) =
+        stepGlobalTaskBuffer(dut, qOutReady = true)
+      sAssert(thirdQOut, "third task did not output")
+      sAssert(thirdBits == third, s"thirdBits=0x${thirdBits.toString(16)}")
+    }
+  }
+
+  it should "consume a steal request backed by a buffered task before data-ring insertion" in {
+    test(new GlobalTaskBuffer(taskWidth, peCount = 2)) { dut =>
+      dut.clock.setTimeout(0)
+      initGlobalTaskBuffer(dut)
+
+      val task = BigInt("9200", 16)
+      val (accepted, pushedImmediately, _, servedImmediately) =
+        stepGlobalTaskBuffer(
+          dut,
+          inValid = true,
+          inBits = task,
+          qOutReady = false,
+          serveReady = true)
+      sAssert(accepted, "task was not accepted into the empty buffer")
+      sAssert(!pushedImmediately, "task entered the blocked data ring")
+      sAssert(!servedImmediately, "same-cycle request consumption was not requested")
+
+      val (_, pushedWhileBlocked, _, servedEarly) =
+        stepGlobalTaskBuffer(dut, qOutReady = false, serveReady = true)
+      sAssert(!pushedWhileBlocked, "task entered the blocked data ring")
+      sAssert(servedEarly, "buffered task did not consume the parked steal request")
+
+      val (_, stillBlocked, _, servedTwice) =
+        stepGlobalTaskBuffer(dut, qOutReady = false, serveReady = true)
+      sAssert(!stillBlocked, "task entered the blocked data ring")
+      sAssert(!servedTwice, "one buffered task consumed more than one steal request")
+
+      val (_, pushed, pushedBits, servedOnPush) =
+        stepGlobalTaskBuffer(dut, qOutReady = true, serveReady = true)
+      sAssert(pushed, "reserved task did not enter the available data ring")
+      sAssert(pushedBits == task, s"pushedBits=0x${pushedBits.toString(16)}")
+      sAssert(!servedOnPush, "reserved task consumed a second steal request when pushed")
     }
   }
 

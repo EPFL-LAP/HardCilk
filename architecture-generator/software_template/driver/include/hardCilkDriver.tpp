@@ -99,21 +99,30 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); ++base_address, ++schedulerServerIndex){
                 const uint64_t root_task_count = rootShareOf(schedulerServerIndex);
                 const bool is_root_scheduler = root_task_count > 0;
+                const bool is_emulation = skipQueueZeroInEmu();
                 uint64_t scheduler_capacity = taskDescriptor.getCapacityVirtualQueue("scheduler");
-                if (skipQueueZeroInEmu()) {
+                if (is_emulation) {
                     uint64_t physical_capacity = getPhysicalSchedulerCapacity(taskDescriptor);
                     if (physical_capacity > 0 && physical_capacity < scheduler_capacity) {
-                        printf("        [hw_emu] Using physical scheduler capacity for %s (%lu entries instead of virtual %lu)\n",
+                        printf("        [hw_emu] Using expanded physical scheduler capacity for %s (%lu base entries instead of virtual %lu)\n",
                                taskDescriptor.name.c_str(), physical_capacity, scheduler_capacity);
                         scheduler_capacity = physical_capacity;
                     }
                 }
-                // Double the initial backing-store size. A mid-run resize copies +
+                // Expand the initial backing-store size. A mid-run resize copies +
                 // zeroes the queue inside the timed execution window, which hurts
-                // timing; provisioning 2x up front avoids most resizes. (If a
-                // resize still fires, manageSchedulerServer prints a warning so the
-                // initial size can be raised further.)
-                scheduler_capacity *= 2;
+                // timing; provisioning extra headroom up front avoids most resizes.
+                // HW already starts from the large virtual queue, so 2x is enough.
+                // hw_emu intentionally starts from the smaller physical queue to
+                // avoid huge zero-fills, so pre-apply several resize doublings at
+                // init time instead of servicing the queue mid-run. This is still
+                // tiny for emu-sized physical queues (e.g. memReader 64 -> 1024
+                // entries) and remains capped by the virtual queue size.
+                scheduler_capacity =
+                    is_emulation
+                        ? std::min<uint64_t>(scheduler_capacity * 16,
+                                             taskDescriptor.getCapacityVirtualQueue("scheduler"))
+                        : scheduler_capacity * 2;
                 if (is_root_scheduler &&
                     root_task_count + schedulerBurstEntries > scheduler_capacity) {
                     uint64_t grown_capacity =
@@ -122,8 +131,14 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                            taskDescriptor.name.c_str(), grown_capacity, root_task_count);
                     scheduler_capacity = grown_capacity;
                 }
-                // Allocate memory for the scheduler server
-                uint64_t addr = memory_->allocateMemFPGA(scheduler_capacity * taskDescriptor.widthTask/8, 512);
+                // Allocate memory for the scheduler server. The region key lets the
+                // smart-placement policy pin this ring to the HBM bank of the
+                // scheduler server's own ring port (port N -> bank N).
+                uint64_t addr = allocateDriverWriteRegion(
+                    scheduler_capacity * taskDescriptor.widthTask/8, 512,
+                    "scheduler backing queue",
+                    "sched:" + taskDescriptor.name + ":" +
+                        std::to_string(schedulerServerIndex));
                 
                 // Zero-fill the backing store. xrt-smi reset does NOT clear HBM, so
                 // a stale slot read (a slot counted in currLen but never written, or
@@ -206,33 +221,27 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             }
             
             // Allocate memory for all the allocation servers
-            for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++){
+            uint64_t allocationServerIndex = 0;
+            for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); ++base_address, ++allocationServerIndex){
                 const uint64_t allocator_capacity = taskDescriptor.getCapacityVirtualQueue("allocator");
                 const uint64_t continuation_entry_bytes = taskDescriptor.widthTask / 8;
-                const uint64_t max_block_bytes = 256ull * 1024 * 1024;
-                const uint64_t max_block_entries = max_block_bytes / continuation_entry_bytes;
 
-                // Continuations are indirect through this address list, so keep
-                // their backing BOs within individual HBM pseudo-channels.
-                std::vector<uint64_t> addresses;
-                addresses.reserve(allocator_capacity);
-                uint64_t entries_remaining = allocator_capacity;
-                while (entries_remaining > 0) {
-                    uint64_t block_entries = std::min(entries_remaining, max_block_entries);
-                    uint64_t block_addr = memory_->allocateMemFPGA(
-                        block_entries * continuation_entry_bytes, 512);
-                    taskDescriptor.mapServerAddressToClosureBaseAddress[*base_address].push_back(
-                        std::pair<uint64_t, int>(block_addr, static_cast<int>(block_entries)));
-                    for (uint64_t i = 0; i < block_entries; ++i) {
-                        uint64_t addr = block_addr + i * continuation_entry_bytes;
-                        addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56);
-                        addresses.push_back(addr);
-                    }
-                    entries_remaining -= block_entries;
-                }
+                // Continuations are indirect through this address list. In HBM
+                // distribution mode the FIFO is interleaved across bank-local
+                // blocks, so consecutive allocations land on different 512 MB
+                // pseudo-channel windows instead of marching through one bank.
+                std::vector<uint64_t> addresses = allocateContinuationAddressPool(
+                    taskDescriptor, *base_address, allocator_capacity,
+                    continuation_entry_bytes, fpgaId);
 
                 uint64_t continuation_queue_bytes = packedAllocatorAddressBytes(taskDescriptor.getCapacityVirtualQueue("allocator"), descriptor.widthAddress);
-                uint64_t continuation_queue_addr = memory_->allocateMemFPGA(continuation_queue_bytes, 512);
+                // Region key pins the allocator FIFO to its own read port's bank, so
+                // the allocator's read never traverses the crossbar laterally (which
+                // is what queued it behind the closure writes in the earlier freeze).
+                uint64_t continuation_queue_addr = allocateDriverWriteRegion(
+                    continuation_queue_bytes, 512, "allocator address FIFO",
+                    "alloc:" + taskDescriptor.name + ":" +
+                        std::to_string(allocationServerIndex));
 
                 // Write the addresses to the continuation queue
                 std::vector<uint8_t> packedAddresses = packAllocatorAddresses(addresses, descriptor.widthAddress);
@@ -259,8 +268,12 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 
                 uint64_t memory_allocator_queue_bytes = packedAllocatorAddressBytes(taskDescriptor.getCapacityVirtualQueue("memoryAllocator"), descriptor.widthAddress);
 
-                uint64_t  pre_allocated_memory_queue_addr = memory_->allocateMemFPGA(memory_allocator_queue_bytes, 512);
-                uint64_t  pre_allocated_memory_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 512);
+                uint64_t  pre_allocated_memory_queue_addr =
+                    allocateDriverWriteRegion(memory_allocator_queue_bytes, 512,
+                                              "memory allocator address FIFO");
+                uint64_t  pre_allocated_memory_addr = allocateDriverWriteRegion(
+                    taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count,
+                    512, "memory allocator storage");
 
                 // We need to write zeros to the pre_allocated_memory_addr    
                 std::vector<uint8_t> zeros(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 0);

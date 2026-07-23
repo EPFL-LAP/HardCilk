@@ -69,6 +69,7 @@ class Scheduler(
     peType: String,
     debug: Boolean,
     override val spawnerServerNumber: Int = 1,
+    spawnerQueueDepth: Int = 16,
     argRouteServersCreateTasks: Boolean = false,
     override val mfpgaSupport: Boolean = false,
     maxNumnberToStealOrServe: Int = 256,
@@ -93,27 +94,47 @@ class Scheduler(
 
   val spawnerServer =
     if (outsideSpawn)
-      Some(Seq.fill(spawnerServerNumber)(Module(new SpawnerServer(taskWidth))))
+      Some(Seq.fill(spawnerServerNumber)(Module(new SpawnerServer(taskWidth, queueDepth = spawnerQueueDepth))))
     else None
 
-  val step =
-    if (outsideSpawn)
-      (peCountGlobalTaskIn + argRouteServersNumber) / spawnerServerNumber
-    else 0
-  var spawnerIndicies = Array.tabulate(spawnerServerNumber)(n => (n + n * step))
-  var outTaskSpawnIndicies = Array.tabulate(
-    peCountGlobalTaskIn + argRouteServersNumber + spawnerServerNumber
-  )(n => (n))
-  outTaskSpawnIndicies =
-    outTaskSpawnIndicies.filterNot(spawnerIndicies.contains(_))
+  val outsideSpawnSourceCount = peCountGlobalTaskIn + argRouteServersNumber
+  val outsideSpawnNetworkSize =
+    if (outsideSpawn) max(outsideSpawnSourceCount, spawnerServerNumber) else 0
+
+  private def equallySpacedIndices(count: Int): Array[Int] =
+    if (count == 0) Array.empty[Int]
+    else Array.tabulate(count)(i => i * outsideSpawnNetworkSize / count)
+
+  val spawnerIndices =
+    if (outsideSpawn) equallySpacedIndices(spawnerServerNumber)
+    else Array.empty[Int]
+  // Sources are ordered by priority: global task buffers, fast argument lanes,
+  // then slow argument lanes. When sources outnumber spawners, give the
+  // highest-priority sources the co-located slots first.
+  val sourceIndices =
+    if (!outsideSpawn) Array.empty[Int]
+    else if (outsideSpawnSourceCount <= spawnerServerNumber)
+      equallySpacedIndices(outsideSpawnSourceCount)
+    else
+      spawnerIndices ++ Array
+        .tabulate(outsideSpawnNetworkSize)(i => i)
+        .filterNot(spawnerIndices.contains)
+  // The larger group occupies every slot; the smaller group is evenly spaced among it.
+  val pairedIndices =
+    if (outsideSpawnSourceCount <= spawnerServerNumber) sourceIndices.toSeq
+    else spawnerIndices.toSeq
+  val pairedInputIndexBySlot = pairedIndices.zipWithIndex.toMap
+  val bufferServerInputs =
+    Seq.fill(pairedIndices.size)(Module(new BufferServerInput(taskWidth)))
+
   val getOutsideSpawnNetwork =
     if (outsideSpawn)
       Some(
         Module(
           new SchedulerNetwork(
             taskWidth,
-            (peCountGlobalTaskIn + argRouteServersNumber) + spawnerServerNumber,
-            spawnerIndicies
+            outsideSpawnNetworkSize,
+            spawnerIndices
           )
         )
       )
@@ -124,27 +145,40 @@ class Scheduler(
     println(
       f"Outside spawn network size: ${getOutsideSpawnNetwork.get.io.connSS.size} connections"
     )
-    // log the indices of the spawner servers
-    println(f"Spawner server indices: ${spawnerIndicies.mkString(", ")}")
-    // log the indices of the outTaskSpawnIndicies
-    println(f"Out task spawn indices: ${outTaskSpawnIndicies.mkString(", ")}")
+    println(f"Spawner server indices: ${spawnerIndices.mkString(", ")}")
+    println(f"Task source indices: ${sourceIndices.mkString(", ")}")
   }
 
   if (outsideSpawn) {
     for (i <- 0 until spawnerServerNumber) {
-      spawnerServer
-        .get(i)
-        .asInstanceOf[SpawnerServer]
-        .io
-        .connNetwork_slave <> getOutsideSpawnNetwork.get.io.connSS(
-        spawnerIndicies(i)
-      )
+      val slot = spawnerIndices(i)
+      pairedInputIndexBySlot.get(slot) match {
+        case Some(inputIndex) =>
+          bufferServerInputs(inputIndex).io.connNetwork_slave <>
+            getOutsideSpawnNetwork.get.io.connSS(slot)
+          bufferServerInputs(inputIndex).io.connSpawnerServer <>
+            spawnerServer.get(i).io.connNetwork_slave
+        case None =>
+          spawnerServer.get(i).io.connNetwork_slave <>
+            getOutsideSpawnNetwork.get.io.connSS(slot)
+      }
 
-      // Log the connetion of these indicies in the outside spawn network
       println(
-        f"Spawner server ${i} connection to outside spawn network: ${getOutsideSpawnNetwork.get.io.connSS(spawnerIndicies(i)).toString()}"
+        f"Spawner server ${i} connection to outside spawn network: ${getOutsideSpawnNetwork.get.io.connSS(slot).toString()}"
       )
+    }
+  }
 
+  private def connectOutsideSpawnSource(
+      sourceIndex: Int,
+      source: SchedulerNetworkClientIO
+  ): Unit = {
+    val slot = sourceIndices(sourceIndex)
+    pairedInputIndexBySlot.get(slot) match {
+      case Some(inputIndex) =>
+        bufferServerInputs(inputIndex).io.connTaskSource <> source
+      case None =>
+        getOutsideSpawnNetwork.get.io.connSS(slot) <> source
     }
   }
 
@@ -213,18 +247,35 @@ class Scheduler(
     )
   )
 
+  // Management AXI-lite config for the per-server register blocks. Derived from
+  // the fixed RegisterBlock geometry (see SchedulerServer.regBlock) rather than
+  // indexing schedulerServers(0), so io_internal is well-defined even when this
+  // task has zero scheduler servers (a non-root task fed purely by spawn).
+  // Matches SchedulerServer.regBlock.cfgAxi (RegisterBlock(wAddr=6, wData=64).cfgAxi)
+  // built directly so no RegisterBlock (and its dangling s_axil Wire) is created.
+  private val schedulerMgmtCfg =
+    axi4.Config(wAddr = 6, wData = 64, lite = true)
+
   val io_internal = IO(
     new SchedulerAxiIO(
       addrWidth = addrWidth,
       taskWidth = taskWidth,
       vssCount = schedulerServersNumber,
-      axiMgmtCfg = schedulerServers(0).regBlock.cfgAxi,
+      axiMgmtCfg = schedulerMgmtCfg,
       vssAxiFullCfg = vssAxiFullCfg
     )
   )
 
   val io_paused = IO(Output(Bool()))
-  io_paused := schedulerServers.map(_.io.paused).reduce(_ || _)
+  // reduceOption: with zero scheduler servers there is nothing to pause.
+  io_paused := schedulerServers.map(_.io.paused).reduceOption(_ || _).getOrElse(false.B)
+
+  // Per-server networkCongested tap, exported in server order for the watcher's
+  // "sched_congested" telemetry group (see HardCilk.connectWatcher).
+  val io_congested = IO(Vec(schedulerServersNumber, Output(Bool())))
+  for (i <- 0 until schedulerServersNumber) {
+    io_congested(i) := schedulerServers(i).io.congested
+  }
 
   // DEBUG
   private val rCycleCounter = RegInit(0.U(128.W))
@@ -393,9 +444,10 @@ class Scheduler(
 
   if (argRouteServersNumber > 0 && outsideSpawn) { // && argRouteServersCreateTasks) { //
     for (i <- 0 until argRouteServersNumber) {
-      getOutsideSpawnNetwork.get.io.connSS(
-        outTaskSpawnIndicies(i)
-      ) <> connArgumentNotifier(i)
+      connectOutsideSpawnSource(
+        peCountGlobalTaskIn + i,
+        connArgumentNotifier(i)
+      )
     }
   } else {
     for (i <- 0 until argRouteServersNumber) {
@@ -414,25 +466,23 @@ class Scheduler(
     val globalsTaskBuffers = Seq.fill(peCountGlobalTaskIn)(
       Module(new GlobalTaskBuffer(taskWidth, peCount))
     )
-    for (
-      i <-
-        argRouteServersNumber until (argRouteServersNumber + peCountGlobalTaskIn)
-    ) {
+    for (i <- 0 until peCountGlobalTaskIn) {
 
       axis_stream_converters_in_global(
-        i - argRouteServersNumber
+        i
       ).io.dataIn.asLite <> io_export.taskInGlobal
-        .get(i - argRouteServersNumber)
+        .get(i)
         .asLite
       globalsTaskBuffers(
-        i - argRouteServersNumber
+        i
       ).io.in <> axis_stream_converters_in_global(
-        i - argRouteServersNumber
+        i
       ).io.dataOut.asLite
 
-      getOutsideSpawnNetwork.get.io.connSS(
-        outTaskSpawnIndicies(i)
-      ) <> globalsTaskBuffers(i - argRouteServersNumber).io.connStealNtw
+      connectOutsideSpawnSource(
+        i,
+        globalsTaskBuffers(i).io.connStealNtw
+      )
     }
   }
   buildMfpgaConnections()

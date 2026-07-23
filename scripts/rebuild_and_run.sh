@@ -11,6 +11,8 @@
 #   BENCHMARK=GraphColoring RUN_ARGS="/path/graph.txt 64 1 1200" bash scripts/rebuild_and_run.sh
 #   SKIP_HLS=1 bash scripts/rebuild_and_run.sh BFS
 #   START_STEP=5 bash scripts/rebuild_and_run.sh BFS 2
+#   HLS_CFLAGS=-DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=1 \
+#     bash scripts/rebuild_and_run.sh countDecoupled
 #
 # Watch progress from another shell with:  tail -f scripts/cycle.log
 # =============================================================================
@@ -32,8 +34,8 @@ declare -A HLS_KERNELS=(
   [ApproxDenseSub]="ApproxDenseSub vertex_subset_helper"
   [MaximalIndependentSet]="MaximalIndependentSet NGS mis_loop_helper"
   [GraphColoring]="GraphColoring color_init_helper color_loop_helper"
-  [triangleCountDecoupled]="whileLoopMain whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader watcher"
-  [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader watcher"
+  [triangleCountDecoupled]="whileLoopMain whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader"
+  [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader"
 )
 
 declare -A HOST_TARGET=(
@@ -131,6 +133,7 @@ echo "===== BENCHMARK $BENCHMARK ====="
 echo "WORKSPACE=$WORKSPACE_NAME"
 echo "START_STEP=$START_STEP"
 echo "RUN_ARGS=$RUN_ARGS"
+echo "HLS_CFLAGS=${HLS_CFLAGS:-<none>}"
 
 if (( START_STEP <= 1 )); then
   echo "===== STEP1 HLS ====="
@@ -144,6 +147,16 @@ if (( START_STEP <= 1 )); then
     bash build_hls_kernel/build_kernels.sh \
       -d "$ROOT/hls-processing-elements/mfpga/$BENCHMARK" -f 300 -p xcu55c-fsvh2892-2L-e \
       -o "$ROOT/hls-kernel-output/$BENCHMARK" -k "${KERNELS[@]}"
+
+    # The watcher is a reusable opt-in HLS block, not a benchmark PE. Build it
+    # into one shared output location whenever the selected descriptor includes
+    # watcherConfig. Designs without watcherConfig are completely unchanged.
+    DESCRIPTOR="$ROOT/architecture-generator/taskDescriptors/mfpga/$BENCHMARK.json"
+    if grep -q '"watcherConfig"' "$DESCRIPTOR"; then
+      bash build_hls_kernel/build_kernels.sh \
+        -d "$ROOT/hls-processing-elements/watcher" -f 300 -p xcu55c-fsvh2892-2L-e \
+        -o "$ROOT/hls-kernel-output/watcher" -k watcher
+    fi
   fi
 fi
 

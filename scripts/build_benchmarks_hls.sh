@@ -63,12 +63,12 @@
 #       ├── whileLoopMain_reentry0/
 #       ├── whileLoopMain_reentry0_cont0/
 #       ├── memReader/
-#       └── watcher/          ← telemetry kernel
+#   ├── watcher/
+#   │   └── watcher/          ← shared, opt-in telemetry kernel
 #   └── countDecoupled/
 #       ├── taskInitiator_reentry0/
 #       ├── taskAdder_cont0/
-#       ├── memReader/
-#       └── watcher/          ← telemetry kernel
+#       └── memReader/
 # =============================================================================
 
 set -euo pipefail
@@ -108,8 +108,8 @@ declare -A BENCHMARK_KERNELS=(
     [graphRandomWalk]="walker walk_gen"
     [pageRank]="page_rank_map vertex_map"
     [triangleCount]="triangle vertex_map"
-    [triangleCountDecoupled]="whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader watcher"
-    [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader watcher"
+    [triangleCountDecoupled]="whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader"
+    [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader"
 )
 
 # Ordered list so the build sequence is deterministic
@@ -221,6 +221,30 @@ for BENCH in "${TARGETS[@]}"; do
     fi
     echo
 done
+
+# Build the reusable watcher once when any selected benchmark opts into it.
+WATCHER_REQUESTED=false
+for BENCH in "${TARGETS[@]}"; do
+    DESCRIPTOR="${WORKSPACE}/architecture-generator/taskDescriptors/mfpga/${BENCH}.json"
+    if [[ -f "$DESCRIPTOR" ]] && grep -q '"watcherConfig"' "$DESCRIPTOR"; then
+        WATCHER_REQUESTED=true
+    fi
+done
+if [[ "$WATCHER_REQUESTED" == true ]]; then
+    DEBUG_FLAG=(); [[ "$DEBUG" == true ]] && DEBUG_FLAG=("-D")
+    if bash "$BUILD_SCRIPT" \
+            -d "${PE_ROOT}/watcher" \
+            -f "$FREQ_MHZ" \
+            -p "$PART" \
+            -o "${OUT_ROOT}/watcher" \
+            "${DEBUG_FLAG[@]}" \
+            -k watcher; then
+        success "Reusable watcher completed."
+    else
+        error "Reusable watcher failed."
+        FAIL+=("watcher")
+    fi
+fi
 
 # ── Global summary ────────────────────────────────────────────────────────────
 echo -e "${BOLD}╔══════════════════════════════ GLOBAL SUMMARY ════════════════════════════╗${NC}"

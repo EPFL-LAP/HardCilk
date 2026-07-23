@@ -17,7 +17,13 @@ class WriteBufferCounterConfig(
     val wAllow: Int,
     val wAllowData: Seq[Int],
     val wId: Int = 6,
-    val bufferDepth: Int = 128
+    val bufferDepth: Int = 128,
+    // When true, replace the rotating-ID WriteROB with a single-ID pass-through
+    // (WriteROBBypass). Experiment toggle; default false => unchanged RTL.
+    val bypassRob: Boolean = false,
+    val externalWriteSink: Boolean = false,
+    val releaseMetadataWidth: Int = 0,
+    val releaseMetadataOffset: Int = 0
 ) {
 
   assert(
@@ -26,13 +32,23 @@ class WriteBufferCounterConfig(
   )
   assert(nAllow >= 1, "There must be at least 1 type to pass through")
   assert(bufferDepth >= 1, "Buffer depth must be at least 1")
+  assert(releaseMetadataWidth >= 0)
+  if (releaseMetadataWidth > 0) {
+    assert(wAllow > 0, "Release metadata requires a nonzero allow-count width")
+    assert(nAllow == 1, "Release metadata currently supports one allow stream")
+    assert(
+      releaseMetadataOffset + releaseMetadataWidth <= wAllowData.head,
+      "Release metadata field must fit in the allow payload"
+    )
+  }
 
   def nAllow = wAllowData.size
 
   val cfgAxi = axi4.Config(
     wAddr = wAddr,
     wData = wData,
-    wId = wId
+    wId = wId,
+    read = !externalWriteSink
   )
 
   val cfgAxisAllows =
@@ -55,6 +71,11 @@ class WriteBundleCounter(
   val addr = UInt(wAddr.W)
 }
 
+class ReleaseCountMetadata(cfg: WriteBufferCounterConfig) extends Bundle {
+  val count = UInt(cfg.wAllow.W)
+  val metadata = UInt(cfg.releaseMetadataWidth.W)
+}
+
 class WriteBufferCounter(
     cfg: WriteBufferCounterConfig
 ) extends Module {
@@ -67,11 +88,26 @@ class WriteBufferCounter(
   private val robCfgOut = cfgAxi.copy(read = false)
   private val m_axi_single_id = Wire(axi4.Master(cfg = robCfgIn))
 
-  private val writeRob = Module(new WriteROB(robCfgIn, robCfgOut))
-  m_axi_single_id :=> writeRob.io.from_master
-  writeRob.io.to_slave.asFull.aw :=> m_axi.asFull.aw
-  writeRob.io.to_slave.asFull.w :=> m_axi.asFull.w
-  m_axi.asFull.b :=> writeRob.io.to_slave.asFull.b
+  // Rotating-ID reorder buffer, or (experiment) a single-ID pass-through. Both
+  // present the identical from_master/to_slave IO, so the surrounding wiring and
+  // the one-token-per-write release logic below are untouched either way.
+  if (externalWriteSink) {
+    m_axi_single_id.asFull.aw :=> m_axi.asFull.aw
+    m_axi_single_id.asFull.w :=> m_axi.asFull.w
+    m_axi.asFull.b :=> m_axi_single_id.asFull.b
+  } else if (bypassRob) {
+    val writeRob = Module(new WriteROBBypass(robCfgIn, robCfgOut))
+    m_axi_single_id :=> writeRob.io.from_master
+    writeRob.io.to_slave.asFull.aw :=> m_axi.asFull.aw
+    writeRob.io.to_slave.asFull.w :=> m_axi.asFull.w
+    m_axi.asFull.b :=> writeRob.io.to_slave.asFull.b
+  } else {
+    val writeRob = Module(new WriteROB(robCfgIn, robCfgOut))
+    m_axi_single_id :=> writeRob.io.from_master
+    writeRob.io.to_slave.asFull.aw :=> m_axi.asFull.aw
+    writeRob.io.to_slave.asFull.w :=> m_axi.asFull.w
+    m_axi.asFull.b :=> writeRob.io.to_slave.asFull.b
+  }
 
   if (cfgAxi.read) {
     m_axi.asFull.ar.noenq()
@@ -89,6 +125,10 @@ class WriteBufferCounter(
 
   val s_allows = cfgAxisAllows.map(c => IO(axi4s.Slave(c)))
   val m_allows = cfgAxisAllows.map(c => IO(axi4s.Master(c)))
+  val s_releaseMetadata =
+    if (releaseMetadataWidth > 0)
+      Some(IO(axi4s.Slave(axi4s.Config(wData = releaseMetadataWidth, onlyRV = true))))
+    else None
 
   // Implementation
   private val m_axi_ =
@@ -160,26 +200,57 @@ class WriteBufferCounter(
   }
 
   for (i <- 0 until nAllow) {
-    val replIn = Wire(DecoupledIO(UInt(wAllow.W)))
-    new elastic.Join(replIn) {
-      protected def onJoin: Unit = {
-        join(duplB(i))
-        out := join(numNext(i))
+    if (releaseMetadataWidth > 0) {
+      val replIn = Wire(DecoupledIO(new ReleaseCountMetadata(cfg)))
+      new elastic.Join(replIn) {
+        protected def onJoin: Unit = {
+          join(duplB(i))
+          out.count := join(numNext(i))
+          out.metadata := join(s_releaseMetadata.get.asLite)
+        }
       }
-    }
 
-    val token = Wire(DecoupledIO(Bool()))
-    new elastic.Replicate(replIn, token, wAllow) {
-      protected def onReplicate: Unit = {
-        len := in
-        out := true.B
+      val metadataToken = Wire(DecoupledIO(UInt(releaseMetadataWidth.W)))
+      new elastic.Replicate(replIn, metadataToken, wAllow) {
+        protected def onReplicate: Unit = {
+          len := in.count
+          out := in.metadata
+        }
       }
-    }
 
-    new elastic.Join(m_allows_(i)) {
-      protected def onJoin: Unit = {
-        join(token)
-        out := join(s_allows_(i))
+      new elastic.Join(m_allows_(i)) {
+        protected def onJoin: Unit = {
+          val metadata = join(metadataToken)
+          val allow = join(s_allows_(i))
+          val mask =
+            (((BigInt(1) << releaseMetadataWidth) - 1) << releaseMetadataOffset)
+              .U(wAllowData(i).W)
+          out := (allow.asUInt & ~mask) |
+            ((metadata.asUInt.pad(wAllowData(i)) << releaseMetadataOffset)(wAllowData(i) - 1, 0))
+        }
+      }
+    } else {
+      val replIn = Wire(DecoupledIO(UInt(wAllow.W)))
+      new elastic.Join(replIn) {
+        protected def onJoin: Unit = {
+          join(duplB(i))
+          out := join(numNext(i))
+        }
+      }
+
+      val token = Wire(DecoupledIO(Bool()))
+      new elastic.Replicate(replIn, token, wAllow) {
+        protected def onReplicate: Unit = {
+          len := in
+          out := true.B
+        }
+      }
+
+      new elastic.Join(m_allows_(i)) {
+        protected def onJoin: Unit = {
+          join(token)
+          out := join(s_allows_(i))
+        }
       }
     }
   }

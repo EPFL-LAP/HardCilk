@@ -1,9 +1,23 @@
 #include "hardCilkDriver.h"
 
+#if __has_include(<xrt/xrt_bo.h>)
+#define HC_HAS_XRT_MEMORY 1
+#include "memIO_xrt.h"
+#else
+#define HC_HAS_XRT_MEMORY 0
+#endif
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
+#include <dirent.h>
+#include <fstream>
+#include <set>
+#include <signal.h>
 #include <sstream>
+#include <termios.h>
+#include <thread>
 
 namespace
 {
@@ -51,9 +65,53 @@ void copyPagePaddedToDevice(Memory *memory, uint64_t destAddr,
     std::memcpy(padded.data(), src, bytes);
     memory->copyToDevice(destAddr, padded.data(), padded.size());
 }
+
+// Read /proc/<pid>/stat and return the parent pid + executable name. Returns
+// false if the entry is unreadable (process already gone). The comm field can
+// itself contain spaces and ')', so isolate it on the LAST ')' rather than
+// tokenising the whole line.
+bool readProcStat(pid_t pid, pid_t &ppid, std::string &comm)
+{
+    std::ifstream f("/proc/" + std::to_string(pid) + "/stat");
+    if (!f)
+        return false;
+    std::string line;
+    std::getline(f, line);
+    std::string::size_type lp = line.find('(');
+    std::string::size_type rp = line.rfind(')');
+    if (lp == std::string::npos || rp == std::string::npos || rp < lp)
+        return false;
+    comm = line.substr(lp + 1, rp - lp - 1);
+    std::istringstream rest(line.substr(rp + 1));
+    char state = 0;
+    ppid = 0;
+    rest >> state >> ppid;
+    return true;
+}
 } // namespace
 
 volatile std::sig_atomic_t hardCilkDriver::stop_requested_ = 0;
+volatile std::sig_atomic_t hardCilkDriver::force_requested_ = 0;
+
+// Saved controlling-terminal settings, captured before the hw_emu simulator is
+// launched. The simulator can leave the tty in a raw / no-echo state (it drops to
+// an interactive prompt on signals); restoring this on every exit path keeps the
+// shell usable afterwards.
+static struct termios g_savedTermios;
+static bool g_savedTermiosValid = false;
+
+void hardCilkDriver::saveTerminalState()
+{
+    if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &g_savedTermios) == 0)
+        g_savedTermiosValid = true;
+}
+
+void hardCilkDriver::restoreTerminalState()
+{
+    // Async-signal-safe enough for the force path: tcsetattr is a single syscall.
+    if (g_savedTermiosValid)
+        tcsetattr(STDIN_FILENO, TCSANOW, &g_savedTermios);
+}
 
 hardCilkDriver::hardCilkDriver(Memory *memory)
 {
@@ -68,24 +126,33 @@ hardCilkDriver::~hardCilkDriver()
 
 void hardCilkDriver::requestStop(int signal)
 {
+    (void)signal;
+    // printf/std::cerr are NOT async-signal-safe; calling them from a signal
+    // handler is undefined and can itself deadlock. Only set flags and write(2)
+    // here -- the heavy lifting (killing the simulator) is done by the supervisor
+    // thread, which is async-signal-safe to trigger via a flag.
     if (stop_requested_)
     {
-        // Second Ctrl-C: the graceful path did not unwind in time (typically the
-        // process is blocked inside a device read/DMA that swallowed the first
-        // interrupt). Restore the default disposition and re-raise so the process
-        // actually terminates instead of appearing to hang forever.
-        std::signal(signal, SIG_DFL);
-        std::raise(signal);
+        // Second Ctrl-C: the user wants out NOW and is willing to forgo a clean
+        // telemetry dump / waveform finalize. Ask the supervisor to hard-exit
+        // (which also kills the simulator so no orphaned xsim is left behind).
+        force_requested_ = 1;
+        static const char msg2[] =
+            "\n[hardCilk] second interrupt: forcing shutdown now "
+            "(telemetry/waveform may be incomplete)\n";
+        ssize_t w2 = ::write(STDERR_FILENO, msg2, sizeof(msg2) - 1);
+        (void)w2;
         return;
     }
+    // First Ctrl-C: request a GRACEFUL stop. The poll loop breaks out, then the
+    // run unwinds normally -- it still dumps telemetry and lets the simulator
+    // finalize/save its waveform during device teardown. Do NOT force anything
+    // here; let the clean path run to completion.
     stop_requested_ = 1;
-    // printf/std::cerr are NOT async-signal-safe; calling them from a signal
-    // handler is undefined and can itself deadlock. Use write(2) so the first
-    // Ctrl-C gives immediate feedback -- previously it set the flag silently, so
-    // any poll loop that ignored the flag looked frozen with no output.
     static const char msg[] =
-        "\n[hardCilk] interrupt received; stopping after the current poll "
-        "(press Ctrl-C again to force quit)\n";
+        "\n[hardCilk] interrupt received; stopping gracefully -- will finish the "
+        "current work, dump telemetry, and save the waveform.\n"
+        "[hardCilk] press Ctrl-C again to force-quit immediately.\n";
     ssize_t written = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
     (void)written;
 }
@@ -104,6 +171,338 @@ void hardCilkDriver::installSignalHandlers()
 {
     std::signal(SIGINT, hardCilkDriver::requestStop);
     std::signal(SIGTERM, hardCilkDriver::requestStop);
+    startInterruptSupervisor();
+}
+
+void hardCilkDriver::terminateSimulator(int sig)
+{
+    // Under XCL_EMULATION_MODE=hw_emu the Xilinx simulator (xsim + xsimk) runs as
+    // a CHILD of this host process. Because the watcher CU is ap_ctrl_none it
+    // never halts, so `run all` never returns and a forced _exit() would ORPHAN
+    // the simulator -- it keeps running and pins gigabytes of deleted /tmp .vcd
+    // files. Walk /proc, collect (pid -> ppid, comm), then kill the descendants
+    // of OUR pid whose executable is xsim/xsimk. Scoped strictly to our own
+    // descendants so a co-user's or unrelated simulation is never touched.
+    DIR *dir = opendir("/proc");
+    if (dir == nullptr)
+        return;
+    std::map<pid_t, pid_t> ppidOf;
+    std::map<pid_t, std::string> commOf;
+    for (struct dirent *ent = readdir(dir); ent != nullptr; ent = readdir(dir))
+    {
+        char *endp = nullptr;
+        long v = std::strtol(ent->d_name, &endp, 10);
+        if (endp == ent->d_name || *endp != '\0' || v <= 0)
+            continue; // not a pid directory
+        pid_t pid = static_cast<pid_t>(v);
+        pid_t ppid = 0;
+        std::string comm;
+        if (readProcStat(pid, ppid, comm))
+        {
+            ppidOf[pid] = ppid;
+            commOf[pid] = comm;
+        }
+    }
+    closedir(dir);
+
+    // Build the child adjacency and BFS the descendant set of our own pid.
+    std::map<pid_t, std::vector<pid_t>> children;
+    for (const auto &kv : ppidOf)
+        children[kv.second].push_back(kv.first);
+    std::set<pid_t> descendants;
+    std::vector<pid_t> frontier = children[getpid()];
+    while (!frontier.empty())
+    {
+        pid_t p = frontier.back();
+        frontier.pop_back();
+        if (!descendants.insert(p).second)
+            continue;
+        for (pid_t c : children[p])
+            frontier.push_back(c);
+    }
+
+    for (pid_t p : descendants)
+    {
+        // "xsim" also matches "xsimk" (the kernel simulator worker).
+        if (commOf[p].find("xsim") != std::string::npos)
+            ::kill(p, sig);
+    }
+}
+
+void hardCilkDriver::startInterruptSupervisor()
+{
+    static std::atomic_bool started{false};
+    bool expected = false;
+    if (!started.compare_exchange_strong(expected, true))
+        return; // one supervisor per process
+
+    std::thread([]() {
+        using namespace std::chrono;
+        // Wait for the first interrupt (or an immediate force).
+        while (!stopRequested() && force_requested_ == 0)
+            std::this_thread::sleep_for(milliseconds(100));
+        // First Ctrl-C is a GRACEFUL stop: the run keeps unwinding so it can dump
+        // telemetry and let the simulator save its waveform. Because the emulator
+        // was launched with SIGINT inherited as SIG_IGN, xsim does NOT pause on the
+        // Ctrl-C and keeps servicing those reads, so the clean path completes and
+        // the process exits normally (this thread is then reaped) well within the
+        // window below. The deadline is only a last-resort backstop so a wedged
+        // simulator can never hang the shell forever. A SECOND Ctrl-C
+        // (force_requested_) skips the wait entirely.
+        const auto deadline = steady_clock::now() + seconds(600);
+        while (force_requested_ == 0 && steady_clock::now() < deadline)
+            std::this_thread::sleep_for(milliseconds(100));
+        static const char msg[] =
+            "\n[hardCilk] forcing shutdown and terminating simulator\n";
+        ssize_t written = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        (void)written;
+        // Kill the simulator first (it may be holding the tty at its prompt), THEN
+        // restore the terminal so the shell is usable, then exit.
+        terminateSimulator(SIGKILL);
+        restoreTerminalState();
+        _exit(130); // 128 + SIGINT
+    }).detach();
+}
+
+void hardCilkDriver::setHbmWriteDistribution(bool enabled, int firstBank,
+                                             int lastBank,
+                                             uint64_t continuationBankRunEntries)
+{
+    if (firstBank < 0 || lastBank < firstBank || lastBank >= 32)
+        throw std::runtime_error("setHbmWriteDistribution: invalid bank range");
+    hbm_write_distribution_ = enabled;
+    hbm_write_first_bank_ = firstBank;
+    hbm_write_last_bank_ = lastBank;
+    hbm_write_next_bank_ = firstBank;
+    hbm_continuation_bank_run_entries_ =
+        std::max<uint64_t>(1, continuationBankRunEntries);
+    // Reset the smart-placement overlays; the app driver re-applies any it wants
+    // AFTER this call. Default => closure stride uses the full [first,last] window
+    // and no region is pinned (identical to the pre-smart-placement behaviour).
+    hbm_continuation_first_bank_ = -1;
+    hbm_continuation_last_bank_ = -1;
+    hbm_region_bank_override_.clear();
+}
+
+void hardCilkDriver::setContinuationBankRange(int firstBank, int lastBank)
+{
+    if (firstBank < 0 || lastBank < firstBank || lastBank >= 32)
+        throw std::runtime_error("setContinuationBankRange: invalid bank range");
+    hbm_continuation_first_bank_ = firstBank;
+    hbm_continuation_last_bank_ = lastBank;
+}
+
+void hardCilkDriver::setRegionBankOverride(const std::string &regionKey, int bank)
+{
+    if (bank < 0 || bank >= 32)
+        throw std::runtime_error("setRegionBankOverride: invalid bank");
+    hbm_region_bank_override_[regionKey] = bank;
+}
+
+uint64_t hardCilkDriver::allocateDriverWriteRegion(uint64_t size,
+                                                   uint64_t alignment,
+                                                   const char *label,
+                                                   const std::string &regionKey)
+{
+    if (!hbm_write_distribution_)
+        return memory_->allocateMemFPGA(size, alignment);
+
+#if HC_HAS_XRT_MEMORY
+    XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
+    if (xrtMem == nullptr)
+        return memory_->allocateMemFPGA(size, alignment);
+
+    // Smart placement: if this region has an exact bank pin, honour it (this is how
+    // "port N's region -> bank N" is realized). No round-robin advance for pinned
+    // regions, so they don't perturb the stride cursor other regions share.
+    if (!regionKey.empty())
+    {
+        auto it = hbm_region_bank_override_.find(regionKey);
+        if (it != hbm_region_bank_override_.end())
+        {
+            const int bank = it->second;
+            uint64_t addr =
+                xrtMem->allocateMemFPGAInBankRange(size, alignment, bank, bank);
+            std::cout << "[hbm-dist] " << label << " (" << regionKey
+                      << ") -> HBM[" << bank << "] addr=0x" << std::hex << addr
+                      << std::dec << " bytes=" << size << " (pinned)\n";
+            return addr;
+        }
+    }
+
+    const int first = hbm_write_first_bank_;
+    const int last = hbm_write_last_bank_;
+    const int count = last - first + 1;
+    const int start = hbm_write_next_bank_;
+    std::string lastError;
+    for (int attempt = 0; attempt < count; ++attempt)
+    {
+        const int bank = first + ((start - first + attempt) % count);
+        try
+        {
+            uint64_t addr =
+                xrtMem->allocateMemFPGAInBankRange(size, alignment, bank, bank);
+            hbm_write_next_bank_ = first + ((bank - first + 1) % count);
+            std::cout << "[hbm-dist] " << label << " -> HBM[" << bank
+                      << "] addr=0x" << std::hex << addr << std::dec
+                      << " bytes=" << size << "\n";
+            return addr;
+        }
+        catch (const std::exception &e)
+        {
+            lastError = e.what();
+        }
+    }
+
+    std::cerr << "[hbm-dist] could not pin " << label
+              << " to one HBM bank (" << lastError
+              << "); falling back to range allocation\n";
+    return xrtMem->allocateMemFPGAInBankRange(size, alignment, first, last);
+#else
+    return memory_->allocateMemFPGA(size, alignment);
+#endif
+}
+
+std::vector<uint64_t> hardCilkDriver::allocateContinuationAddressPool(
+    TaskDescriptor &taskDescriptor, uint64_t base_address,
+    uint64_t allocator_capacity, uint64_t entry_bytes, int fpgaId)
+{
+    auto tagFpga = [&](uint64_t addr) {
+        return (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56);
+    };
+
+    const uint64_t max_block_bytes = 256ull * 1024 * 1024;
+    const uint64_t max_block_entries =
+        std::max<uint64_t>(1, max_block_bytes / entry_bytes);
+
+    if (!hbm_write_distribution_)
+    {
+        std::vector<uint64_t> addresses;
+        addresses.reserve(allocator_capacity);
+        uint64_t entries_remaining = allocator_capacity;
+        while (entries_remaining > 0)
+        {
+            uint64_t block_entries = std::min(entries_remaining, max_block_entries);
+            uint64_t block_addr = memory_->allocateMemFPGA(
+                block_entries * entry_bytes, 512);
+            taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(
+                std::pair<uint64_t, int>(block_addr, static_cast<int>(block_entries)));
+            for (uint64_t i = 0; i < block_entries; ++i)
+                addresses.push_back(tagFpga(block_addr + i * entry_bytes));
+            entries_remaining -= block_entries;
+        }
+        return addresses;
+    }
+
+#if HC_HAS_XRT_MEMORY
+    XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
+    if (xrtMem == nullptr)
+#endif
+    {
+        std::cerr << "[hbm-dist] memory is not XRTMemory; continuation pool "
+                     "falls back to ordinary allocation\n";
+        const bool saved = hbm_write_distribution_;
+        hbm_write_distribution_ = false;
+        std::vector<uint64_t> addresses = allocateContinuationAddressPool(
+            taskDescriptor, base_address, allocator_capacity, entry_bytes, fpgaId);
+        hbm_write_distribution_ = saved;
+        return addresses;
+    }
+
+#if HC_HAS_XRT_MEMORY
+    // Closures stride across their dedicated sub-range when one is configured
+    // (keeping the hot closure writes off the scheduler-ring / allocator-FIFO
+    // banks); otherwise they use the full write window as before.
+    const bool haveContRange =
+        hbm_continuation_first_bank_ >= 0 && hbm_continuation_last_bank_ >= 0;
+    const int first =
+        haveContRange ? hbm_continuation_first_bank_ : hbm_write_first_bank_;
+    const int last =
+        haveContRange ? hbm_continuation_last_bank_ : hbm_write_last_bank_;
+    const int bank_count = last - first + 1;
+    // Start the stride at the low end of the dedicated range (deterministic and
+    // self-contained); only the shared full-window path follows the RR cursor.
+    const int start_bank = haveContRange ? first : hbm_write_next_bank_;
+    std::vector<std::vector<uint64_t>> perBank(static_cast<size_t>(bank_count));
+    uint64_t remaining = allocator_capacity;
+    while (remaining > 0)
+    {
+        bool madeProgress = false;
+        for (int offset = 0; offset < bank_count && remaining > 0; ++offset)
+        {
+            const int bank = first + ((start_bank - first + offset) % bank_count);
+            uint64_t block_entries = std::min(remaining, max_block_entries);
+            uint64_t block_addr = 0;
+            while (block_entries > 0)
+            {
+                try
+                {
+                    block_addr = xrtMem->allocateMemFPGAInBankRange(
+                        block_entries * entry_bytes, 512, bank, bank);
+                    break;
+                }
+                catch (const std::exception &)
+                {
+                    block_entries /= 2;
+                }
+            }
+            if (block_entries == 0)
+                continue;
+
+            taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(
+                std::pair<uint64_t, int>(block_addr, static_cast<int>(block_entries)));
+            std::vector<uint64_t> &bankAddresses =
+                perBank[static_cast<size_t>(bank - first)];
+            bankAddresses.reserve(bankAddresses.size() + block_entries);
+            for (uint64_t i = 0; i < block_entries; ++i)
+                bankAddresses.push_back(tagFpga(block_addr + i * entry_bytes));
+            std::cout << "[hbm-dist] continuation storage -> HBM[" << bank
+                      << "] addr=0x" << std::hex << block_addr << std::dec
+                      << " entries=" << block_entries << "\n";
+            remaining -= block_entries;
+            madeProgress = true;
+        }
+        if (!madeProgress)
+            throw std::runtime_error(
+                "hbm-dist: no HBM bank could fit continuation storage");
+    }
+
+    // Only advance the shared round-robin cursor when the closures actually used
+    // the full write window; the dedicated-range path is independent of it.
+    if (!haveContRange)
+        hbm_write_next_bank_ = first + ((start_bank - first + 1) % bank_count);
+
+    const uint64_t bank_run_entries =
+        std::max<uint64_t>(1, hbm_continuation_bank_run_entries_);
+
+    std::vector<uint64_t> addresses;
+    addresses.reserve(allocator_capacity);
+    for (uint64_t run = 0; addresses.size() < allocator_capacity; ++run)
+    {
+        for (int offset = 0; offset < bank_count; ++offset)
+        {
+            const int bank = first + ((start_bank - first + offset) % bank_count);
+            const std::vector<uint64_t> &bankAddresses =
+                perBank[static_cast<size_t>(bank - first)];
+            const uint64_t begin = run * bank_run_entries;
+            const uint64_t end =
+                std::min<uint64_t>(begin + bank_run_entries, bankAddresses.size());
+            for (uint64_t index = begin; index < end; ++index)
+            {
+                addresses.push_back(bankAddresses[static_cast<size_t>(index)]);
+                if (addresses.size() == allocator_capacity)
+                    break;
+            }
+            if (addresses.size() == allocator_capacity)
+                break;
+        }
+    }
+    std::cout << "[hbm-dist] continuation FIFO interleaved across HBM["
+              << first << ":" << last << "] entries=" << addresses.size()
+              << " bank-run-entries=" << bank_run_entries
+              << "\n";
+    return addresses;
+#endif
 }
 
 
@@ -447,26 +846,12 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
     // Log the information of calling this function
     std::cout << "Managing allocation server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << std::endl;
 
-    std::vector<uint64_t> addresses;
-    addresses.reserve(size);
-
     // XRT continuation BOs are device_only, so host-side bo.read() is invalid.
     // If the preallocated pool is ever exhausted, add fresh bank-local blocks
     // rather than trying to scan old closures for the freed marker.
     const uint64_t entry_bytes = taskDescriptor.widthTask / 8;
-    const uint64_t max_block_entries = (256ull * 1024 * 1024) / entry_bytes;
-    uint64_t entries_remaining = size;
-    while (entries_remaining > 0)
-    {
-        uint64_t block_entries = std::min(entries_remaining, max_block_entries);
-        uint64_t block_addr = memory_->allocateMemFPGA(
-            block_entries * entry_bytes, entry_bytes);
-        taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(
-            std::pair<uint64_t, int>(block_addr, static_cast<int>(block_entries)));
-        for (uint64_t i = 0; i < block_entries; ++i)
-            addresses.push_back(block_addr + i * entry_bytes);
-        entries_remaining -= block_entries;
-    }
+    std::vector<uint64_t> addresses = allocateContinuationAddressPool(
+        taskDescriptor, base_address, size, entry_bytes, fpgaId_);
 
     assert(addresses.size() == size);
 
@@ -501,7 +886,9 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
     if (addresses.size() < size)
     {
         int left_size = size - addresses.size();
-        uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 512);
+        uint64_t continuation_tasks_holder_addr = allocateDriverWriteRegion(
+            left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8,
+            512, "memory allocator refill storage");
 
         std::vector<uint8_t> zeros(left_size * taskDescriptor.getVirtualEntryWidth("memoryAllocator") / 8, 0);
         memory_->copyToDevice(continuation_tasks_holder_addr, zeros.data(), zeros.size());

@@ -21,8 +21,18 @@ set_top @@KERNEL@@
 
 # ── Add source files ──────────────────────────────────────────────────────────
 # Sources are injected as a Tcl list by the shell wrapper: {file1} {file2} ...
+# Optional compiler flags are inherited from the caller. This lets the top-level
+# rebuild script select benchmark-specific HLS ABIs without editing this template.
+set hls_cflags ""
+if {[info exists ::env(HLS_CFLAGS)]} {
+    set hls_cflags $::env(HLS_CFLAGS)
+}
 foreach src_file { @@SOURCES@@ } {
-    add_files $src_file
+    if {$hls_cflags ne "" && [string match "*.cpp" $src_file]} {
+        add_files -cflags $hls_cflags $src_file
+    } else {
+        add_files $src_file
+    }
 }
 
 # ── Solution configuration ────────────────────────────────────────────────────

@@ -100,28 +100,36 @@ case class MemStats(
 case class LockConfig(N: Int, P: Int, tagStoreSize: Int, inflightDepth: Int = 1)
 
 // --- Watcher (telemetry) configuration ---
-// Optional, mirrors lockConfig: when present (only triangleCountDecoupled today)
-// the generator builds + wires the free-running `watcher` HLS kernel that snapshots
-// each monitored PE's in/out queue status. When absent, every other benchmark is
-// generated exactly as before. `monitored` lists, in the SAME order as the HLS
-// status arrays, which task each status array tracks and which PE AXIS ports map to
-// the watcher's "in" and "out" queue probes. The wiring loops over the real PE count
-// per task, so it is dynamic to numProcessingElements.
-// statusPrefix is the C++ status-array parameter name in the watcher kernel
-// (e.g. "cont0_status"), which after HLS DISAGGREGATE becomes the pin prefix
-// `<statusPrefix>_<peIndex>_{in,out}_{empty,full}`. inPort/outPort are the PE's
-// AXIS interface names tapped for the in/out queue probes.
-case class WatcherMon(
+// Optional and default-off: when present, the generator builds and wires the
+// free-running shared `watcher` HLS kernel. Each source is self-describing:
+// `kind` names the hardware object, while the
+// remaining fields identify one instance and, where needed, one port/signal/lane.
+case class WatcherStatusTarget(
+    kind: String,
     taskName: String,
-    statusPrefix: String,
-    inPort: String,
-    outPort: String
+    index: Int = 0,
+    port: String = "",
+    signal: String = "",
+    lane: Int = 0
+)
+
+// Fields pack into their physical four-bit slot in array order, low-to-high.
+// The encoding name carries its width: boolean1 is one bit; readyValid2 is two
+// bits with bit0=valid and bit1=ready. Unused upper slot bits are tied to zero.
+case class WatcherStatusField(
+    encoding: String,
+    target: WatcherStatusTarget
+)
+
+case class WatcherStatusSlot(
+    label: String = "",
+    fields: List[WatcherStatusField] = Nil
 )
 case class WatcherConfig(
-    hdlPath: String,                       // directory containing the synthesized watcher.v
+    hdlPath: String = "../hls-kernel-output/watcher/watcher",
     moduleName: String = "watcher",
     startAddr: Long = 0L,                  // kernel-relative base tie-off (HBM[16:31] window => 0)
-    monitored: List[WatcherMon]
+    statusSlots: List[WatcherStatusSlot] = Nil
 )
 
 // --- SideConfig with default handling ---
@@ -132,7 +140,34 @@ case class SideConfig(
     capacityPhysicalQueue: Int = 0,
     portWidth: Int = 32,
     virtualEntrtyWidth: Int = 0,
-    numSpawnerServer: Int = 0
+    numSpawnerServer: Int = 0,
+    // NewArgumentNotifier is opt-in so every existing descriptor keeps the
+    // legacy implementation and its exact interfaces.
+    useNewArgumentNotifier: Boolean = false,
+    slowArgumentHandlerCount: Int = 1,
+    // Number of independent CacheEvictionSaver / eviction AXI ports. Each also
+    // becomes one lane of the EvictionGater's completion-ordering fence (one
+    // pendingCount/doneCount pair per lane, all the same width -- there is no
+    // separate per-lane JSON knob, this single count sizes every lane
+    // uniformly). Independent of slowArgumentHandlerCount: evictions and slow
+    // updates are demuxed by address separately, so the two counts need not
+    // match.
+    cacheEvictionSaverCount: Int = 1,
+    newContinuationLanesPerServer: Int = 1,
+    directUpdateLanesPerServer: Int = 1,
+    // Cut count for the slow-update collection network (servers -> slow
+    // handlers).
+    argumentNotifierCutCount: Int = 1,
+    // Cut count for the eviction collection network (servers -> eviction-saver
+    // lanes). Same trade-off as argumentNotifierCutCount.
+    evictionCutCount: Int = 1,
+    argumentServerIdWidth: Int = 6,
+    cacheDelayCycles: Int = 0,
+    // Extra ArgumentServer coupledQ slots for missed updates with no co-cycle
+    // eviction. Throughput knob for the non-backpressuring front porch; too small
+    // only throttles (never incorrect). See ArgumentServer.scala.
+    missedUpdateExtra: Int = 64,
+    slowRequestQueueDepth: Int = 64
 ) {
   def validate(): Unit = {
     require(
@@ -146,6 +181,18 @@ case class SideConfig(
         s"Task side '$sideType' is using default portWidth=32. " +
           "Ensure this is intended or specify 'portWidth' in the JSON."
       )
+    }
+    if (sideType == "argumentNotifier" && useNewArgumentNotifier) {
+      require(slowArgumentHandlerCount > 0)
+      require(cacheEvictionSaverCount > 0)
+      require(newContinuationLanesPerServer > 0)
+      require(directUpdateLanesPerServer > 0)
+      require(argumentNotifierCutCount > 0)
+      require(evictionCutCount > 0)
+      require(argumentServerIdWidth > 0)
+      require(cacheDelayCycles >= 0)
+      require(missedUpdateExtra >= 1)
+      require(slowRequestQueueDepth > 0)
     }
   }
 }
@@ -165,6 +212,18 @@ case class TaskDescriptor(
     sidesConfigs: List[SideConfig],
     var mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     spawnServersCount: Int = 0, // Defaulted
+    // Per-SpawnerServer on-chip taskQueue depth. Sizes the outside-spawn injection
+    // buffer on this task's local ring. Smaller depths backpressure the upstream
+    // spawner (and, through it, the injecting PE) sooner -> fewer tasks outstanding
+    // -> tighter cache working set. Default preserves the historical hardcoded 16.
+    spawnerQueueDepth: Int = 16,
+    // Depth of this task's co-located spawnNext write buffer -- the staging queue
+    // that holds each released child task pending its closure write + argument-
+    // notifier metadata assignment. VCD-measured as the dominant reservoir of
+    // outstanding child (e.g. memReader) tasks; shrinking it backpressures the
+    // spawning PE sooner and caps how many children (and downstream continuations)
+    // are in flight. Default 128 preserves the historical WriteBufferCounter depth.
+    spawnNextWriteBufferDepth: Int = 128,
     hasAXI: Boolean = true,
     // When true, every PE instance of this task gets its OWN reserved HBM port
     // for its main compute master (m_axi_gmem) -- never muxed with any other
@@ -195,6 +254,11 @@ case class TaskDescriptor(
       .map(_.numVirtualServers)
       .getOrElse(0)
   }
+  def getSideConfig(sideType: String): Option[SideConfig] =
+    sidesConfigs.find(_.sideType == sideType)
+
+  def usesNewArgumentNotifier: Boolean =
+    getSideConfig("argumentNotifier").exists(_.useNewArgumentNotifier)
   def getCapacityVirtualQueue(sideType: String): Int = { //
     sidesConfigs
       .find(_.sideType == sideType)
@@ -236,9 +300,15 @@ case class TaskDescriptor(
       )
     }
 
+    // A scheduler server is the HBM-backed virtual queue that seeds/persists a
+    // task's tasks. Root tasks are seeded by the host into that backing store, so
+    // they REQUIRE at least one. A non-root task is fed purely by spawn/outside-
+    // spawn and can run with zero scheduler servers: its local ring + spawner hold
+    // and backpressure all in-flight work (no HBM spill), which is exactly what we
+    // want on hot rings like countDecoupled's memReader.
     require(
-      getNumServers("scheduler") > 0,
-      s"Task '$name': must have > 0 scheduler servers"
+      getNumServers("scheduler") > 0 || !isRoot,
+      s"Task '$name': only root tasks may omit scheduler servers (isRoot=true needs > 0)"
     )
     // ... (all other 'asserts' converted to 'require') ...
 
@@ -674,15 +744,83 @@ case class FullSysGenDescriptor(
       )
     }
 
-    // Watcher: every monitored task must exist and expose the named AXIS ports
-    // (port presence is re-checked at elaboration when the PE is built).
+    // Watcher: validate the fixed physical slot budget and all descriptor-level
+    // references. Port existence and NewArgumentNotifier vector bounds are
+    // re-checked at elaboration when the corresponding modules exist.
     watcherConfig.foreach { wc =>
-      require(wc.monitored.nonEmpty, "watcherConfig.monitored must not be empty")
-      wc.monitored.foreach { mon =>
-        require(
-          taskDescriptors.exists(_.name == mon.taskName),
-          s"watcherConfig.monitored references unknown task '${mon.taskName}'"
-        )
+      require(wc.statusSlots.nonEmpty, "watcherConfig.statusSlots must not be empty")
+      require(
+        wc.statusSlots.size <= 22,
+        s"watcherConfig.statusSlots has ${wc.statusSlots.size} entries; the 88-bit STATUS field holds at most 22"
+      )
+      wc.statusSlots.zipWithIndex.foreach { case (slot, slotIndex) =>
+        require(slot.fields.nonEmpty,
+          s"watcher status slot $slotIndex must contain at least one field")
+        def encodingWidth(encoding: String): Int = encoding match {
+          case "boolean1" => 1
+          case "readyValid2" => 2
+          case other => throw new IllegalArgumentException(
+            s"watcher status slot $slotIndex has unknown encoding '$other' (expected boolean1 or readyValid2)")
+        }
+        val packedWidth = slot.fields.map(f => encodingWidth(f.encoding)).sum
+        require(packedWidth <= 4,
+          s"watcher status slot $slotIndex packs $packedWidth bits; a physical slot holds 4")
+
+        slot.fields.zipWithIndex.foreach { case (field, fieldIndex) =>
+          val target = field.target
+          val task = taskDescriptors.find(_.name == target.taskName)
+          target.kind match {
+            case "pe" =>
+              require(field.encoding == "readyValid2",
+                s"watcher slot $slotIndex field $fieldIndex PE targets require readyValid2")
+              require(task.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references unknown PE task '${target.taskName}'")
+              require(target.index >= 0 && target.index < task.get.numProcessingElements,
+                s"watcher slot $slotIndex field $fieldIndex PE index ${target.index} is outside ${target.taskName}[0,${task.get.numProcessingElements})")
+              require(target.port.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex PE target requires port")
+
+            case "schedulerServer" =>
+              require(field.encoding == "boolean1",
+                s"watcher slot $slotIndex field $fieldIndex schedulerServer targets require boolean1")
+              require(target.signal == "congested",
+                s"watcher slot $slotIndex field $fieldIndex schedulerServer signal must be congested")
+              require(task.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references unknown scheduler task '${target.taskName}'")
+              val n = task.get.getNumServers("scheduler")
+              require(target.index >= 0 && target.index < n,
+                s"watcher slot $slotIndex field $fieldIndex scheduler index ${target.index} is outside ${target.taskName}[0,$n)")
+
+            case "slowUpdateHandler" | "evictionSaver" | "argumentServer" =>
+              require(field.encoding == "readyValid2",
+                s"watcher slot $slotIndex field $fieldIndex ${target.kind} targets require readyValid2")
+              require(task.exists(_.usesNewArgumentNotifier),
+                s"watcher slot $slotIndex field $fieldIndex requires a new argument notifier for '${target.taskName}'")
+              val side = task.get.getSideConfig("argumentNotifier").get
+              target.kind match {
+                case "slowUpdateHandler" =>
+                  require(target.port == "input",
+                    s"watcher slowUpdateHandler port must be input")
+                  require(target.index >= 0 && target.index < side.slowArgumentHandlerCount,
+                    s"watcher slowUpdateHandler index ${target.index} is outside ${target.taskName}[0,${side.slowArgumentHandlerCount})")
+                case "evictionSaver" =>
+                  require(target.port == "input",
+                    s"watcher evictionSaver port must be input")
+                  require(target.index >= 0 && target.index < side.cacheEvictionSaverCount,
+                    s"watcher evictionSaver index ${target.index} is outside ${target.taskName}[0,${side.cacheEvictionSaverCount})")
+                case "argumentServer" =>
+                  require(target.port == "fastSpawn",
+                    s"watcher argumentServer port must be fastSpawn")
+                  require(target.index >= 0 && target.index < side.numVirtualServers,
+                    s"watcher argumentServer index ${target.index} is outside ${target.taskName}[0,${side.numVirtualServers})")
+                  require(target.lane >= 0 && target.lane < side.newContinuationLanesPerServer,
+                    s"watcher argumentServer lane ${target.lane} is outside [0,${side.newContinuationLanesPerServer})")
+              }
+
+            case other => throw new IllegalArgumentException(
+              s"watcher slot $slotIndex field $fieldIndex has unknown target kind '$other'")
+          }
+        }
       }
     }
   }

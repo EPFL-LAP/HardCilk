@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <bits/stdc++.h>
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <stdexcept>
 #include <stdlib.h>
 #include <iostream>
@@ -51,23 +53,36 @@ struct XRTMemory : Memory{
     }
 
     void writeReg32(uint64_t addr, uint32_t value){
-      hardCilk_ip_.write_register(addr, value);
+      retryRegAccess("writeReg32", addr, [&]{
+        hardCilk_ip_.write_register(addr, value);
+        return 0;
+      });
     }
 
     void writeReg64(uint64_t addr, uint64_t value){
-      hardCilk_ip_.write_register(addr, static_cast<uint32_t>(value & 0xFFFFFFFF));
-      hardCilk_ip_.write_register(addr + 4, static_cast<uint32_t>((value >> 32) & 0xFFFFFFFF));
+      retryRegAccess("writeReg64.lo", addr, [&]{
+        hardCilk_ip_.write_register(addr, static_cast<uint32_t>(value & 0xFFFFFFFF));
+        return 0;
+      });
+      retryRegAccess("writeReg64.hi", addr + 4, [&]{
+        hardCilk_ip_.write_register(addr + 4, static_cast<uint32_t>((value >> 32) & 0xFFFFFFFF));
+        return 0;
+      });
     }
 
     uint32_t readReg32(uint64_t addr){
-      uint32_t value = hardCilk_ip_.read_register(addr);
-      return value;
+      return retryRegAccess("readReg32", addr, [&]{
+        return hardCilk_ip_.read_register(addr);
+      });
     }
 
     uint64_t readReg64(uint64_t addr){
-      uint32_t low, high;
-      low = hardCilk_ip_.read_register(addr);
-      high = hardCilk_ip_.read_register(addr + 4);
+      uint32_t low = retryRegAccess("readReg64.lo", addr, [&]{
+        return hardCilk_ip_.read_register(addr);
+      });
+      uint32_t high = retryRegAccess("readReg64.hi", addr + 4, [&]{
+        return hardCilk_ip_.read_register(addr + 4);
+      });
       u_int64_t value = static_cast<uint64_t>(low) | (static_cast<uint64_t>(high) << 32);
       return value;
     }
@@ -339,6 +354,44 @@ struct XRTMemory : Memory{
   ~XRTMemory() {}
 
 private:
+    // Under XCL_EMULATION_MODE=hw_emu, register access is a protobuf
+    // request/response over a socket to the xsim process. Deep into a long run
+    // (thousands of polls) that channel can drop or corrupt a SINGLE response --
+    // the symptom is a libprotobuf "missing required field: valid" parse error and
+    // an xrt_core::system_error thrown out of read_register/write_register, which
+    // (being uncaught) std::terminate()s the whole run. Every access routed through
+    // here targets an idempotent management status/config register, so a bounded
+    // retry with backoff rides over the transient hiccup instead of aborting. On
+    // real hardware the first attempt succeeds, so this adds no overhead there.
+    static constexpr int kRegRetryAttempts = 8;
+
+    template <class Fn>
+    auto retryRegAccess(const char *what, uint64_t addr, Fn &&fn) -> decltype(fn())
+    {
+      for (int attempt = 1;; ++attempt)
+      {
+        try
+        {
+          return fn();
+        }
+        catch (const std::exception &e)
+        {
+          if (attempt >= kRegRetryAttempts)
+          {
+            std::cerr << "[XRTMemory] " << what << " at 0x" << std::hex << addr
+                      << std::dec << " failed after " << attempt
+                      << " attempts: " << e.what() << "\n";
+            throw; // unrecoverable: let the caller's safety net tear down cleanly
+          }
+          std::cerr << "[XRTMemory] transient " << what << " failure at 0x"
+                    << std::hex << addr << std::dec << " (attempt " << attempt
+                    << "/" << kRegRetryAttempts << "): " << e.what()
+                    << " -- retrying\n";
+          std::this_thread::sleep_for(std::chrono::milliseconds(50 * attempt));
+        }
+      }
+    }
+
     static uint64_t alignUp(uint64_t value, uint64_t alignment) {
       if (alignment == 0) {
         return value;

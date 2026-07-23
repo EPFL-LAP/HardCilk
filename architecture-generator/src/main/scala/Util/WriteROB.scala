@@ -99,3 +99,67 @@ class WriteROB(axiCfgIn: a4.Config, axiCfgOut: a4.Config) extends Module {
     currentCount := currentCount - 1.U
   }
 }
+
+/** Single-ID pass-through drop-in replacement for [[WriteROB]].
+  *
+  * Forwards the master's single-ID (wId==0) write stream straight to the slave on
+  * ONE constant id (id 0) instead of spreading it across `1 << wId` rotating IDs.
+  * B responses come back in issue order for free (AXI same-ID ordering), so the
+  * caller's one-token-per-write release logic is preserved unchanged. Still
+  * issue-ahead: AW/W are never gated on a prior write's B, so as many same-id
+  * writes can be outstanding as the downstream fabric accepts. Ignores BRESP.
+  *
+  * Purpose: A/B test whether the ROB's rotating-ID scheme (multi-ID reorder
+  * tracking in the HBM AXI switch / controller) is part of what caps single-beat
+  * write throughput. Same IO shape as [[WriteROB]] so WriteBufferCounter can pick
+  * either at elaboration with no other wiring change.
+  */
+class WriteROBBypass(axiCfgIn: a4.Config, axiCfgOut: a4.Config) extends Module {
+  val io = IO(new Bundle {
+    val from_master = a4.Slave(cfg = axiCfgIn)
+    val to_slave = a4.Master(cfg = axiCfgOut)
+  })
+
+  require(
+    axiCfgIn.write && !axiCfgIn.read,
+    "WriteROBBypass is write-only; route reads around it"
+  )
+  require(
+    {
+      val in_dup = axiCfgIn.copy(wId = 0)
+      val out_dup = axiCfgOut.copy(wId = 0)
+      in_dup == out_dup
+    },
+    "All axi params other than wId must match"
+  )
+
+  private val s = io.from_master.asFull
+  private val m = io.to_slave.asFull
+
+  // AW: copy every field through, force the single constant id.
+  new e.Join(m.aw) {
+    protected def onJoin: Unit = {
+      val aw = join(s.aw)
+      out.id := 0.U
+      out.addr := aw.addr
+      out.len := aw.len
+      out.size := aw.size
+      out.burst := aw.burst
+      out.lock := aw.lock
+      out.cache := aw.cache
+      out.prot := aw.prot
+      out.qos := aw.qos
+      out.region := aw.region
+      out.user := aw.user
+    }
+  }
+
+  s.w :=> m.w
+
+  // B: single-id responses already arrive in issue order; forward one-for-one as
+  // release tokens. The payload (other than resp) is unused by the caller.
+  s.b.bits := DontCare
+  s.b.bits.resp := m.b.bits.resp
+  s.b.valid := m.b.valid
+  m.b.ready := s.b.ready
+}

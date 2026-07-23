@@ -35,6 +35,10 @@ class SchedulerServerIO(
   // generated RTL is byte-identical to the pre-feature design.
   val globalRun = if (enableGlobalStart) Some(Input(Bool())) else None
   val paused = Output(Bool())
+  // Telemetry tap: mirrors the internal networkCongested register so the watcher
+  // can show when this server has flipped into HBM-ring absorb/spill mode (see
+  // the "sched_congested" status group wired in HardCilk.connectWatcher).
+  val congested = Output(Bool())
   val lengths_of_hardware_queues = Vec(peCount, Input(UInt(8.W)))
   val serveRemote = Output(
     Bool()
@@ -239,6 +243,7 @@ class SchedulerServer(
   }
 
   io.paused := rPause
+  io.congested := networkCongested
 
   val contentionSample = WireDefault(0.S(2.W))
 
@@ -384,7 +389,7 @@ class SchedulerServer(
   // INDEPENDENTLY FROM DATA-NETWORK BACKPRESSURE.  TASKS ONLY LEAVE THE LOCAL
   // BUFFER WHEN BOTH A STORED CREDIT AND qOutTask.ready ARE PRESENT.
   // ---------------------------------------------------------------------------
-  val stealCredits = RegInit(0.U(6.W))
+  val stealCredits = RegInit(0.U(log2Ceil(localQueueDepth + 1).W))
   val canOutputTask =
     datapathEnabled && !networkCongested && !writingToHBM && taskQueueBuffer.io.deq.valid && stealCredits =/= 0.U
   val qOutFire = canOutputTask && io.connNetwork.data.qOutTask.ready
@@ -392,7 +397,6 @@ class SchedulerServer(
     datapathEnabled &&
       !networkCongested &&
       !writingToHBM &&
-      stealCredits < localQueueCapacity &&
       taskQueueBuffer.io.count > stealCredits
 
   io.connNetwork.ctrl.serveStealReq.valid := canConsumeStealCredit

@@ -41,8 +41,14 @@ object DescriptorJSON {
   implicit val lockConfigDecoder: Decoder[LockConfig] = deriveConfiguredDecoder[LockConfig]
   implicit val lockConfigEncoder: Encoder[LockConfig] = deriveConfiguredEncoder[LockConfig]
 
-  implicit val watcherMonDecoder: Decoder[WatcherMon] = deriveConfiguredDecoder[WatcherMon]
-  implicit val watcherMonEncoder: Encoder[WatcherMon] = deriveConfiguredEncoder[WatcherMon]
+  implicit val watcherStatusTargetDecoder: Decoder[WatcherStatusTarget] = deriveConfiguredDecoder[WatcherStatusTarget]
+  implicit val watcherStatusTargetEncoder: Encoder[WatcherStatusTarget] = deriveConfiguredEncoder[WatcherStatusTarget]
+
+  implicit val watcherStatusFieldDecoder: Decoder[WatcherStatusField] = deriveConfiguredDecoder[WatcherStatusField]
+  implicit val watcherStatusFieldEncoder: Encoder[WatcherStatusField] = deriveConfiguredEncoder[WatcherStatusField]
+
+  implicit val watcherStatusSlotDecoder: Decoder[WatcherStatusSlot] = deriveConfiguredDecoder[WatcherStatusSlot]
+  implicit val watcherStatusSlotEncoder: Encoder[WatcherStatusSlot] = deriveConfiguredEncoder[WatcherStatusSlot]
 
   implicit val watcherConfigDecoder: Decoder[WatcherConfig] = deriveConfiguredDecoder[WatcherConfig]
   implicit val watcherConfigEncoder: Encoder[WatcherConfig] = deriveConfiguredEncoder[WatcherConfig]

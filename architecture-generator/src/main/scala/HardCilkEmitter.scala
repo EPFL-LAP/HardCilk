@@ -83,10 +83,11 @@ object HardCilkEmitter extends App {
         val outputDirPathTcl = s"${cfg.output_dir}/$outputDirName/tcl"
         Files.createDirectories(Paths.get(outputDirPathTcl))
         val lockAxiPortCount = if (systemDescriptor.lockConfig.nonEmpty) 1 else 0
-        // The watcher (when present) exports one dedicated master appended after
-        // reduce_axi and the lock port, exactly like the lock server.
+        // The watcher (when present) exports two dedicated masters appended after
+        // reduce_axi and the lock port: m_axi_gmem for HBM[16:23] and m_axi_gmem1
+        // for HBM[24:31].
         val watcherAxiPortCount =
-          if (systemDescriptor.watcherConfig.nonEmpty) 1 else 0
+          if (systemDescriptor.watcherConfig.nonEmpty) 2 else 0
         val tclAxiPortCount =
           cfg.reduce_axi + lockAxiPortCount + watcherAxiPortCount
         require(

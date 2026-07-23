@@ -5,6 +5,7 @@ import Descriptors._
 import Scheduler._
 import Allocator._
 import ArgumentNotifier._
+import NewArgumentNotifier._
 import HLSHelpers._
 import Util.HardCilkUtil._
 import Util.RemoteStreamToMem
@@ -89,6 +90,9 @@ class HardCilk(
   val notifierMap = blueprint.argNotifierFactories.map { case (name, factory) =>
     name -> Module(factory())
   }
+  val newNotifierMap = blueprint.newArgNotifierFactories.map { case (name, factory) =>
+    name -> Module(factory())
+  }
   val memAllocatorMap = blueprint.memAllocatorFactories.map {
     case (name, factory) => name -> Module(factory())
   }
@@ -148,11 +152,13 @@ class HardCilk(
     }
 
   connectPEs(peMap)
+  connectNewArgumentNotifiers(newNotifierMap, peMap)
 
   val portsToExport = builder.connectSubsystems(
     schedulerMap,
     allocatorMap,
     notifierMap,
+    newNotifierMap,
     memAllocatorMap,
     peMap,
     spawnNextWBMap,
@@ -170,7 +176,7 @@ class HardCilk(
     sendArgumentWBMap
   )
 
-  connectGlobalSignals(schedulerMap, allocatorMap, memAllocatorMap, notifierMap)
+  connectGlobalSignals(schedulerMap, allocatorMap, memAllocatorMap, notifierMap, newNotifierMap)
 
   // This call now invokes the method from the HasHBMInterconnect trait
   buildAndConnectHBM(
@@ -178,6 +184,7 @@ class HardCilk(
     schedulerMap,
     allocatorMap,
     notifierMap,
+    newNotifierMap,
     memAllocatorMap,
     spawnNextWBMap,
     sendArgumentWBMap,
@@ -186,9 +193,11 @@ class HardCilk(
 
   fullSysGenDescriptor.lockConfig.foreach { lc => connectLockServer(lc, peMap) }
 
-  // Append the watcher LAST so its dedicated HBM master is the highest-index
-  // (topmost) m_axi port. Gated on watcherConfig => no effect on other benchmarks.
-  fullSysGenDescriptor.watcherConfig.foreach { wc => connectWatcher(wc, peMap) }
+  // Append the watcher LAST so its dedicated HBM masters are the highest-index
+  // (topmost) m_axi ports. Gated on watcherConfig => no effect on other benchmarks.
+  fullSysGenDescriptor.watcherConfig.foreach { wc =>
+    connectWatcher(wc, peMap, schedulerMap, newNotifierMap)
+  }
 
   if (fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth) {
     buildMfpgaConnections()
@@ -437,7 +446,8 @@ class HardCilk(
       schedulerMap: Map[String, Scheduler],
       closureAllocatorMap: Map[String, Allocator],
       memoryAllocatorMap: Map[String, Allocator],
-      argumentNotifierMap: Map[String, ArgumentNotifier]
+      argumentNotifierMap: Map[String, ArgumentNotifier],
+      newArgumentNotifierMap: Map[String, ArgumentNetworks]
   ): Unit = {
     val schedulerPaused =
       if (schedulerMap.isEmpty) false.B
@@ -451,10 +461,66 @@ class HardCilk(
 
     paused := schedulerPaused || closureAllocatorPaused || memoryAllocatorPaused
 
-    if (argumentNotifierMap.nonEmpty) {
-      done := argumentNotifierMap.map(_._2.io_export.done).reduce(_ || _)
-    } else {
-      done := false.B
+    val oldDone = argumentNotifierMap.values.map(_.io_export.done).toSeq
+    val newDone = newArgumentNotifierMap.values.map(_.done).toSeq
+    done := (oldDone ++ newDone).reduceOption(_ || _).getOrElse(false.B)
+  }
+
+  /** Wire the two PE-side write streams and the explicit metadata channels.
+    * Source ordering is descriptor order followed by PE index, the same order
+    * used by FullSysGenDescriptor.getPortCount.
+    */
+  private def connectNewArgumentNotifiers(
+      networks: Map[String, ArgumentNetworks],
+      pes: Map[String, Seq[VitisWriteBufferModule]]
+  ): Unit = {
+    networks.foreach { case (targetName, network) =>
+      val newSources = fullSysGenDescriptor.taskDescriptors.flatMap { source =>
+        if (fullSysGenDescriptor.spawnNextList.getOrElse(source.name, Nil).contains(targetName))
+          pes.getOrElse(source.name, Nil)
+        else Nil
+      }
+      require(newSources.size == network.cfg.nSourcePEs)
+      newSources.zipWithIndex.foreach { case (pe, index) =>
+        val spawnWrite = pe.getPort("m_axi_spawnNext")
+          .asInstanceOf[axi4.RawInterface].asFull
+        val newCont = network.s_axi_newCont(index).asFull
+        // The wrapper's historical AXI declaration includes unused read
+        // channels; NewArgumentNotifier is deliberately write-only.
+        spawnWrite.aw :=> newCont.aw
+        spawnWrite.w :=> newCont.w
+        newCont.b :=> spawnWrite.b
+
+        val meta = pe.getPort("continuationMetaIn").asInstanceOf[chext.amba.axi4s.Interface]
+        val returned = network.m_continuation(index)
+        meta.TVALID := returned.valid
+        meta.TDATA := returned.bits.metadata.asUInt.pad(32)
+        returned.ready := meta.TREADY
+      }
+
+      val updateSources = fullSysGenDescriptor.taskDescriptors.flatMap { source =>
+        if (fullSysGenDescriptor.sendArgumentList.getOrElse(source.name, Nil).contains(targetName))
+          pes.getOrElse(source.name, Nil)
+        else Nil
+      }
+      require(updateSources.size == network.cfg.nUpdatePEs)
+      updateSources.zipWithIndex.foreach { case (pe, index) =>
+        val packet = pe.getPort("argOut").asInstanceOf[chext.amba.axi4s.Interface]
+        val lineWidth = network.cfg.continuationSize
+        val dataLo = 96
+        val strobeLo = dataLo + lineWidth
+        require(packet.cfg.wData == strobeLo + lineWidth,
+          s"$targetName argOut must be {address[64], metadata[32], data[$lineWidth], strobe[$lineWidth]}")
+        val sink = network.s_update(index)
+        sink.valid := packet.TVALID
+        sink.bits.address := network.cfg.lineAddressOf(packet.TDATA(63, 0))
+        val metaWidth = sink.bits.metadata.getWidth
+        sink.bits.metadata := packet.TDATA(64 + metaWidth - 1, 64)
+          .asTypeOf(network.cfg.metadataType)
+        sink.bits.dataWrite := packet.TDATA(strobeLo - 1, dataLo)
+        sink.bits.dataWriteStrobe := packet.TDATA(strobeLo + lineWidth - 1, strobeLo)
+        packet.TREADY := sink.ready
+      }
     }
   }
 
@@ -568,29 +634,21 @@ class HardCilk(
     numHbmPortExports += 1
   }
 
-  /** Instantiate the free-running telemetry watcher, tap each monitored PE's
-    * in/out queue handshakes, tie its start_addr to the configured constant, and
-    * export its HBM master as the dedicated topmost m_axi port.
+  /** Instantiate the free-running telemetry watcher, wire the twenty-two generic
+    * status taps selected by the descriptor, tie start_addr to the configured
+    * constant, and export its two HBM masters as the topmost m_axi ports.
     *
     * The watcher is purely observational: it only READS the PEs' AXIS valid/ready
-    * (no `<>`), so PE<->scheduler connectivity is untouched. The PE count per task
-    * is taken from peMap, so the wiring is dynamic in numProcessingElements.
+    * (no `<>`), so PE<->scheduler connectivity is untouched.
     */
   private def connectWatcher(
       wc: WatcherConfig,
-      peMap: Map[String, Seq[VitisWriteBufferModule]]
+      peMap: Map[String, Seq[VitisWriteBufferModule]],
+      schedulerMap: Map[String, Scheduler],
+      newArgumentNotifierMap: Map[String, ArgumentNetworks]
   ): Unit = {
-
-    // (statusPrefix, peCount) in the configured order (must match the HLS arrays).
-    val monitoredCounts: Seq[(String, Int)] = wc.monitored.map { mon =>
-      val pes = peMap.getOrElse(
-        mon.taskName,
-        throw new RuntimeException(
-          s"watcherConfig monitors unknown/instantiated task '${mon.taskName}'"
-        )
-      )
-      (mon.statusPrefix, pes.length)
-    }
+    val maxStatusSlots = 22
+    require(wc.statusSlots.size <= maxStatusSlots)
 
     // Number of per-HBM-port bandwidth/address pin groups on the watcher (matches
     // the kernel MAX_HBM_PORTS). The actual exported compute masters are wired below;
@@ -618,65 +676,92 @@ class HardCilk(
       hasLock = true
     )
 
+    // Exactly one AXI ID on each physical telemetry master.
+    val watcherMemBaseChannels: Seq[Int] = Seq(0, 8)
+
     val watcher = Module(
       new HLSHelpers.WatcherBlackBox(
         moduleName = wc.moduleName,
         gmemCfg = gmemCfg,
         addrWidth = 64,
-        monitored = monitoredCounts,
-        maxHbmPorts = maxHbmPorts
+        statusSlots = maxStatusSlots,
+        maxHbmPorts = maxHbmPorts,
+        memBaseChannels = watcherMemBaseChannels
       )
     )
 
     watcher.io.elements("ap_clk").asInstanceOf[Clock] := clock
     watcher.io.elements("ap_rst_n").asInstanceOf[Bool] := ~reset.asBool
-    // mem_0..7 = m_axi base pointers for the eight HLS channels under one gmem
-    // bundle. start_addr = byte offset added in the kernel. The watcher is mapped
-    // exclusively to HBM[16:31], which starts at physical address 0x200000000 in
-    // the device address space. Vitis does NOT automatically subtract this base
-    // for AXI masters, so the kernel must issue the full physical address.
-    // `wc.startAddr` acts as an offset into this window.
-    for (ch <- 0 until 8) {
+    // mem_0 drives gmem (port A), and mem_8 drives gmem1 (port B).
+    // start_addr is the byte offset added in the
+    // kernel. The watcher is mapped exclusively to HBM[16:31], whose device address
+    // starts at 0x200000000. Vitis does not subtract that base for AXI masters, so
+    // both pointers receive 0x200000000. The kernel itself adds 4 GiB for port B
+    // (FOUR_GB_BEATS in memAccess.cpp): port A lands in HBM[16:23] and port B in
+    // HBM[24:31].
+    for (ch <- watcherMemBaseChannels) {
       watcher.getPort(watcher.memBasePin(ch)).asInstanceOf[UInt] :=
         BigInt("200000000", 16).U(64.W)
     }
     watcher.io.elements("start_addr").asInstanceOf[UInt] := BigInt(wc.startAddr).U(64.W)
 
-    // --- Tap each monitored PE's in/out queue handshakes ---
-    // Each status pin is 2 bits carrying the PE-boundary AXIS handshake: bit0 = valid,
-    // bit1 = ready (matches the HLS QueueStatus{valid,ready} struct packing).
-    // From these the viewer derives empty(=!valid), full(=valid&&!ready), and the
-    // transfer events consumed(in_valid&&in_ready) / pushed(out_valid&&out_ready).
-    // in_* is the consumer side (PE's input), out_* is the producer side (PE's
-    // output) -- so valid/ready mean opposite things on the two queues. For
-    // write-buffered PE outputs, `out_*` deliberately taps the pre-buffer raw PE
-    // completion boundary rather than the post-buffer downstream drain boundary.
-    //
-    // Every status bit is passed through a SINGLE uniform RegNext stage so (a)
-    // the long PE->watcher path is broken for timing and (b) all bits share the
-    // exact same 1-cycle delay -> the watcher samples a coherent snapshot (no
-    // cross-bit cycle skew). RegNext on each tap uses the same clock edge, so the
-    // delay is identical across every PE and every bit.
-    wc.monitored.foreach { mon =>
-      val pes = peMap(mon.taskName)
-      pes.zipWithIndex.foreach { case (pe, i) =>
-        val inIf =
-          pe.getPort(mon.inPort).asInstanceOf[chext.amba.axi4s.Interface]
-        val (outValid, outReady) = pe.getWatcherStatusHandshake(mon.outPort)
+    def encodingWidth(encoding: String): Int = encoding match {
+      case "boolean1" => 1
+      case "readyValid2" => 2
+      case other => throw new RuntimeException(s"unknown watcher encoding '$other'")
+    }
 
-        val inValid = inIf.TVALID
-        val inReady = inIf.TREADY
+    def resolveField(field: WatcherStatusField): UInt = {
+      val target = field.target
+      target.kind match {
+        case "pe" =>
+          val pes = peMap.getOrElse(target.taskName,
+            throw new RuntimeException(s"watcher references missing PE task '${target.taskName}'"))
+          require(target.index >= 0 && target.index < pes.size)
+          val (valid, ready) = pes(target.index).getWatcherStatusHandshake(target.port)
+          chisel3.util.Cat(ready, valid)
 
-        // Reset value 0 (NOT a bare RegNext): an uninitialized register starts as
-        // X in simulation, and that X propagates through the watcher into its AXI
-        // write path -> a malformed transaction that stalls the shared HBM
-        // crossbar and hangs compute. Initializing to 0 keeps the uniform 1-cycle
-        // delay while guaranteeing defined startup.
-        watcher.getPort(watcher.inPinName(mon.statusPrefix, i)) :=
-          RegNext(chisel3.util.Cat(inReady, inValid), 0.U(2.W))
-        watcher.getPort(watcher.outPinName(mon.statusPrefix, i)) :=
-          RegNext(chisel3.util.Cat(outReady, outValid), 0.U(2.W))
+        case "schedulerServer" =>
+          schedulerMap(target.taskName).io_congested(target.index).asUInt
+
+        case "slowUpdateHandler" | "evictionSaver" | "argumentServer" =>
+          val network = newArgumentNotifierMap.getOrElse(
+            target.taskName,
+            throw new RuntimeException(
+              s"watcher references missing new argument notifier '${target.taskName}'"
+            )
+          )
+          target.kind match {
+            case "slowUpdateHandler" => network.watcherSlowUpdates(target.index)
+            case "evictionSaver" => network.watcherEvictions(target.index)
+            case "argumentServer" =>
+              val flatIndex = target.index * network.cfg.newLanesPerServer + target.lane
+              network.watcherFastSpawns(flatIndex)
+          }
+
+        case other => throw new RuntimeException(
+          s"unknown watcher target kind '$other'")
       }
+    }
+
+    // Each JSON element owns one physical four-bit tap. Fields pack low-to-high
+    // in array order; their self-documenting encoding names define their widths.
+    wc.statusSlots.zipWithIndex.foreach { case (slot, slotIndex) =>
+      val fieldsLowToHigh = slot.fields.map(resolveField)
+      val usedWidth = slot.fields.map(f => encodingWidth(f.encoding)).sum
+      val highPadding = 4 - usedWidth
+      val piecesHighToLow =
+        (if (highPadding > 0) Seq(0.U(highPadding.W)) else Seq.empty) ++
+          fieldsLowToHigh.reverse
+      val raw = chisel3.util.Cat(piecesHighToLow)
+
+      // Uniform registered boundary: prevents X propagation and keeps every bit
+      // in a selected nibble aligned to the same sampled cycle.
+      watcher.getPort(watcher.statusPinName(slotIndex)) :=
+        RegNext(raw, 0.U(4.W))
+    }
+    for (slotIndex <- wc.statusSlots.size until maxStatusSlots) {
+      watcher.getPort(watcher.statusPinName(slotIndex)) := 0.U(4.W)
     }
 
     // --- Start gate ---
@@ -722,25 +807,41 @@ class HardCilk(
     for (p <- 0 until maxHbmPorts) {
       if (p < nCompute) {
         val m = axiOuts(p).asFull
-        val wb = Wire(UInt(8.W))
-        wb := Mux(m.w.fire, chisel3.util.PopCount(m.w.bits.strb), 0.U)
-        watcher.getPort(watcher.wbytesPin(p)) := RegNext(wb, 0.U(8.W))
-        val rb = Wire(UInt(16.W))
-        rb := Mux(m.ar.fire, (m.ar.bits.len +& 1.U) << m.ar.bits.size, 0.U)
-        watcher.getPort(watcher.rbytesPin(p)) := RegNext(rb, 0.U(16.W))
-        // Region tap = a 20-bit window anchored at the top MEANINGFUL HBM bit. HBM
-        // has only widthAXIAddress (34) address bits, so bits >= 34 are always zero
-        // on every port (wide 64-bit masters included) -- there's nothing to learn
-        // there. So take addr[33:14] uniformly on all ports: one consistent 16 KB
-        // granularity, focused on the bits that actually vary, instead of the old
-        // fixed addr[39:20] that wasted 6 bits on guaranteed zeros everywhere.
-        val addrHi =
-          math.min(fullSysGenDescriptor.widthAXIAddress - 1, m.aw.bits.addr.getWidth - 1)
-        val addrLo = addrHi - 19
-        watcher.getPort(watcher.awaddrPin(p)) :=
-          chisel3.util.RegEnable(m.aw.bits.addr(addrHi, addrLo), 0.U(20.W), m.aw.fire)
-        watcher.getPort(watcher.araddrPin(p)) :=
-          chisel3.util.RegEnable(m.ar.bits.addr(addrHi, addrLo), 0.U(20.W), m.ar.fire)
+        // Some internal masters (notably CacheEvictionSaver) are deliberately
+        // write-only. Never ask chext for a channel disabled by the AXI config:
+        // its accessor correctly throws `Not supported: read/write`.
+        if (m.cfg.write) {
+          val wb = Wire(UInt(8.W))
+          wb := Mux(m.w.fire, chisel3.util.PopCount(m.w.bits.strb), 0.U)
+          watcher.getPort(watcher.wbytesPin(p)) := RegNext(wb, 0.U(8.W))
+          val addrHi = math.min(
+            fullSysGenDescriptor.widthAXIAddress - 1,
+            m.aw.bits.addr.getWidth - 1
+          )
+          val addrLo = addrHi - 19
+          watcher.getPort(watcher.awaddrPin(p)) :=
+            chisel3.util.RegEnable(
+              m.aw.bits.addr(addrHi, addrLo), 0.U(20.W), m.aw.fire)
+        } else {
+          watcher.getPort(watcher.wbytesPin(p)) := 0.U
+          watcher.getPort(watcher.awaddrPin(p)) := 0.U
+        }
+        if (m.cfg.read) {
+          val rb = Wire(UInt(16.W))
+          rb := Mux(m.ar.fire, (m.ar.bits.len +& 1.U) << m.ar.bits.size, 0.U)
+          watcher.getPort(watcher.rbytesPin(p)) := RegNext(rb, 0.U(16.W))
+          val addrHi = math.min(
+            fullSysGenDescriptor.widthAXIAddress - 1,
+            m.ar.bits.addr.getWidth - 1
+          )
+          val addrLo = addrHi - 19
+          watcher.getPort(watcher.araddrPin(p)) :=
+            chisel3.util.RegEnable(
+              m.ar.bits.addr(addrHi, addrLo), 0.U(20.W), m.ar.fire)
+        } else {
+          watcher.getPort(watcher.rbytesPin(p)) := 0.U
+          watcher.getPort(watcher.araddrPin(p)) := 0.U
+        }
       } else {
         watcher.getPort(watcher.wbytesPin(p)) := 0.U
         watcher.getPort(watcher.rbytesPin(p)) := 0.U
@@ -749,32 +850,40 @@ class HardCilk(
       }
     }
 
-    // --- Export gmem as the dedicated topmost m_axi_NN (mirrors connectLockServer) ---
-    val gmem =
-      watcher.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull
-    val gmemYanked = AxiUserYanker(gmem)
-    val outputCfg = gmemYanked.cfg
-    val portName = f"m_axi_${numHbmPortExports}%02d"
-    val axiOut = IO(axi4.Master(outputCfg)).suggestName(portName)
+    // --- Export both gmem masters as dedicated topmost m_axi_NN ports ---
+    // Port A (m_axi_gmem) is exported first so it gets the lower index; port B
+    // (m_axi_gmem1) is next. renderConnCfg maps the last two masters to the two
+    // watcher HBM windows (port A -> HBM[16:23], port B -> HBM[24:31]).
+    def exportGmemMaster(pinName: String): Unit = {
+      val gmem =
+        watcher.getPort(pinName).asInstanceOf[axi4.RawInterface].asFull
+      val gmemYanked = AxiUserYanker(gmem)
+      val outputCfg = gmemYanked.cfg
+      val portName = f"m_axi_${numHbmPortExports}%02d"
+      val axiOut = IO(axi4.Master(outputCfg)).suggestName(portName)
 
-    axi4.full.SlaveBuffer(
-      gmemYanked,
-      axi4.BufferConfig.all(2)
-    ) :=> axiOut.asFull
+      axi4.full.SlaveBuffer(
+        gmemYanked,
+        axi4.BufferConfig.all(2)
+      ) :=> axiOut.asFull
 
-    interfaceBuffer.addOne(
-      hdlinfo.Interface(
-        portName,
-        hdlinfo.InterfaceRole.master,
-        hdlinfo.InterfaceKind("axi4"),
-        "clock",
-        "reset",
-        Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+      interfaceBuffer.addOne(
+        hdlinfo.Interface(
+          portName,
+          hdlinfo.InterfaceRole.master,
+          hdlinfo.InterfaceKind("axi4"),
+          "clock",
+          "reset",
+          Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+        )
       )
-    )
 
-    axiOuts.addOne(axiOut)
-    numHbmPortExports += 1
+      axiOuts.addOne(axiOut)
+      numHbmPortExports += 1
+    }
+
+    exportGmemMaster("m_axi_gmem")
+    exportGmemMaster("m_axi_gmem1")
   }
 
   // --- buildAndConnectHBM IS NOW GONE ---

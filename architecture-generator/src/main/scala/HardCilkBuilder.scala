@@ -6,6 +6,7 @@ import Descriptors._
 import Scheduler._
 import Allocator._
 import ArgumentNotifier._
+import NewArgumentNotifier._
 import HLSHelpers._
 import Util.HardCilkUtil._
 import Util._
@@ -35,6 +36,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       schedulerFactories: Map[String, () => Scheduler],
       allocatorFactories: Map[String, () => Allocator],
       argNotifierFactories: Map[String, () => ArgumentNotifier],
+      newArgNotifierFactories: Map[String, () => ArgumentNetworks],
       memAllocatorFactories: Map[String, () => Allocator],
       spawnNextWBFactories: Map[String, () => Seq[WriteBuffer]],
       sendArgumentWBFactories: Map[String, () => Seq[WriteBuffer]],
@@ -58,12 +60,18 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         peCount = task.numProcessingElements,
         spawnsItself = desc.selfSpawnedCount(task.name) > 0,
         peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
-        argRouteServersNumber = task.getNumServers("argumentNotifier"),
+        argRouteServersNumber = task.getSideConfig("argumentNotifier") match {
+          case Some(c) if c.useNewArgumentNotifier =>
+            c.numVirtualServers * c.newContinuationLanesPerServer +
+              c.slowArgumentHandlerCount
+          case _ => task.getNumServers("argumentNotifier")
+        },
         schedulerServersNumber = task.getNumServers("scheduler"),
         pePortWidth = task.widthTask,
         peType = task.name,
         debug = debug,
         spawnerServerNumber = task.spawnServersCount,
+        spawnerQueueDepth = task.spawnerQueueDepth,
         // A continuation (isCont) re-injects its own task via the argument
         // notifier when the join counter hits 0. With mFPGA on, that loops back
         // through the network; single-FPGA needs the *local* outsideSpawn path,
@@ -93,7 +101,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       }.toMap
 
     val argNotifierFactories = desc.taskDescriptors
-      .filter(t => desc.getPortCount("sendArgument", t.name) > 0)
+      .filter(t => desc.getPortCount("sendArgument", t.name) > 0 && !t.usesNewArgumentNotifier)
       .map { task =>
         val argPeCount = desc.getPortCount("sendArgument", task.name)
         val argServerCount = task.getNumServers("argumentNotifier")
@@ -121,6 +129,45 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           multiDecrease = task.variableSpawn,
           mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
           taskID = task.taskId
+        ))
+      }.toMap
+
+    val newArgNotifierFactories = desc.taskDescriptors
+      .filter(t => desc.getPortCount("sendArgument", t.name) > 0 && t.usesNewArgumentNotifier)
+      .map { task =>
+        val c = task.getSideConfig("argumentNotifier").get
+        val expectedNew = desc.getPortCount("spawnNext", task.name)
+        val expectedUpdates = desc.getPortCount("sendArgument", task.name)
+        require(
+          c.numVirtualServers * c.newContinuationLanesPerServer == expectedNew,
+          s"${task.name}: argument servers * new lanes must equal $expectedNew spawnNext sources"
+        )
+        require(
+          c.numVirtualServers * c.directUpdateLanesPerServer == expectedUpdates,
+          s"${task.name}: argument servers * direct update lanes must equal $expectedUpdates sendArgument sources"
+        )
+        task.name -> (() => new ArgumentNetworks(
+          ArgumentNetworksConfig(
+            nServers = c.numVirtualServers,
+            newLanesPerServer = c.newContinuationLanesPerServer,
+            updateLanesPerServer = c.directUpdateLanesPerServer,
+            nSlowHandlers = c.slowArgumentHandlerCount,
+            nEvictionSavers = c.cacheEvictionSaverCount,
+            counterWidth = desc.widthContCounter,
+            sysAddressWidth = desc.widthAddress,
+            realAddressWidth = desc.widthAXIAddress,
+            serverIDWidth = c.argumentServerIdWidth,
+            cacheDelayCycles = c.cacheDelayCycles,
+            missedUpdateExtra = c.missedUpdateExtra,
+            continuationSize = task.widthTask,
+            updateDataWidth = desc.taskDescriptors
+              .filter(source => desc.sendArgumentList.getOrElse(source.name, Nil).contains(task.name))
+              .flatMap(_.argumentSizeList)
+              .max,
+            slowCutCount = c.argumentNotifierCutCount,
+            evictCutCount = c.evictionCutCount,
+            slowRequestQueueDepth = c.slowRequestQueueDepth
+          )
         ))
       }.toMap
 
@@ -215,6 +262,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       schedulerFactories,
       allocatorFactories,
       argNotifierFactories,
+      newArgNotifierFactories,
       memAllocatorFactories,
       spawnNextWBFactories,
       sendArgumentWBFactories,
@@ -231,6 +279,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       scheds: Map[String, Scheduler],
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
+      newNotifiers: Map[String, ArgumentNetworks],
       memAllocs: Map[String, Allocator],
       pes: Map[String, Seq[VitisWriteBufferModule]],
       spawnNextWBs: Map[String, Seq[WriteBuffer]],
@@ -244,6 +293,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     for (taskName <- scheds.keys) {
       if (notifiers.contains(taskName)) {
         scheds(taskName).connArgumentNotifier <> notifiers(taskName).connStealNtw
+      } else if (newNotifiers.contains(taskName)) {
+        scheds(taskName).connArgumentNotifier <> newNotifiers(taskName).connStealNtw
       }
     }
 
@@ -279,6 +330,10 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     val systemConnectionsDescriptor = desc.getSystemConnectionsDescriptor()
 
     for (connection <- systemConnectionsDescriptor.connections) {
+      val isNewArgumentConnection =
+        connection.dstPort.parentType == "HardCilk" &&
+          connection.dstPort.portType == "argIn" &&
+          newNotifiers.contains(connection.dstPort.parentName)
       val srcIsPE = connection.srcPort.parentType == "PE"
       val dstIsPE = connection.dstPort.parentType == "PE"
       val peName = if (srcIsPE) connection.srcPort.parentName else if (dstIsPE) connection.dstPort.parentName else ""
@@ -289,7 +344,10 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
 
       println(s"[HardCilkBuilder] Connecting ${connection.srcPort} to ${connection.dstPort} (PE exists: ${peExists})")
 
-      if (srcIsPE && !peExists) {
+      if (isNewArgumentConnection) {
+        // Address+metadata is connected explicitly by HardCilk alongside the
+        // update write-buffer AXI port.
+      } else if (srcIsPE && !peExists) {
         val hardcilkPort = getPhysicalPort(connection.dstPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs)
         // Connecting WB m_allows to HardCilk and exporting s_allows port
         // Todo: is s_allows and m_allows always index 0? If yes, why it supports multiple?

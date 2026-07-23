@@ -37,19 +37,24 @@ class SchedulerNetworkDataUnit(taskWidth: Int) extends Module {
   //   val qOutTaskReadyReg = RegInit(false.B) // changed to true if the task insertion in the network succeeded in the previous cycle.
 
   // Create the propagations conditions
-  io.connSS.qOutTask.ready := false.B
-  io.connSS.availableTask.bits := 0.U
-  io.connSS.availableTask.valid := false.B
+  // A slot can be injected into exactly when it is empty. Drive ready from that fact alone, NOT
+  // from qOutTask.valid: a ready that depends combinationally on valid violates the decoupled
+  // contract and makes any client logic that reads ready unelaboratable, because the client's own
+  // valid then closes a combinational cycle back through the network. Injection is still gated on
+  // valid by the elsewhen below, so the handshake is unchanged.
+  io.connSS.qOutTask.ready := ~io.validIn
+  // Likewise, a task is available exactly when one is present in the slot. Driving valid from
+  // ready hid the task from any client that had not already committed to taking it, which makes
+  // "is something arriving?" unobservable. Consumption is still gated on ready by the when below.
+  io.connSS.availableTask.bits := io.taskIn
+  io.connSS.availableTask.valid := io.validIn
 
   when(io.connSS.availableTask.ready && io.validIn) {
     validReg := false.B
     taskReg := 0.U
-    io.connSS.availableTask.valid := true.B
-    io.connSS.availableTask.bits := io.taskIn
   }.elsewhen(io.connSS.qOutTask.valid && ~io.validIn) {
     validReg := true.B
     taskReg := io.connSS.qOutTask.bits
-    io.connSS.qOutTask.ready := true.B
   }.elsewhen(io.validIn) {
     validReg := io.validIn
     taskReg := io.taskIn

@@ -109,20 +109,20 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       networkLength,
       vssIgnoresRequests = false)
 
-  it should "fill the outstanding steal-request window to the number of empty local slots" in {
+  it should "fill the outstanding steal-request window to the minimum local threshold" in {
     test(client()) { dut =>
       dut.clock.setTimeout(0)
       initInputs(dut)
 
       var stealFires = 0
-      for (_ <- 0 until maxLengthThresh + 3) {
+      for (_ <- 0 until minLengthThresh + 3) {
         val r = stepWith(dut, stealReady = true)
         if (r.stealFire) stealFires += 1
       }
 
       sAssert(
-        stealFires == maxLengthThresh,
-        s"expected $maxLengthThresh steal requests for an empty local queue, saw $stealFires")
+        stealFires == minLengthThresh,
+        s"expected $minLengthThresh steal requests for an empty local queue, saw $stealFires")
     }
   }
 
@@ -144,9 +144,9 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       }
 
       sAssert(stealFires == 0, s"stealFires=$stealFires")
-      sAssert(availableFires == maxLengthThresh, s"availableFires=$availableFires")
+      sAssert(availableFires == minLengthThresh, s"availableFires=$availableFires")
       sAssert(
-        dut.io.toPE.get.currLength.peek().litValue == maxLengthThresh,
+        dut.io.toPE.get.currLength.peek().litValue == minLengthThresh,
         "queue did not fill from visible network tasks")
     }
   }
@@ -156,8 +156,9 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       dut.clock.setTimeout(0)
       initInputs(dut)
 
+      val initialRequests = minLengthThresh - 1
       var stealFires = 0
-      while (stealFires < 3) {
+      while (stealFires < initialRequests) {
         val r = stepWith(dut, stealReady = true)
         if (r.stealFire) stealFires += 1
       }
@@ -172,10 +173,10 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
         if (r.availableFire) availableFires += 1
       }
 
-      sAssert(stealFires == 3, s"stealFires=$stealFires")
-      sAssert(availableFires == maxLengthThresh, s"availableFires=$availableFires")
+      sAssert(stealFires == initialRequests, s"stealFires=$stealFires")
+      sAssert(availableFires == minLengthThresh, s"availableFires=$availableFires")
       sAssert(
-        dut.io.toPE.get.currLength.peek().litValue == maxLengthThresh,
+        dut.io.toPE.get.currLength.peek().litValue == minLengthThresh,
         "network tasks did not satisfy the desired window")
     }
   }
@@ -256,7 +257,7 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       dut.clock.setTimeout(0)
       initInputs(dut)
 
-      pushTasks(dut, (0 until maxLengthThresh + 2).map(i => BigInt(0x5300 + i)))
+      pushTasks(dut, (0 until minLengthThresh + 2).map(i => BigInt(0x5300 + i)))
 
       var served = 0
       for (_ <- 0 until 2) {
@@ -267,18 +268,18 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       sAssert(served == 2, s"served=$served")
 
       var popped = 0
-      for (_ <- 0 until 3) {
+      for (_ <- 0 until 1) {
         val r = stepWith(dut, popReady = true, stealReady = false)
         if (r.popFire) popped += 1
       }
-      sAssert(popped == 3, s"popped=$popped")
+      sAssert(popped == 1, s"popped=$popped")
 
       var refillSteals = 0
       for (_ <- 0 until 6) {
         val r = stepWith(dut, stealReady = true)
         if (r.stealFire) refillSteals += 1
       }
-      sAssert(refillSteals == 3, s"refillSteals=$refillSteals")
+      sAssert(refillSteals == 1, s"refillSteals=$refillSteals")
     }
   }
 
@@ -321,7 +322,7 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       dut.clock.setTimeout(0)
       initInputs(dut)
 
-      pushTasks(dut, (0 until maxLengthThresh).map(i => BigInt(0x7300 + i)))
+      pushTasks(dut, (0 until minLengthThresh).map(i => BigInt(0x7300 + i)))
 
       val popped = mutable.ArrayBuffer.empty[BigInt]
       for (_ <- 0 until 2) {
@@ -345,13 +346,18 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       dut.clock.setTimeout(0)
       initInputs(dut)
 
-      pushTasks(dut, Seq(BigInt("7400", 16), BigInt("7401", 16)))
-
       var stealFires = 0
-      while (stealFires < maxLengthThresh - 3) {
+      while (stealFires < minLengthThresh) {
         val r = stepWith(dut, stealReady = true)
         if (r.stealFire) stealFires += 1
       }
+
+      val firstReturned = stepWith(
+        dut,
+        availableValid = true,
+        availableBits = BigInt("7400", 16),
+        stealReady = false)
+      sAssert(firstReturned.availableFire, "first returned task was not accepted")
 
       val accepted = stepWith(
         dut,
@@ -373,7 +379,10 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "eventually issue one steal request for each opportunistically accepted task" in {
+  // Taking a task off the ring never moves desiredSteals, so an opportunistic intake costs no
+  // credit. Once the PE pops it the slot is wanted again, which yields one request for the slot
+  // itself PLUS one replacement for the demand that intake consumed from whoever did ask for it.
+  it should "issue a replacement steal request for each opportunistically accepted task" in {
     test(client()) { dut =>
       dut.clock.setTimeout(0)
       initInputs(dut)
@@ -387,22 +396,24 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
           stealReady = false)
         if (r.availableFire) acceptedTasks += 1
       }
-      sAssert(acceptedTasks == maxLengthThresh, s"acceptedTasks=$acceptedTasks")
+      sAssert(acceptedTasks == minLengthThresh, s"acceptedTasks=$acceptedTasks")
 
       var poppedTasks = 0
-      for (_ <- 0 until maxLengthThresh) {
+      for (_ <- 0 until minLengthThresh) {
         val r = stepWith(dut, popReady = true, stealReady = false)
         if (r.popFire) poppedTasks += 1
       }
       sAssert(poppedTasks == acceptedTasks, s"poppedTasks=$poppedTasks accepted=$acceptedTasks")
 
       var stealReqs = 0
-      for (_ <- 0 until maxLengthThresh + 3) {
+      for (_ <- 0 until minLengthThresh + 3) {
         val r = stepWith(dut, stealReady = true)
         if (r.stealFire) stealReqs += 1
       }
 
-      sAssert(stealReqs == acceptedTasks, s"stealReqs=$stealReqs acceptedTasks=$acceptedTasks")
+      sAssert(
+        stealReqs == minLengthThresh + acceptedTasks,
+        s"stealReqs=$stealReqs acceptedTasks=$acceptedTasks")
     }
   }
 
@@ -411,14 +422,12 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
       dut.clock.setTimeout(0)
       initInputs(dut)
 
-      pushTasks(dut, Seq(BigInt("8000", 16), BigInt("8001", 16)))
-
       var stealFires = 0
-      while (stealFires < maxLengthThresh - 2) {
+      while (stealFires < minLengthThresh) {
         val r = stepWith(dut, stealReady = true)
         if (r.stealFire) stealFires += 1
       }
-      sAssert(stealFires == 3, s"stealFires=$stealFires")
+      sAssert(stealFires == minLengthThresh, s"stealFires=$stealFires")
 
       var returnedFires = 0
       for (cycle <- 0 until 5) {
@@ -429,15 +438,15 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
           stealReady = false)
         if (r.availableFire) returnedFires += 1
       }
-      sAssert(returnedFires == 3, s"returnedFires=$returnedFires")
-      sAssert(dut.io.toPE.get.currLength.peek().litValue == maxLengthThresh)
+      sAssert(returnedFires == minLengthThresh, s"returnedFires=$returnedFires")
+      sAssert(dut.io.toPE.get.currLength.peek().litValue == minLengthThresh)
 
       val popped = mutable.ArrayBuffer.empty[BigInt]
       for (_ <- 0 until 2) {
         val r = stepWith(dut, popReady = true, stealReady = false)
         if (r.popFire) popped += r.popBits
       }
-      sAssert(popped == Seq(BigInt("8000", 16), BigInt("8001", 16)), s"popped=$popped")
+      sAssert(popped == Seq(BigInt("8100", 16), BigInt("8101", 16)), s"popped=$popped")
 
       var opportunisticFires = 0
       for (cycle <- 0 until 5) {
@@ -448,8 +457,8 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
           stealReady = false)
         if (r.availableFire) opportunisticFires += 1
       }
-      sAssert(opportunisticFires == 2, s"opportunisticFires=$opportunisticFires")
-      sAssert(dut.io.toPE.get.currLength.peek().litValue == maxLengthThresh)
+      sAssert(opportunisticFires == minLengthThresh, s"opportunisticFires=$opportunisticFires")
+      sAssert(dut.io.toPE.get.currLength.peek().litValue == minLengthThresh)
 
       var blockedServeFires = 0
       for (_ <- 0 until 5) {
@@ -457,23 +466,32 @@ class SchedulerClientTests extends AnyFlatSpec with ChiselScalatestTester {
         if (r.serveFire) blockedServeFires += 1
         sAssert(!r.qOutFire, "qOutTask fired while the data network was backpressured")
       }
-      sAssert(blockedServeFires == maxLengthThresh - minLengthThresh, s"blockedServeFires=$blockedServeFires")
+      sAssert(blockedServeFires == 0, s"blockedServeFires=$blockedServeFires")
 
       val out = mutable.ArrayBuffer.empty[BigInt]
       for (_ <- 0 until 5) {
         val r = stepWith(dut, qOutReady = true, stealReady = false, serveReady = false)
         if (r.qOutFire) out += r.qOutBits
       }
+      sAssert(out.isEmpty, s"out=$out")
+
+      val finalPops = mutable.ArrayBuffer.empty[BigInt]
+      for (_ <- 0 until minLengthThresh) {
+        val r = stepWith(dut, popReady = true, stealReady = false)
+        if (r.popFire) finalPops += r.popBits
+      }
       sAssert(
-        out == Seq(BigInt("8100", 16), BigInt("8101", 16), BigInt("8102", 16)),
-        s"out=$out")
+        finalPops == Seq(BigInt("8200", 16), BigInt("8201", 16)),
+        s"finalPops=$finalPops")
 
       var refillSteals = 0
       for (_ <- 0 until 8) {
         val r = stepWith(dut, stealReady = true)
         if (r.stealFire) refillSteals += 1
       }
-      sAssert(refillSteals == maxLengthThresh - minLengthThresh, s"refillSteals=$refillSteals")
+      // minLengthThresh for the window itself, plus one replacement per opportunistically accepted
+      // task -- those arrived without spending a request, so popping them re-opens the want.
+      sAssert(refillSteals == 2 * minLengthThresh, s"refillSteals=$refillSteals")
     }
   }
 }

@@ -1,16 +1,13 @@
 package Allocator
 
 import chisel3._
-import chisel3.util._
 
-import AXIHelpers._
 import Util._
 
 import chext.amba.axi4
 import chext.amba.axi4s
 import axi4.Ops._
 import axi4s.Casts._
-import axi4.full.components._
 
 class ClosureAllocatorPEIO(
     pePortWidth: Int,
@@ -63,27 +60,21 @@ class Allocator(
     pePortWidth: Int  // output pointer width to the PE (e.g. 64); addresses zero-extended to it
 ) extends Module {
 
-  // We want to pick the smallest legal number of ports that is greater than the number of PEs, otherwise just pick the max
-
-  private val pesPerServer = (peCount + vcasCount - 1) / vcasCount
-  require(pesPerServer >= 1, "No need to have more allocator servers than PEs")
+  require(vcasCount >= 1 && peCount >= 1)
   // HBM beat / task width; continuations pack at addrWidth - log2(memDataWidth/8)
   // significant bits (closures are memDataWidth-bit aligned) -- see AllocatorServer.
+  // The distribution ring carries whole packed beats; each VCAS server has ONE
+  // injection leg and the per-PE BeatUnpackers do the unpacking at the edge.
   private val memDataWidth = 256
-  private val continuationAddressBits = addrWidth - log2Ceil(memDataWidth / 8)
-  private val numContsPackedPerBeat = memDataWidth / continuationAddressBits
-  private val bestPortCount = (for {
-    n <- 1 to numContsPackedPerBeat
-    if (numContsPackedPerBeat % n == 0)
-    if (n >= pesPerServer || n == numContsPackedPerBeat)
-  } yield (n))(0)
 
   val continuationNetwork = Module(
     new AllocatorNetwork(
-      addrWidth = pePortWidth,
+      beatWidth = memDataWidth,
+      sysAddressWidth = addrWidth,
+      pePortWidth = pePortWidth,
       peCount = peCount,
       queueDepth = queueDepth,
-      vcasCount = vcasCount * bestPortCount
+      vcasCount = vcasCount
     )
   )
 
@@ -93,9 +84,7 @@ class Allocator(
         new AllocatorServer(
           dataWidth = memDataWidth,
           sysAddressWidth = addrWidth,
-          pePortWidth = pePortWidth,
-          burstLength = 15,
-          numOutputPorts = bestPortCount
+          burstLength = 15
         )
       )
     )
@@ -126,11 +115,7 @@ class Allocator(
 
     vcasRvmRO(i).io.read.get.address <> vcas(i).io.read_address
     vcasRvmRO(i).io.read.get.data <> vcas(i).io.read_data
-    for (j <- 0 until bestPortCount) {
-      vcas(i).io.dataOut(j) <> continuationNetwork.io.connVCAS(
-        i * bestPortCount + j
-      )
-    }
+    vcas(i).io.dataOut <> continuationNetwork.io.connVCAS(i)
   }
 
   axiFullPorts.zip(io_internal.vcas_axi_full).foreach { case (port, s_axi) =>
@@ -140,6 +125,6 @@ class Allocator(
   // closureOut and the continuation network are both pePortWidth, so the unpacked
   // pointers wire straight to the PE closure ports -- no width conversion.
   for (i <- 0 until peCount) {
-    io_export.closureOut(i).lite <> continuationNetwork.io.connPE(i)
+    io_export.closureOut(i).asLite <> continuationNetwork.io.connPE(i)
   }
 }

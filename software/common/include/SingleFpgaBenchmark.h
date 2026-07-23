@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memIO_xrt.h>
+#include <hardCilkDriver.h> // hardCilkDriver::stopRequested()
 
 #include <experimental/xrt_ip.h>
 #include <experimental/xrt_xclbin.h>
@@ -431,6 +432,21 @@ int runSingleFpgaBenchmark(const std::string &xclbin_path,
   if (!benchmarkCheckRuntimeEnv())
     return EXIT_FAILURE;
 
+  // Capture the pristine terminal so we can always restore it (the hw_emu
+  // simulator can leave the tty raw / no-echo when it takes a signal).
+  hardCilkDriver::saveTerminalState();
+
+  // Make the emulator child inherit SIG_IGN for SIGINT. The xrt::device
+  // constructor below spawns xsim INTO our foreground process group, so a terminal
+  // Ctrl-C would otherwise be delivered to xsim too -- pausing the simulator at its
+  // interactive prompt (which then hangs every telemetry read and holds the tty).
+  // With SIGINT ignored at spawn time, xsim keeps running; the host installs its
+  // own handler later (driver ctor) so Ctrl-C still triggers a graceful HOST stop
+  // while the simulator stays alive to service the telemetry readback and waveform
+  // save. Cancelling during xclbin load is intentionally disabled for that short
+  // window (no host handler yet); it is restored once the driver is constructed.
+  std::signal(SIGINT, SIG_IGN);
+
   if (wave.enabled)
     benchmarkSetupHwEmuWaveform(wave);
   else
@@ -451,10 +467,95 @@ int runSingleFpgaBenchmark(const std::string &xclbin_path,
 
   XRTMemory memory(device, kernel);
   auto start = std::chrono::high_resolution_clock::now();
-  int rc = run_with_memory(&memory);
+  int rc;
+  try
+  {
+    rc = run_with_memory(&memory);
+  }
+  catch (const std::exception &e)
+  {
+    // A device I/O call (typically a register read/write over the hw_emu socket)
+    // threw and unwound past the driver. memIO_xrt already retries transient
+    // failures; reaching here means it was unrecoverable. Do NOT let this
+    // std::terminate() the process -- that aborts without teardown and orphans the
+    // simulator. Terminate the simulator ourselves and exit with a failure code.
+    std::cerr << "[Run] FATAL: benchmark aborted by an unrecoverable device error: "
+              << e.what() << "\n";
+    hardCilkDriver::terminateSimulator();
+    hardCilkDriver::restoreTerminalState();
+    _exit(EXIT_FAILURE);
+  }
   auto end = std::chrono::high_resolution_clock::now();
   std::cout << "[Run] total wall time (including validation): "
             << std::chrono::duration<double>(end - start).count() << "s\n";
 
-  return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+  const int exit_code = rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+
+  // Prompt hw_emu exit. Under hw_emu the simulator (xsim) never halts on its own
+  // (the watcher CU is ap_ctrl_none), so the device teardown below blocks and the
+  // process would otherwise hang until the watchdog fires. When we are NOT
+  // capturing a waveform there is nothing left to flush -- all host work and
+  // telemetry are already done by this point -- so terminate the simulator and
+  // exit immediately for a clean, prompt return. With --waveform we must let the
+  // graceful teardown run so post_sim.tcl closes the VCD / copies the WDB (the
+  // watchdog below is the backstop, and it also kills xsim). On real hardware
+  // there is no xsim descendant, so this branch is skipped.
+  {
+    const char *emu_mode = std::getenv("XCL_EMULATION_MODE");
+    const bool is_hw_emu =
+        emu_mode != nullptr && std::string(emu_mode) == "hw_emu";
+    if (is_hw_emu && !wave.enabled && !hardCilkDriver::stopRequested())
+    {
+      std::cout << "[Run] hw_emu: terminating simulator and exiting.\n"
+                << std::flush;
+      hardCilkDriver::terminateSimulator();
+      hardCilkDriver::restoreTerminalState();
+      _exit(exit_code); // skip the teardown that would hang on a live emulator
+    }
+  }
+
+  // Teardown watchdog. Returning from this function destroys `memory` then
+  // `device`; the xrt::device destructor calls xclClose, which under hw_emu
+  // blocks until the simulator quiesces. After a Ctrl-C interrupt the compute
+  // CUs are still active (and the ap_ctrl_none watcher never stops on its own),
+  // so that close can hang indefinitely -- this is exactly why a second, forced
+  // Ctrl-C used to be needed to get the shell back. All host work and telemetry
+  // are already done by this point, so we spawn a detached watchdog: if teardown
+  // hasn't finished within a grace period, terminate the process ourselves with
+  // the right exit code. A normal run's teardown completes well inside the grace
+  // window, main returns, and the process exits before the watchdog ever fires
+  // (the sleeping detached thread is reaped by process exit). We use a short
+  // grace after an interrupt (teardown will hang) and a generous safety-net
+  // otherwise. Deliberately thread-based, not SIGALRM, to avoid perturbing any
+  // signal handling XRT relies on during close.
+  const bool interrupted = hardCilkDriver::stopRequested();
+  // Grace before the watchdog force-kills teardown. When capturing a waveform,
+  // teardown must run post_sim.tcl to finalize/save the VCD and copy the WDB,
+  // which is slow in hw_emu -- give it a generous backstop (whether or not we were
+  // interrupted) so the save is NEVER cut off. If teardown completes, main returns
+  // and this detached thread is reaped before the timeout ever matters, so a large
+  // value costs nothing on a healthy run. With no waveform there is nothing left to
+  // save (telemetry was already dumped inside run_test_bench), so a short grace
+  // after an interrupt is fine; a normal no-waveform hw_emu run already exited
+  // above. A second Ctrl-C (force_requested_) bypasses all of this immediately.
+  const int grace_s = wave.enabled ? 600 : (interrupted ? 3 : 60);
+  std::thread([exit_code, grace_s]() {
+    std::this_thread::sleep_for(std::chrono::seconds(grace_s));
+    static const char msg[] =
+        "\n[Run] device teardown did not complete in time; terminating the "
+        "simulator and forcing a clean exit\n";
+    ssize_t written = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    (void)written;
+    std::fflush(nullptr);
+    // The stuck teardown means xclClose never told the emulator to quit; kill it
+    // ourselves so a forced _exit() never leaves an orphaned xsim pinning /tmp.
+    hardCilkDriver::terminateSimulator();
+    hardCilkDriver::restoreTerminalState();
+    _exit(exit_code);
+  }).detach();
+
+  // Normal-return path: restore the terminal too, in case the simulator perturbed
+  // it during the run (cheap insurance; a no-op if it was left clean).
+  hardCilkDriver::restoreTerminalState();
+  return exit_code;
 }

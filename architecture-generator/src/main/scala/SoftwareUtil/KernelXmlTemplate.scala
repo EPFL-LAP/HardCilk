@@ -53,7 +53,7 @@ object KernelXmlTemplate {
   ): Unit = {
     Files.createDirectories(Paths.get(outputDir))
 
-    // When a watcher is present it owns the last (topmost) master and is mapped to
+    // When a watcher is present it owns the last two (topmost) masters, mapped to
     // the exclusive top HBM channels HBM[16:31]; every other master is confined to
     // HBM[0:15] and its addressable range is the lower 8 GB.
     val hasWatcher = descriptor.watcherConfig.isDefined
@@ -116,16 +116,29 @@ object KernelXmlTemplate {
 
     val mfpga = descriptor.mFPGASynth || descriptor.mFPGASimulation
 
-    // With exclusive HBM channels every master sees only an 8 GB window
-    // (HBM[0:15] for compute, HBM[16:31] for the watcher); otherwise the full
-    // 16 GB range as before.
-    val masterRange = if (hasWatcher) "0x1FFFFFFFF" else "0x3FFFFFFFF"
+    // Per-master addressable range (metadata for package_xo/XRT). `base` is 0x0 and
+    // the kernel issues ABSOLUTE physical addresses, so `range` is the highest byte
+    // address the port can reach measured from 0 -- NOT a base-relative window size.
+    //
+    //  - No watcher: every master may address the full 16 GB HBM map (0x3FFFFFFFF).
+    //  - With a watcher the top two masters are its telemetry ports, each pinned to
+    //    a 4 GB HBM window in the connectivity .cfg, so their reach is bounded:
+    //      port A (numMasters-2, m_axi_gmem)  -> HBM[16:23], top 0x2_FFFF_FFFF
+    //      port B (numMasters-1, m_axi_gmem1) -> HBM[24:31], top 0x3_FFFF_FFFF
+    //    Every compute/server master is confined to HBM[0:15] (lower 8 GB,
+    //    0x1_FFFF_FFFF). (The routing itself comes from the .cfg sp= lines; this
+    //    only makes the declared range honest instead of the old too-small 8 GB.)
+    def portRange(i: Int): String =
+      if (!hasWatcher) "0x3FFFFFFFF"
+      else if (i == numMasters - 1) "0x3FFFFFFFF" // watcher port B -> HBM[24:31]
+      else if (i == numMasters - 2) "0x2FFFFFFFF" // watcher port A -> HBM[16:23]
+      else "0x1FFFFFFFF" // compute/server -> HBM[0:15]
 
     // --- ports ---
     val masterPorts = (0 until numMasters).map { i =>
       s"""      <port name="${portName(
           i
-        )}" mode="master" range="${masterRange}" dataWidth="256" portType="addressable" base="0x0"/>"""
+        )}" mode="master" range="${portRange(i)}" dataWidth="256" portType="addressable" base="0x0"/>"""
     }
 
     // Size the management slave to cover both the per-server register blocks and
@@ -229,17 +242,40 @@ ${argsBlock}
     def fullRangeSwitchIndex(i: Int): Int =
       if (i == lockPortIndex) 0 else i + 1
 
-    // With a watcher: the topmost master (index numMasters-1) is the watcher and
-    // gets the exclusive top half HBM[16:31]; every compute/server master is
-    // confined to HBM[0:15] so the watcher's traffic never crosses theirs. Each
-    // port's pseudo-channel stays inside its mapped range (compute spread across
-    // PC 0..15, watcher pinned to PC 16).
-    val watcherPortIndex = numMasters - 1
+    // With a watcher: the TWO topmost masters are the watcher's telemetry ports and
+    // split the exclusive top half HBM[16:31] into two 4 GB windows. Port A
+    // (index numMasters-2, m_axi_gmem) -> HBM[16:23] pinned to PC16; port B
+    // (index numMasters-1, m_axi_gmem1) -> HBM[24:31] pinned to PC24. Bursts
+    // alternate between them so telemetry is spread evenly across both windows.
+    // Every compute/server master is confined to HBM[0:15] so the watcher's traffic
+    // never crosses theirs.
+    val watcherPortB = numMasters - 1 // m_axi_gmem1 -> HBM[24:31]
+    val watcherPortA = numMasters - 2 // m_axi_gmem  -> HBM[16:23]
     def spTag(i: Int): String =
       if (hasWatcher) {
-        if (i == watcherPortIndex) "HBM[16:31].31"
-        else s"HBM[0:15].${i % 31}"
+        if (i == watcherPortB) "HBM[24:31].24"
+        else if (i == watcherPortA) "HBM[16:23].16"
+        else s"HBM[0:15].${i % 16}"
       } else s"HBM[0:31].${fullRangeSwitchIndex(i)}"
+
+    // Load-bearing ownership invariant. Keep this as an explicit validation even
+    // though the mappings above are generated here: a future custom-placement
+    // feature must fail loudly instead of silently allowing compute traffic onto
+    // the watcher's exclusive HBM[16:31] telemetry windows.
+    if (hasWatcher) {
+      require(numMasters >= 2, "watcher-enabled design requires two telemetry AXI masters")
+      val computeMappings = (0 until watcherPortA).map(i => i -> spTag(i))
+      val conflicts = computeMappings.filterNot(_._2.startsWith("HBM[0:15]."))
+      require(
+        conflicts.isEmpty,
+        s"watcher requires exclusive control of HBM[16:31], but compute mappings conflict: ${conflicts.mkString(", ")}"
+      )
+      require(
+        spTag(watcherPortA).startsWith("HBM[16:23].") &&
+          spTag(watcherPortB).startsWith("HBM[24:31]."),
+        s"watcher telemetry masters must exclusively map to HBM[16:23] and HBM[24:31]"
+      )
+    }
 
     val spLines = (0 until numMasters)
       .map { i =>

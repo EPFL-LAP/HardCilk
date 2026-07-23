@@ -15,15 +15,17 @@ import scala.collection.immutable.SeqMap
   *
   * Observed `watcher.v` interface:
   *   - ap_clk, ap_rst_n
-  *   - mem_0..7   [63:0]  input  -- m_axi base pointers (HLS offset=direct)
+  *   - mem_0, mem_8 [63:0] input -- sole base pointers for gmem and gmem1 in the
+  *                                  default one-writer-per-port build
   *   - start_addr [63:0]  input  -- byte offset added inside the kernel
   *   - start_gate [0:0]   input  -- 1 once the spawn scheduler dispatches its first
   *                                  task; the watcher stays idle until then
-  *   - m_axi_gmem         master -- wId=3, wAddr=64, wData=256, wUser*=1, full AXI4
-  *                                  (256-bit beat = two 128-bit telemetry bundles)
-  *   - <statusPrefix>_in_<i>  [1:0] input  -- {bit1=ready, bit0=valid} of the in queue
-  *   - <statusPrefix>_out_<i> [1:0] input  -- {bit1=ready, bit0=valid} of the out queue
-  *     HLS drops the `_<i>` suffix for array ports when the array length is 1.
+  *   - m_axi_gmem         master -- port A: wId=3, wAddr=64, wData=256, wUser*=1, full
+  *                                  AXI4 (256-bit beat = two 128-bit telemetry bundles)
+  *   - m_axi_gmem1        master -- port B: identical config; telemetry alternates
+  *                                  whole bursts across the two masters
+  *   - status_<i> [3:0] input -- twenty-two generic physical STATUS nibbles; JSON and
+  *                              generator wiring define each nibble's meaning
   *   - bw_wbytes_<p> [7:0]   input  -- write bytes transferred this cycle on HBM port p
   *   - bw_rbytes_<p> [15:0]  input  -- read  bytes requested this cycle on HBM port p
   *   - bw_awaddr_<p> [19:0]  input  -- most-recent AW addr[63:44] on HBM port p (future)
@@ -34,35 +36,25 @@ import scala.collection.immutable.SeqMap
   * before the watcher is synthesized; the platform HBM adapter does the 256->256
   * pass-through. If the kernel's interface changes, re-synthesize and update here.
   *
-  * @param monitored   (statusPrefix, peCount) per monitored task, dynamic in PE count
+  * @param statusSlots fixed physical STATUS pin count; currently 22
   * @param maxHbmPorts number of per-HBM-port bandwidth/address pin groups (kernel
   *                    MAX_HBM_PORTS); the actual exported compute ports are wired in
   *                    connectWatcher and any extra pins are tied to 0.
+  * @param memBaseChannels scalar m_axi base-pointer suffixes present in watcher.v;
+  *                        Seq(0, 8) for the default two-writer build
   */
 class WatcherBlackBox(
     val moduleName: String,
     val gmemCfg: axi4.Config,
     val addrWidth: Int,
-    val monitored: Seq[(String, Int)],
-    val maxHbmPorts: Int
+    val statusSlots: Int,
+    val maxHbmPorts: Int,
+    val memBaseChannels: Seq[Int]
 ) extends BlackBox {
   override def desiredName: String = moduleName
 
-  private val monitoredCounts: Map[String, Int] = monitored.toMap
-
-  private def statusPinName(statusPrefix: String, direction: String, i: Int): String = {
-    val count = monitoredCounts.getOrElse(
-      statusPrefix,
-      throw new RuntimeException(s"Unknown watcher status prefix: $statusPrefix")
-    )
-    if (count == 1) s"${statusPrefix}_${direction}"
-    else s"${statusPrefix}_${direction}_${i}"
-  }
-
-  def inPinName(statusPrefix: String, i: Int): String =
-    statusPinName(statusPrefix, "in", i)
-  def outPinName(statusPrefix: String, i: Int): String =
-    statusPinName(statusPrefix, "out", i)
+  require(statusSlots > 0)
+  def statusPinName(i: Int): String = s"status_$i"
   def memBasePin(channel: Int): String = s"mem_${channel}"
 
   def wbytesPin(p: Int): String = s"bw_wbytes_${p}"
@@ -76,9 +68,7 @@ class WatcherBlackBox(
   val addrWidthTap: Int = 20
 
   private val statusPins: Seq[String] =
-    monitored.flatMap { case (prefix, count) =>
-      (0 until count).flatMap(i => Seq(inPinName(prefix, i), outPinName(prefix, i)))
-    }
+    (0 until statusSlots).map(statusPinName)
 
   val io = IO(new chisel3.Record {
     val elements: SeqMap[String, Data] = SeqMap.from(
@@ -87,10 +77,11 @@ class WatcherBlackBox(
         "ap_rst_n" -> Input(Bool()),
         "start_addr" -> Input(UInt(addrWidth.W)),
         "start_gate" -> Input(UInt(1.W)),
-        "m_axi_gmem" -> axi4.Master(gmemCfg)
+        "m_axi_gmem" -> axi4.Master(gmemCfg),
+        "m_axi_gmem1" -> axi4.Master(gmemCfg)
       )
-        ++ (0 until 8).map(i => memBasePin(i) -> Input(UInt(addrWidth.W)))
-        ++ statusPins.map(p => p -> Input(UInt(2.W)))
+        ++ memBaseChannels.map(i => memBasePin(i) -> Input(UInt(addrWidth.W)))
+        ++ statusPins.map(p => p -> Input(UInt(4.W)))
         ++ (0 until maxHbmPorts).map(p => wbytesPin(p) -> Input(UInt(wbytesWidth.W)))
         ++ (0 until maxHbmPorts).map(p => rbytesPin(p) -> Input(UInt(rbytesWidth.W)))
         ++ (0 until maxHbmPorts).map(p => awaddrPin(p) -> Input(UInt(addrWidthTap.W)))

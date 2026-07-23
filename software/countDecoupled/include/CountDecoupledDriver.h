@@ -13,6 +13,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -34,12 +35,13 @@ static constexpr uint64_t TELEMETRY_IO_CHUNK_BYTES = 64ULL << 20;
 struct __attribute__((packed)) CountDecoupledRootTask
 {
   Addr cont;
+  uint32_t continuation_meta;
   Addr A;
   Addr count;       // running match count (starts at 0), carried in the closure
   Addr count_final; // memory address the finished initiator writes the result to
   uint32_t size;
   uint32_t i;
-  uint8_t _padding[24];
+  uint8_t _padding[20];
 };
 
 static_assert(sizeof(CountDecoupledRootTask) ==
@@ -58,10 +60,17 @@ public:
                                uint32_t num_instances = 1,
                                double watchdog_s = 600.0,
                                bool fast_mode = false,
-                               std::string xclbin_path = std::string())
+                               std::string xclbin_path = std::string(),
+                               bool legacy_single_port_watcher = false,
+                               bool hbm_strided_writes = false,
+                               uint64_t hbm_continuation_bank_run_entries = 1)
       : hardCilkDriver(memory), size_(std::max<uint32_t>(1, size)),
         num_instances_(std::max<uint32_t>(1, num_instances)),
         watchdog_s_(watchdog_s), fast_mode_(fast_mode),
+        legacy_single_port_watcher_(legacy_single_port_watcher),
+        hbm_strided_writes_(hbm_strided_writes),
+        hbm_continuation_bank_run_entries_(
+            std::max<uint64_t>(1, hbm_continuation_bank_run_entries)),
         xclbin_path_(std::move(xclbin_path)) {}
 
   static int run_cpu_test_bench(uint32_t size)
@@ -96,17 +105,47 @@ public:
     // per-instance BOs into the watcher-only banks after enough allocations.
     Addr telemetry_base = reserveTelemetry();
     configureComputeBankRange();
+    if (hbm_strided_writes_)
+    {
+      setHbmWriteDistribution(true, COMPUTE_FIRST_BANK, COMPUTE_LAST_BANK,
+                              hbm_continuation_bank_run_entries_);
+      // --- Smart per-region HBM placement (port N's region -> bank N) -------------
+      // The crossbar behaves like a long ring, so we minimize lateral traversal and
+      // keep all remaining lateral traffic (the hot closure writes) flowing one
+      // direction. Bank numbers below == the HBM pseudo-channel each master's m_axi
+      // port is bound to (hbmports.json / conn_u55c.cfg: port index == HBM bank):
+      //   scheduler rings  : taskAdder=7, initiator=8/9  (each ring local to its
+      //                      own ring port -> no lateral traffic). memReader has
+      //                      NO scheduler server (numVirtualServers=0): it is fed
+      //                      purely by its on-chip spawner ring with no HBM spill,
+      //                      so it needs no ring bank (bank 14 is now free).
+      //   allocator FIFO   : port 15  (allocator read becomes lateral-free, which is
+      //                      what removes the earlier allocator-vs-closure freeze)
+      //   closure pool     : strided across 10..13, WRITTEN by spawnNext ports 5/6
+      //                      and argOut ports 3/4 (all flowing UP, one direction),
+      //                      READ by notifier ports 10..13
+      //   graph A -> 0, count/done -> 2 (kept off the hot closure banks; see below)
+      setContinuationBankRange(CLOSURE_FIRST_BANK, CLOSURE_LAST_BANK);
+      setRegionBankOverride("sched:taskAdder_cont0:0", 7);
+      setRegionBankOverride("sched:taskInitiator_reentry0:0", 8);
+      setRegionBankOverride("sched:taskInitiator_reentry0:1", 9);
+      // memReader has no scheduler server (0 virtual servers) -> no ring region to
+      // place; it is fed purely by its on-chip spawner ring (no HBM spill).
+      setRegionBankOverride("alloc:taskAdder_cont0:0", 15);
+      std::cout << "[hbm-dist] smart placement: rings@7/8/9, allocFIFO@15, "
+                << "closures@" << CLOSURE_FIRST_BANK << ".." << CLOSURE_LAST_BANK
+                << ", A@" << GRAPH_A_BANK << ", count/done@" << COUNT_DONE_BANK
+                << " (continuation bank-run entries="
+                << hbm_continuation_bank_run_entries_ << ")\n";
+    }
 
     // Aggregate each per-instance buffer type into one BO. Thousands of tiny BOs
     // get distributed across every bank by XRT and leave no completely free,
     // adjacent banks for the large continuation pool allocated by initSystem.
     const uint64_t all_array_bytes = array_bytes * N;
-    Addr all_A_addr = allocateComputeMem(all_array_bytes, 512);
-    Addr all_count_addr = allocateComputeMem((uint64_t)N * 2 * sizeof(int32_t),
-                                             512);
+    Addr all_A_addr = allocateGraphInput(all_array_bytes);
 
     std::vector<int32_t> all_A((uint64_t)N * size_);
-    std::vector<int32_t> all_count((uint64_t)N * 2, 0);
     for (uint32_t k = 0; k < N; ++k)
     {
       std::copy(A.begin(), A.end(), all_A.begin() + (uint64_t)k * size_);
@@ -114,21 +153,19 @@ public:
     memory_->copyToDevice(all_A_addr,
                           reinterpret_cast<const uint8_t *>(all_A.data()),
                           all_array_bytes);
-    memory_->copyToDevice(all_count_addr,
-                          reinterpret_cast<const uint8_t *>(all_count.data()),
-                          all_count.size() * sizeof(int32_t));
 
     // Build N non-overlapping instances and one root task each.
     std::vector<CountDecoupledRootTask> roots(N);
     std::vector<Addr> count_addrs(N), done_addrs(N);
+    allocateCountDoneRecords(N, count_addrs, done_addrs);
     for (uint32_t k = 0; k < N; ++k)
     {
       Addr A_addr = all_A_addr + (uint64_t)k * array_bytes;
-      Addr count_addr = all_count_addr +
-                        (uint64_t)k * 2 * sizeof(int32_t);
-      Addr done_addr = count_addr + sizeof(int32_t);
+      Addr count_addr = count_addrs[k];
+      Addr done_addr = done_addrs[k];
       CountDecoupledRootTask &r = roots[k];
       r.cont = done_addr;
+      r.continuation_meta = 0;
       r.A = A_addr;
       r.count = 0;               // running value, accumulated in the closure
       r.count_final = count_addr; // final result + done flag land here (8-byte store)
@@ -140,6 +177,8 @@ public:
 
     std::cout << "[countDecoupled] instances=" << N << " size=" << size_
               << " expected_matches_each=" << expected << "\n";
+    if (legacy_single_port_watcher_)
+      std::cout << "[telemetry] using legacy single-port watcher layout\n";
 
     // initSystem writes the whole vector to the root scheduler and sets
     // fifoTail=N, so all N root tasks are live concurrently.
@@ -181,8 +220,28 @@ public:
     std::cout << "[countDecoupled-FPGA] passed=" << passed << "/" << N
               << " expected_each=" << expected << "\n";
 
+    // The compute done words become visible before the independent ap_ctrl_none
+    // watcher has necessarily committed its bounded pipeline tail to HBM. Do not
+    // race telemetry readback against those final writes. Hardware drains the
+    // complete set of internal FIFOs in far less than 1 ms; hw_emu advances the
+    // kernel clock only a few hundred cycles per wall-clock second, so give that
+    // model enough time to retire the same bounded tail.
+    if (telemetry_base != 0)
+    {
+      const char *emu = std::getenv("XCL_EMULATION_MODE");
+      const bool hw_emu = emu != nullptr && std::strcmp(emu, "hw_emu") == 0;
+      const auto grace = hw_emu ? std::chrono::seconds(10)
+                                : std::chrono::milliseconds(1);
+      std::cout << "[telemetry] waiting for watcher pipeline to drain ("
+                << (hw_emu ? "10 s hw_emu" : "1 ms hardware") << ")\n";
+      std::this_thread::sleep_for(grace);
+    }
+
     // Always dump telemetry (even on failure) so a hang/mismatch can be analyzed.
-    dumpTelemetry(telemetry_base);
+    if (legacy_single_port_watcher_)
+      dumpTelemetry(telemetry_base);
+    else
+      dumpTelemetryTwoPort(telemetry_base);
 
     if (rc == 0 && passed == N)
     {
@@ -206,7 +265,16 @@ private:
   static constexpr int TELEMETRY_FIRST_BANK = 16;
   static constexpr int COMPUTE_FIRST_BANK = 0;
   static constexpr int COMPUTE_LAST_BANK = 15;
+  // Smart-placement banks (see the map in run_test_bench). Closures stride 10..13;
+  // graph A and the count/done records get pinned off those hot banks.
+  static constexpr int CLOSURE_FIRST_BANK = 10;
+  static constexpr int CLOSURE_LAST_BANK = 13;
+  static constexpr int GRAPH_A_BANK = 0;
+  static constexpr int COUNT_DONE_BANK = 2;
   static constexpr Addr TELEMETRY_GLOBAL_BASE = 0x200000000ULL;
+  // Port B sits exactly 4 GiB above port A (HBM[24] base - HBM[16] base); the
+  // watcher kernel adds this same offset internally (FOUR_GB_BEATS in memAccess.cpp).
+  static constexpr Addr TELEMETRY_PORT_STRIDE = 0x100000000ULL; // 4 GiB
   static constexpr int INITIAL_SCHEDULER_VIRTUAL_CAPACITY = 32768;
   bool isEmulation() const
   {
@@ -226,14 +294,45 @@ private:
     return std::string(ts);
   }
 
+  static std::string telemetryOutputPath()
+  {
+    const char *configured = std::getenv("HARDCILK_TELEMETRY_DIR");
+    const std::filesystem::path dir =
+        configured != nullptr && configured[0] != '\0' ? configured : "/tmp";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec)
+      std::cerr << "[telemetry] could not create output directory " << dir
+                << ": " << ec.message() << "\n";
+    return (dir / (std::string("countDecoupled_telemetry_") +
+                   telemetryTimestamp() + ".bin"))
+        .string();
+  }
+
+  // Per-port telemetry region size. Each of the watcher's two physical ports owns
+  // a 4 GiB HBM half: port A = HBM[16:23] at the reserve base, port B = HBM[24:31]
+  // exactly TELEMETRY_PORT_STRIDE higher. This is the per-region scan/zero window.
+  uint64_t perRegionWindowBytes() const
+  {
+    return isEmulation() ? (256ULL << 20) : (4ULL << 30);
+  }
+
+  // The reserve must span BOTH regions: [base, base + 4 GiB + perRegionWindow). On
+  // HW that is 8 GiB (all of HBM[16:31], same as the old single-region reserve); in
+  // emulation it is 4 GiB + a small window so port B at +4 GiB is still inside the
+  // reserved (host-readable) BO.
   uint64_t getTelemetryReserveBytes() const
   {
-    return isEmulation() ? (256ULL << 20) : (8ULL << 30);
+    if (legacy_single_port_watcher_)
+      return isEmulation() ? (256ULL << 20) : (8ULL << 30);
+    return TELEMETRY_PORT_STRIDE + perRegionWindowBytes();
   }
 
   uint64_t getTelemetryWindowBytes() const
   {
-    return getTelemetryReserveBytes();
+    if (legacy_single_port_watcher_)
+      return getTelemetryReserveBytes();
+    return perRegionWindowBytes();
   }
 
   Addr allocateComputeMem(uint64_t size, uint64_t alignment)
@@ -244,6 +343,80 @@ private:
     return xrtMem->allocateMemFPGAInBankRange(size, alignment,
                                               COMPUTE_FIRST_BANK,
                                               COMPUTE_LAST_BANK);
+  }
+
+  // Graph input A is read-only and low-bandwidth (one int per iteration), so in
+  // smart-placement mode we simply pin it to GRAPH_A_BANK to keep it off the hot
+  // closure/ring banks. Falls back to the full compute range if it can't fit one
+  // bank (large N) or the memory isn't XRT.
+  Addr allocateGraphInput(uint64_t size)
+  {
+    XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
+    if (!hbm_strided_writes_ || xrtMem == nullptr)
+      return allocateComputeMem(size, 512);
+    try
+    {
+      Addr a = xrtMem->allocateMemFPGAInBankRange(size, 512, GRAPH_A_BANK,
+                                                  GRAPH_A_BANK);
+      std::cout << "[hbm-dist] graph A -> HBM[" << GRAPH_A_BANK << "] addr=0x"
+                << std::hex << a << std::dec << " bytes=" << size << "\n";
+      return a;
+    }
+    catch (const std::exception &)
+    {
+      std::cerr << "[hbm-dist] graph A did not fit HBM[" << GRAPH_A_BANK
+                << "]; falling back to compute range\n";
+      return allocateComputeMem(size, 512);
+    }
+  }
+
+  void allocateCountDoneRecords(uint32_t N, std::vector<Addr> &count_addrs,
+                                std::vector<Addr> &done_addrs)
+  {
+    const uint64_t recordBytes = 2 * sizeof(int32_t);
+    if (!hbm_strided_writes_)
+    {
+      Addr base = allocateComputeMem((uint64_t)N * recordBytes, 512);
+      std::vector<int32_t> zeros((uint64_t)N * 2, 0);
+      memory_->copyToDevice(base, reinterpret_cast<const uint8_t *>(zeros.data()),
+                            zeros.size() * sizeof(int32_t));
+      for (uint32_t k = 0; k < N; ++k)
+      {
+        count_addrs[k] = base + (uint64_t)k * recordBytes;
+        done_addrs[k] = count_addrs[k] + sizeof(int32_t);
+      }
+      return;
+    }
+
+    XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
+    if (xrtMem == nullptr)
+    {
+      std::cerr << "[hbm-dist] memory is not XRTMemory; count/done records "
+                   "fall back to contiguous allocation\n";
+      const bool saved = hbm_strided_writes_;
+      hbm_strided_writes_ = false;
+      allocateCountDoneRecords(N, count_addrs, done_addrs);
+      hbm_strided_writes_ = saved;
+      return;
+    }
+
+    // Smart placement: keep the count/done records on ONE bank (COUNT_DONE_BANK),
+    // local to the initiator's main port (which issues the 8-byte done store), so
+    // those writes never scatter onto the hot closure banks. Contiguous within the
+    // bank; the strided poll path reads each record individually anyway.
+    Addr base = xrtMem->allocateMemFPGAInBankRange((uint64_t)N * recordBytes, 512,
+                                                   COUNT_DONE_BANK, COUNT_DONE_BANK);
+    std::vector<int32_t> zeros((uint64_t)N * 2, 0);
+    memory_->copyToDevice(base, reinterpret_cast<const uint8_t *>(zeros.data()),
+                          zeros.size() * sizeof(int32_t));
+    std::cout << "[hbm-dist] count/done records -> HBM[" << COUNT_DONE_BANK
+              << "] addr=0x" << std::hex << base << std::dec
+              << " records=" << N << "\n";
+    for (uint32_t k = 0; k < N; ++k)
+    {
+      count_addrs[k] = base + (uint64_t)k * recordBytes;
+      done_addrs[k] = count_addrs[k] + sizeof(int32_t);
+    }
   }
 
   void clearComputeHBM()
@@ -324,23 +497,40 @@ private:
       std::vector<uint8_t> zeros(
           static_cast<size_t>(std::min<uint64_t>(TELEMETRY_IO_CHUNK_BYTES, windowBytes)),
           0);
-      for (uint64_t off = 0; off < windowBytes; off += zeros.size())
+      auto zeroWindow = [&](Addr wbase)
       {
-        const uint64_t n = std::min<uint64_t>(zeros.size(), windowBytes - off);
-        memory_->copyToDevice(base + off, zeros.data(), n);
-        // Push the zeroed window down to device memory so stale device contents
-        // can't masquerade as bundles, and so the watcher overwrites a known-0 region.
-        if (auto *xm = dynamic_cast<XRTMemory *>(memory_))
+        for (uint64_t off = 0; off < windowBytes; off += zeros.size())
         {
-          try { xm->syncRegionToDevice(base + off, n); }
-          catch (const std::exception &e)
-          { std::cerr << "[telemetry] zero-fill sync threw: " << e.what() << "\n"; }
+          const uint64_t n = std::min<uint64_t>(zeros.size(), windowBytes - off);
+          memory_->copyToDevice(wbase + off, zeros.data(), n);
+          if (auto *xm = dynamic_cast<XRTMemory *>(memory_))
+          {
+            try { xm->syncRegionToDevice(wbase + off, n); }
+            catch (const std::exception &e)
+            { std::cerr << "[telemetry] zero-fill sync threw: " << e.what() << "\n"; }
+          }
         }
+      };
+      if (legacy_single_port_watcher_)
+      {
+        zeroWindow(base);
+        std::cout << "[telemetry] reserved " << (reserveBytes >> 20)
+                  << " MB at 0x" << std::hex << base << std::dec
+                  << ", zeroed " << (windowBytes >> 10)
+                  << " KB legacy single-port readback window\n";
       }
-      std::cout << "[telemetry] reserved " << (reserveBytes >> 20)
-                << " MB at 0x" << std::hex << base << std::dec
-                << ", zeroed " << (windowBytes >> 10)
-                << " KB readback window\n";
+      else
+      {
+        // Zero BOTH port regions (A at base, B at base + 4 GiB). This keeps stale
+        // device contents from masquerading as bundles and gives each region a clean
+        // all-zero terminator for the populated-prefix scan.
+        zeroWindow(base);
+        zeroWindow(base + TELEMETRY_PORT_STRIDE);
+        std::cout << "[telemetry] reserved " << (reserveBytes >> 20)
+                  << " MB at 0x" << std::hex << base << std::dec
+                  << ", zeroed two " << (windowBytes >> 20)
+                  << " MB port regions (A@base, B@+4GiB)\n";
+      }
       return base;
     }
     catch (const std::exception &e)
@@ -412,6 +602,338 @@ private:
                    "(unexpected -- possible zero-fill/sync race).\n";
   }
 
+  // ==================================================================
+  // Two-port telemetry reassembly
+  // ==================================================================
+  // The watcher writes across two physical HBM ports (memAccess.cpp): bursts
+  // ALTERNATE port A (HBM[16:23], region base) and port B (HBM[24:31], base +
+  // TELEMETRY_PORT_STRIDE). On HW, concurrent writer channels can reorder
+  // timestamps even WITHIN one physical region, so a 2-way merge is insufficient.
+  // We rebuild the viewer stream by globally sorting all beats on cycle_count:
+  //   * STATUS bundles carry an exact 32-bit per-beat cycle (format.md §3), and the
+  //     watcher emits <=1 beat/cycle, so STATUS cycles are unique -> STATUS ordering
+  //     is byte-exact and the conservation check (which needs monotonic cycles) holds.
+  //   * BW_READ/BW_WRITE bundles carry no timestamp; they inherit the window cycle
+  //     from their group's BW_ADDR bundle (or carry-forward). That is exactly how the
+  //     viewer time-anchors bandwidth (§4/§5), so a BW sample's 128-cycle window is
+  //     preserved. Only the byte-position of a BW group relative to the OTHER region's
+  //     same-cycle beats is approximate; a BW group that straddles a 64-beat burst
+  //     boundary may split, which the viewer tolerates (self-describing bundles, §7).
+
+  // Cycle key for one 32-byte beat: exact STATUS cycle if present, else the BW_ADDR
+  // window cycle, else the carried last-known cycle. Do not assume these keys are
+  // monotonic in raw HBM address order: concurrent writer channels can reorder burst
+  // contents on HW, so the host globally sorts all keyed beats below.
+  static uint64_t beatCycleKey(const uint8_t *beat, uint64_t &carry)
+  {
+    // Prefer an exact STATUS cycle (unique per beat: <=1 beat/cycle at II=1).
+    for (int slot = 0; slot < 2; ++slot)
+    {
+      const uint8_t *b = beat + slot * 16;
+      uint64_t lo = 0, hi = 0;
+      for (int i = 0; i < 8; ++i)
+      {
+        lo |= static_cast<uint64_t>(b[i]) << (8 * i);
+        hi |= static_cast<uint64_t>(b[8 + i]) << (8 * i);
+      }
+      if ((lo & 0xFF) == 1) // STATUS: cycle_count in bits [127:96]
+      {
+        carry = hi >> 32;
+        return carry;
+      }
+    }
+    // Else a BW_ADDR bundle carries the window's final cycle in bits [84:53].
+    for (int slot = 0; slot < 2; ++slot)
+    {
+      const uint8_t *b = beat + slot * 16;
+      uint64_t lo = 0, hi = 0;
+      for (int i = 0; i < 8; ++i)
+      {
+        lo |= static_cast<uint64_t>(b[i]) << (8 * i);
+        hi |= static_cast<uint64_t>(b[8 + i]) << (8 * i);
+      }
+      if ((lo & 0xFF) == 8) // BW_ADDR
+      {
+        carry = (lo >> 53) | ((hi & 0x1FFFFFULL) << 11);
+        return carry;
+      }
+    }
+    return carry; // BW_READ / BW_WRITE / NULL: inherit the last known cycle
+  }
+
+  // Verify the precondition required by mergeTelemetryByCycle: each raw port region
+  // must already be ordered by its embedded cycle key. Multiple concurrent HLS AXI
+  // writers can violate that assumption on HW even though the address ranges are
+  // allocated in stream order. Report regressions before the host merge hides which
+  // physical region they came from.
+  static void reportTelemetryRegionOrder(const char *label,
+                                         const std::vector<uint8_t> &region)
+  {
+    const size_t stride = TELEMETRY_BEAT_BYTES;
+    const size_t beats = region.size() / stride;
+    uint64_t carry = 0, prev = 0;
+    uint64_t regressions = 0, equalKeys = 0, maxRegression = 0;
+    uint64_t firstFrom = 0, firstTo = 0;
+    bool havePrev = false;
+    for (size_t i = 0; i < beats; ++i)
+    {
+      const uint64_t key = beatCycleKey(region.data() + i * stride, carry);
+      if (havePrev)
+      {
+        if (key < prev)
+        {
+          if (regressions == 0) { firstFrom = prev; firstTo = key; }
+          ++regressions;
+          maxRegression = std::max(maxRegression, prev - key);
+        }
+        else if (key == prev)
+          ++equalKeys;
+      }
+      prev = key;
+      havePrev = true;
+    }
+    std::cout << "[telemetry-order-diag] port " << label << " beats=" << beats
+              << " timestamp_regressions=" << regressions
+              << " equal_keys=" << equalKeys;
+    if (regressions != 0)
+      std::cout << " first=" << firstFrom << "->" << firstTo
+                << " max_regression=" << maxRegression;
+    std::cout << "\n";
+  }
+
+  // Read one port's telemetry region: chunked sync+copy from device, return the
+  // contiguous populated prefix (first non-zero beat up to the next all-zero beat).
+  // firstBeatOut = index of that first non-zero beat (0 in the normal
+  // reset-before-run case; nonzero means write_idx carried over from a prior run).
+  std::vector<uint8_t> readTelemetryRegion(Addr regionBase, uint64_t windowBytes,
+                                           uint64_t &firstBeatOut)
+  {
+    std::vector<uint8_t> data;
+    const size_t stride = TELEMETRY_BEAT_BYTES;
+    std::vector<uint8_t> buf(static_cast<size_t>(
+        std::min<uint64_t>(TELEMETRY_IO_CHUNK_BYTES, windowBytes)));
+    bool inRun = false, done = false, sawTerminator = false;
+    uint64_t firstBeat = UINT64_MAX;
+    uint64_t terminatorBeat = UINT64_MAX;
+    uint64_t firstNonzeroAfter = UINT64_MAX;
+    uint64_t lastNonzeroAfter = UINT64_MAX;
+    uint64_t nonzeroAfter = 0;
+    for (uint64_t off = 0; off < windowBytes && !done; off += buf.size())
+    {
+      const uint64_t n = std::min<uint64_t>(buf.size(), windowBytes - off);
+      if (auto *xm = dynamic_cast<XRTMemory *>(memory_))
+      {
+        try { xm->syncRegionFromDevice(regionBase + off, n); }
+        catch (const std::exception &e)
+        { std::cerr << "[telemetry] sync-from-device failed: " << e.what() << "\n"; }
+      }
+      try { memory_->copyFromDevice(buf.data(), regionBase + off, n); }
+      catch (const std::exception &e)
+      { std::cerr << "[telemetry] readback failed: " << e.what() << "\n"; break; }
+
+      size_t writeBegin = 0, writeEnd = static_cast<size_t>(n);
+      bool writeChunk = inRun;
+      for (size_t local = 0; local + stride <= n; local += stride)
+      {
+        bool zero = true;
+        for (size_t k = 0; k < stride; ++k)
+          if (buf[local + k] != 0) { zero = false; break; }
+        const uint64_t beatIdx = (off + local) / stride;
+        if (!inRun)
+        {
+          if (zero) continue;
+          inRun = true; writeChunk = true; writeBegin = local; firstBeat = beatIdx;
+        }
+        else if (!sawTerminator && zero)
+        {
+          // Keep scanning the remainder of this 64 MiB readback chunk. The watcher
+          // has multiple concurrent AXI writers and no drain-complete handshake, so
+          // a temporarily unwritten lower-address burst can leave a zero hole in
+          // front of valid later telemetry. Preserve the legacy contiguous-prefix
+          // return value for now; this pass only diagnoses whether such a tail exists.
+          writeEnd = local;
+          sawTerminator = true;
+          terminatorBeat = beatIdx;
+        }
+        else if (sawTerminator && !zero)
+        {
+          if (firstNonzeroAfter == UINT64_MAX)
+            firstNonzeroAfter = beatIdx;
+          lastNonzeroAfter = beatIdx;
+          ++nonzeroAfter;
+        }
+      }
+      if (writeChunk && writeEnd > writeBegin)
+        data.insert(data.end(), buf.begin() + writeBegin, buf.begin() + writeEnd);
+      if (sawTerminator)
+      {
+        const uint64_t chunkLastBeat = (off + n) / stride - 1;
+        std::cout << "[telemetry-gap-diag] region 0x" << std::hex << regionBase
+                  << std::dec << " first zero at beat " << terminatorBeat;
+        if (nonzeroAfter != 0)
+          std::cout << "; FOUND " << nonzeroAfter
+                    << " later nonzero beat(s), first=" << firstNonzeroAfter
+                    << " last=" << lastNonzeroAfter;
+        else
+          std::cout << "; no later nonzero beat through beat " << chunkLastBeat;
+        std::cout << "\n";
+        done = true;
+      }
+    }
+    firstBeatOut = (firstBeat == UINT64_MAX) ? 0 : firstBeat;
+    return data;
+  }
+
+  // Globally order both raw regions by cycle key. A conventional 2-way merge is not
+  // valid here: HW measurements show timestamp regressions inside each individual
+  // region because the concurrent writer channels do not commit burst contents in
+  // stream order. STATUS beats carry exact keys, so a stable global sort restores
+  // their true order. Equal-key BW/carry beats retain raw A-then-B insertion order.
+  std::vector<uint8_t> mergeTelemetryByCycle(const std::vector<uint8_t> &A,
+                                             const std::vector<uint8_t> &B)
+  {
+    const size_t stride = TELEMETRY_BEAT_BYTES;
+    const size_t nA = A.size() / stride, nB = B.size() / stride;
+    struct KeyedBeat
+    {
+      uint64_t key;
+      const uint8_t *data;
+    };
+    std::vector<KeyedBeat> beats;
+    beats.reserve(nA + nB);
+    uint64_t carry = 0;
+    for (size_t i = 0; i < nA; ++i)
+    {
+      const uint8_t *beat = A.data() + i * stride;
+      beats.push_back({beatCycleKey(beat, carry), beat});
+    }
+    carry = 0;
+    for (size_t j = 0; j < nB; ++j)
+    {
+      const uint8_t *beat = B.data() + j * stride;
+      beats.push_back({beatCycleKey(beat, carry), beat});
+    }
+
+    std::stable_sort(beats.begin(), beats.end(),
+                     [](const KeyedBeat &x, const KeyedBeat &y) {
+                       return x.key < y.key;
+                     });
+
+    std::vector<uint8_t> out;
+    out.reserve(A.size() + B.size());
+    for (const auto &beat : beats)
+      out.insert(out.end(), beat.data, beat.data + stride);
+    return out;
+  }
+
+  // Two-port dump: read both regions, merge by cycle, write the standard
+  // self-describing .bin the viewer already understands (header format unchanged).
+  void dumpTelemetryTwoPort(Addr telemetry_base)
+  {
+    if (telemetry_base == 0)
+      return;
+    const uint64_t windowBytes = perRegionWindowBytes();
+    const Addr baseA = telemetry_base;
+    const Addr baseB = telemetry_base + TELEMETRY_PORT_STRIDE;
+
+    uint64_t firstA = 0, firstB = 0;
+    std::vector<uint8_t> regionA = readTelemetryRegion(baseA, windowBytes, firstA);
+    std::vector<uint8_t> regionB = readTelemetryRegion(baseB, windowBytes, firstB);
+    const size_t stride = TELEMETRY_BEAT_BYTES;
+    const size_t beatsA = regionA.size() / stride, beatsB = regionB.size() / stride;
+
+    reportTelemetryRegionOrder("A", regionA);
+    reportTelemetryRegionOrder("B", regionB);
+
+    if (beatsA == 0 && beatsB == 0)
+    {
+      std::cout << "[telemetry] both port regions empty (watcher wrote nothing)\n";
+      diagnoseEmptyTelemetry(baseA);
+      return;
+    }
+    if (firstA != 0 || firstB != 0)
+      std::cout << "[telemetry] populated run does not start at beat 0 (A@" << firstA
+                << ", B@" << firstB << ") -- write_idx carried over from a prior run; "
+                   "reset the FPGA (xrt-smi reset) for a clean trace\n";
+
+    std::vector<uint8_t> merged = mergeTelemetryByCycle(regionA, regionB);
+    const size_t written = merged.size() / stride;
+
+    std::string path = telemetryOutputPath();
+    std::ofstream out(path, std::ios::binary);
+    if (!out)
+    {
+      std::cerr << "[telemetry] could not open " << path << " for writing\n";
+      return;
+    }
+
+    // Self-describing HBM-port descriptor header (traceViewer/format.md §0), same as
+    // the single-port path.
+    std::vector<hardcilk_telemetry::WatcherPe> watcherPes;
+    {
+      std::vector<std::string> candidates = hbmDescriptorCandidates();
+      std::string descPath, descJson, triedPaths;
+      for (const auto &c : candidates)
+      {
+        if (!triedPaths.empty()) triedPaths += ", ";
+        triedPaths += c;
+        std::ifstream df(c, std::ios::binary);
+        if (df)
+        {
+          std::ostringstream ss; ss << df.rdbuf();
+          descJson = ss.str(); descPath = c; break;
+        }
+      }
+      if (!descJson.empty())
+      {
+        const uint64_t jlen = descJson.size();
+        uint64_t beats_off = (32 + jlen + 31) & ~uint64_t(31);
+        char hdr[32] = {0};
+        std::memcpy(hdr, "HCKTRACE", 8);
+        uint32_t ver = 2;
+        uint32_t flags = isEmulation() ? 0x1u : 0x0u;
+        std::memcpy(hdr + 8, &ver, 4);
+        std::memcpy(hdr + 12, &flags, 4);
+        std::memcpy(hdr + 16, &jlen, 8);
+        std::memcpy(hdr + 24, &beats_off, 8);
+        out.write(hdr, 32);
+        out.write(descJson.data(), static_cast<std::streamsize>(jlen));
+        const uint64_t padBytes = beats_off - 32 - jlen;
+        if (padBytes)
+        {
+          std::vector<char> pad(padBytes, 0);
+          out.write(pad.data(), static_cast<std::streamsize>(padBytes));
+        }
+        std::cout << "[telemetry] embedded HBM port descriptor (" << jlen
+                  << " bytes) from " << descPath << "\n";
+        watcherPes = hardcilk_telemetry::parseWatcherPes(descJson);
+      }
+      else
+      {
+        std::cerr
+            << "\n"
+            << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+            << "!!!  WARNING: HBM PORT DESCRIPTOR NOT FOUND -- TRACE IS UNLABELED !!!\n"
+            << "!!!  looked for: " << triedPaths << "\n"
+            << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n";
+      }
+    }
+
+    out.write(reinterpret_cast<const char *>(merged.data()),
+              static_cast<std::streamsize>(merged.size()));
+    out.close();
+
+    StatusConservation conservation(watcherPes);
+    conservation.consumeTraceBytes(merged.data(), merged.size());
+
+    std::cout << "[telemetry] merged " << beatsA << " (port A) + " << beatsB
+              << " (port B) = " << written << " beats (" << merged.size()
+              << " bytes) to:\n[telemetry] " << path << "\n";
+    conservation.report();
+  }
+
+  // Legacy single-port watcher dump path. Used when running old xclbins built
+  // before the watcher split telemetry across port A and port B.
   // Read back the telemetry window, find the populated prefix (up to the first
   // all-zero/unwritten bundle), and write it to a timestamped /tmp file.
   void dumpTelemetry(Addr telemetry_base)
@@ -425,9 +947,7 @@ private:
       const size_t stride = TELEMETRY_BEAT_BYTES;
       std::vector<uint8_t> buf(static_cast<size_t>(TELEMETRY_IO_CHUNK_BYTES));
 
-      std::string path =
-          std::string("/tmp/countDecoupled_telemetry_") +
-          telemetryTimestamp() + ".bin";
+      std::string path = telemetryOutputPath();
 
       std::ofstream out(path, std::ios::binary);
       if (!out)
@@ -463,7 +983,7 @@ private:
           uint64_t beats_off = (32 + jlen + 31) & ~uint64_t(31);
           char hdr[32] = {0};
           std::memcpy(hdr, "HCKTRACE", 8);
-          uint32_t ver = 1;
+          uint32_t ver = 2;
           // offset 12: u32 flags. bit0 = run mode (1 = hw_emu/sw_emu, 0 = real HW).
           uint32_t flags = isEmulation() ? 0x1u : 0x0u;
           std::memcpy(hdr + 8, &ver, 4);
@@ -642,9 +1162,7 @@ private:
     if (written > 0)
       reportStatusConservation(buf, firstBundle, lastBundle);
 
-    std::string path =
-        std::string("/tmp/countDecoupled_telemetry_") +
-        telemetryTimestamp() + ".bin";
+    std::string path = telemetryOutputPath();
 
     std::ofstream out(path, std::ios::binary);
     if (!out)
@@ -658,7 +1176,7 @@ private:
     // in the cwd. If it is missing we print a LOUD warning and fall back to a
     // headerless trace (beats at offset 0) -- that is a misconfiguration, not a mode.
     // Layout when present (see traceViewer/format.md §0):
-    //   [0:8)  magic "HCKTRACE"   [8:12) u32 version=1   [12:16) u32 flags
+    //   [0:8)  magic "HCKTRACE"   [8:12) u32 version=2   [12:16) u32 flags
     //   [16:24) u64 json_length   [24:32) u64 beats_offset (32-aligned)
     //   [32 : 32+json_length) JSON descriptor, then zero pad to beats_offset.
     {
@@ -685,7 +1203,7 @@ private:
         uint64_t beats_off = (32 + jlen + 31) & ~uint64_t(31); // 32-byte align
         char hdr[32] = {0};
         std::memcpy(hdr, "HCKTRACE", 8);
-        uint32_t ver = 1;
+        uint32_t ver = 2;
         // offset 12: u32 flags. bit0 = run mode (1 = hw_emu/sw_emu, 0 = real HW).
         uint32_t flags = isEmulation() ? 0x1u : 0x0u;
         std::memcpy(hdr + 8, &ver, 4);
@@ -834,6 +1352,34 @@ private:
                   << " rpause="
                   << memory_->readReg64(base + scheduler_server_rpause_shift)
                   << "\n";
+
+    // --- Local-buffer occupancy probe (default OFF) -------------------------
+    // currLen/head/tail only track the HBM spill RING; they are blind to each
+    // PE's local (BRAM) task queue. A task stranded in a local buffer (e.g. the
+    // steal-credit / canOutputTask end-game in SchedulerServer.scala) makes the
+    // rings read empty while instances stay stuck -- exactly this stall's
+    // signature. queuesUtil exposes those lengths (populated when peCount <= 8).
+    //   Enable at runtime, no rebuild-of-this-flag needed:
+    //     COUNTDECOUPLED_DUMP_QUEUES=1 ./countDecoupled_xrt ...
+    // Nonzero lanes here at the stall => tasks stuck in local buffers (steal/
+    // output path). All-zero => loss is upstream (ring wrap / network routing).
+    if (const char *e = std::getenv("COUNTDECOUPLED_DUMP_QUEUES");
+        e && e[0] == '1')
+    {
+      for (const auto &task : descriptor.taskDescriptors)
+        for (uint64_t base : task.mgmtBaseAddresses.schedulerServersBaseAddresses)
+        {
+          const uint64_t q =
+              memory_->readReg64(base + scheduler_server_queuesUtil_shift);
+          std::cout << "[countDecoupled-QUEUES] task=" << task.name
+                    << " base=0x" << std::hex << base
+                    << " queuesUtil=0x" << q << std::dec << " lanes[PE0..7]=";
+          // MSB-first: PE0 occupies the highest byte lane (reduceLeft(Cat)).
+          for (int lane = 7; lane >= 0; --lane)
+            std::cout << " " << ((q >> (8 * lane)) & 0xFF);
+          std::cout << "\n";
+        }
+    }
   }
 
   // Wait until every instance is done. Count/done records are contiguous, so a
@@ -864,9 +1410,19 @@ private:
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 
-      memory_->copyFromDevice(reinterpret_cast<uint8_t *>(states.data()),
-                              count_addrs.front(),
-                              states.size() * sizeof(int32_t));
+      if (hbm_strided_writes_)
+      {
+        for (size_t k = 0; k < count_addrs.size(); ++k)
+          memory_->copyFromDevice(
+              reinterpret_cast<uint8_t *>(states.data() + 2 * k),
+              count_addrs[k], 2 * sizeof(int32_t));
+      }
+      else
+      {
+        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(states.data()),
+                                count_addrs.front(),
+                                states.size() * sizeof(int32_t));
+      }
       for (size_t k = 0; k < count_addrs.size(); ++k)
       {
         if (done[k])
@@ -946,6 +1502,9 @@ private:
   uint32_t num_instances_;
   double watchdog_s_;
   bool fast_mode_;
+  bool legacy_single_port_watcher_;
+  bool hbm_strided_writes_;
+  uint64_t hbm_continuation_bank_run_entries_;
   std::string xclbin_path_;
 
   static bool endsWith(const std::string &s, const std::string &suffix)

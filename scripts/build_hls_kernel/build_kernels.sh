@@ -106,6 +106,7 @@ info "Verilog output   : $VERILOG_OUT"
 info "CPP files found  : ${#CPP_FILES[@]}"
 info "Header files     : ${#H_FILES[@]}"
 info "Kernels to build : ${KERNELS[*]}"
+info "HLS compiler flags: ${HLS_CFLAGS:-<none>}"
 info "Tcl template     : $TCL_TEMPLATE"
 info "Debug mode       : $DEBUG  $([ "$DEBUG" = true ] && echo "(intermediates kept)" || echo "(intermediates deleted after build)")"
 echo

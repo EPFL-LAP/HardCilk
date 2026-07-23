@@ -1,8 +1,7 @@
 # HardCilk telemetry trace format
 
 This document specifies the on-disk/on-HBM format produced by the **watcher**
-telemetry kernels (for example
-`hls-processing-elements/mfpga/triangleCountDecoupled/memAccess.cpp`). It is
+telemetry kernel (`hls-processing-elements/watcher/watcher.cpp`). It is
 self-contained: a fresh implementer should be able to write a useful viewer from
 this document alone.
 
@@ -10,6 +9,8 @@ The viewer needs to show, over time:
 - when each PE is **ACTIVE** (consuming a task),
 - when each PE is **WAITING** (idle, no incoming task),
 - when each PE is **STALLED** (a task is available but it cannot accept it),
+- when a scheduler server is in **networkCongested** absorb/spill mode, when
+  synthetic scheduler-status slots are present in the descriptor,
 - per-HBM-port **read and write bandwidth** (bytes/cycle, hence bytes/s).
 
 ---
@@ -35,7 +36,7 @@ Detect the header by the 8-byte magic at offset 0:
 
 ```
 offset  0 : magic       = "HCKTRACE" (8 ASCII bytes)
-offset  8 : u32 version = 1   (little-endian)
+offset  8 : u32 version = 2   (little-endian)
 offset 12 : u32 flags         (little-endian; see below)
 offset 16 : u64 json_length   (bytes of the JSON descriptor, excluding padding)
 offset 24 : u64 beats_offset  (byte offset where telemetry beats begin; 32-aligned)
@@ -66,19 +67,31 @@ first and start beat decoding at `beats_offset`.
 
 ```json
 {
-  "design": "triangleCountDecoupled",
-  "numComputePorts": 13,
+  "design": "countDecoupled",
+  "numComputePorts": 16,
   "pes": [
-    { "peNumber": 0, "task": "whileLoopMain_reentry0_cont0", "statusPrefix": "cont0_status",    "indexInTask": 0 },
-    { "peNumber": 1, "task": "memReader",                     "statusPrefix": "memReader_status","indexInTask": 0 },
-    { "peNumber": 2, "task": "whileLoopMain_reentry0",        "statusPrefix": "reentry0_status", "indexInTask": 0 }
+    { "peNumber": 0, "kind": "pe", "label": "adder0", "task": "taskAdder_cont0", "indexInTask": 0,
+      "fields": [
+        { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "taskAdder_cont0", "index": 0, "port": "taskIn" } },
+        { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "taskAdder_cont0", "index": 0, "port": "taskOutGlobal" } }
+      ] },
+    { "peNumber": 6, "kind": "packed", "label": "schedulerCongestion",
+      "fields": [
+        { "encoding": "boolean1", "target": { "kind": "schedulerServer", "taskName": "taskAdder_cont0", "index": 0, "signal": "congested" } },
+        { "encoding": "boolean1", "target": { "kind": "schedulerServer", "taskName": "memReader", "index": 0, "signal": "congested" } }
+      ] },
+    { "peNumber": 7, "kind": "packed", "label": "slowUpdateEviction0",
+      "fields": [
+        { "encoding": "readyValid2", "target": { "kind": "slowUpdateHandler", "taskName": "taskAdder_cont0", "index": 0, "port": "input" } },
+        { "encoding": "readyValid2", "target": { "kind": "evictionSaver", "taskName": "taskAdder_cont0", "index": 0, "port": "input" } }
+      ] }
   ],
   "ports": [
-    { "port": 1,  "portName": "m_axi_01",
-      "masters": [ {"owner": "pe:memReader:0#main",   "role": "main",   "peNumber": 1, "wData": 32, "wId": 1} ] },
+    { "port": 0,  "portName": "m_axi_00",
+      "masters": [ {"owner": "pe:memReader:0",   "role": "main",   "peNumber": 2, "wData": 32, "wId": 1} ] },
     { "port": 3,  "portName": "m_axi_03",
-      "masters": [ {"owner": "pe:memReader:0#argOut", "role": "argOut", "peNumber": 1, "wData": 32, "wId": 0} ] },
-    { "port": 10, "portName": "m_axi_10",
+      "masters": [ {"owner": "pe:memReader:0", "role": "argOut", "peNumber": 2, "wData": 32, "wId": 6} ] },
+    { "port": 14, "portName": "m_axi_14",
       "masters": [ {"owner": "scheduler:memReader:vss:0", "role": "ring", "peNumber": null, "wData": 256, "wId": 1} ] }
   ]
 }
@@ -90,13 +103,11 @@ same `peNumber`. The `role` tells you which is which without parsing the owner.
 
 The descriptor answers two questions:
 
-1. **What type is each STATUS `PE#`?** → `pes[]`. The STATUS bundle (§3) numbers PEs
-   `0..11` in the watcher's monitored order, `peCount` per task, consecutively.
-   `pes[]` is exactly that table: `peNumber` → `task` / `statusPrefix` /
-   `indexInTask`. Use it to label the PE rows. In the current one-PE-per-task
-   triangle build, that order is `cont0` at PE 0, `memReader` at PE 1, and
-   `reentry0` at PE 2; wider builds continue each task's slot range before the next
-   task begins.
+1. **What type is each STATUS `PE#`?** → `pes[]`. The STATUS bundle (§3) numbers slots
+   `0..21` in the exact `watcherConfig.statusSlots` order. `pes[]` is that table:
+   `peNumber` identifies the physical nibble. Its ordered `fields` array completely
+   describes the bit packing and hardware targets. Unconfigured physical taps are
+   tied to zero and omitted.
 2. **Which `PE#` owns a given memory port?** → each `ports[].masters[].peNumber`.
    So you can line a port's bandwidth up with that PE's ACTIVE/STALLED timeline.
 
@@ -113,8 +124,10 @@ Field notes:
   `:vss:`/`:spawner:`, `closureAllocator`, `memoryAllocator`, `argumentNotifier`)
   have `peNumber: null` since they serve all PEs, not one. `xdma_or_external` marks
   a non-compute master (e.g. the XDMA slave).
-- The watcher's **own** telemetry write ports are not listed (they are the trace
-  sink, not a measured compute port).
+- The watcher's **own** telemetry write ports are not listed in `ports[]` (they are
+  the trace sink, not measured compute ports). In current two-port watcher builds
+  they are the final two top-level masters, mapped by `conn_u55c.cfg` to
+  `HBM[16:23]` and `HBM[24:31]`.
 
 This is the authoritative, per-build replacement for the hand-maintained port
 identity table in §4 — read `ports[]` rather than assuming fixed widths.
@@ -123,15 +136,23 @@ identity table in §4 — read `ports[]` rather than assuming fixed widths.
 
 ## 1. Physical layout
 
-The watcher is a free-running hardware block that writes fixed-size records to HBM,
-into the telemetry region that starts at device address **`0x2_0000_0000`** (HBM
-bank 16). The host reserves this region and reads it back into a `.bin` file after
-the run. The viewer consumes that `.bin`.
+The watcher is a free-running hardware block that writes fixed-size records to HBM.
+The host reads those records after the run and writes the viewer-facing `.bin` file.
+The viewer consumes the `.bin`, not the raw HBM regions.
 
-- The stream is a flat sequence of **256-bit (32-byte) beats**, tightly packed,
-  starting at byte offset 0 of the dumped region.
-- The number of valid beats = `write_idx` (how many the watcher emitted). The host
-  dump may contain trailing zero/stale beats beyond that; see §6 (Reading procedure).
+- The viewer-facing stream is a flat sequence of **256-bit (32-byte) beats**, tightly
+  packed, starting at `beats_offset` (§0).
+- Legacy/single-port watcher builds write that stream directly into the telemetry
+  region starting at device address **`0x2_0000_0000`** (HBM bank 16).
+- Current two-port watcher builds split raw telemetry writes across two physical
+  HBM regions: port A at **`0x2_0000_0000`** (`HBM[16:23]`) and port B at
+  **`0x3_0000_0000`** (`HBM[24:31]`). Bursts alternate between the two ports. The
+  host reads both populated prefixes, globally sorts beats by their STATUS/BW
+  timestamp, and writes one ordinary flat stream to the `.bin`. A global sort is
+  required because concurrent writer channels can commit timestamps out of order
+  even within one raw physical-port region. The on-disk bundle format is unchanged.
+- The number of valid beats is the number the host writes after this readback/merge.
+  Raw HBM may contain trailing zero/stale beats beyond each populated prefix; see §6.
 
 ### Beat = two 128-bit bundles
 
@@ -174,12 +195,13 @@ All other header values are reserved; a viewer should skip unknown headers.
 
 ## 3. `STATUS` bundle (header = 1)
 
-A snapshot of every monitored PE's input/output queue handshake at one cycle.
+A snapshot of twenty-two generic four-bit physical watcher taps at one cycle. The
+embedded descriptor defines what each occupied tap means.
 
 ```
 bits [7:0]    = 1
-bits [55:8]   = 48 status bits  (12 PEs x 4 bits)
-bits [127:56] = cycle_count     (72-bit unsigned)
+bits [95:8]   = 88 status bits  (22 generic slots x 4 bits)
+bits [127:96] = cycle_count     (32-bit unsigned)
 ```
 
 ### cycle_count
@@ -189,9 +211,18 @@ bundles are packed, so the first baseline STATUS sample normally has `cycle_coun
 1` (see §7). Multiply by the clock period to get wall-clock time. At 100 MHz, 1
 cycle = 10 ns.
 
-### The 48 status bits
-12 monitored PEs, 4 bits each. PE `k` occupies status bits `[k*4 +: 4]`, i.e. bundle
-bits `[8 + k*4 +: 4]`. Within a PE's 4 bits (LSB first):
+### The 88 status bits
+Twenty-two generic slots, four bits each. Slot `k` occupies status bits `[k*4 +: 4]`,
+i.e. bundle bits `[8 + k*4 +: 4]`. Within a slot, `fields` pack low-to-high in
+array order. Encoding names are deliberately self-documenting:
+
+```
+boolean1    : one bit
+readyValid2 : two bits; bit 0 = valid, bit 1 = ready
+```
+
+The sum of encoded field widths may not exceed four. Any unused upper bits are
+zero. A normal PE slot contains two `readyValid2` fields and therefore packs:
 
 ```
 bit 0 : in_valid   (input queue: a task is being presented to the PE)
@@ -200,14 +231,22 @@ bit 2 : out_valid  (output queue: the PE is presenting a result)
 bit 3 : out_ready  (output queue: the PE can retire the result)
 ```
 
-PE index → name is described by the embedded descriptor's `pes[]` table. The
-current `triangleCountDecoupled` one-PE-per-task build uses:
+Slot index → source is described completely by the embedded descriptor's `pes[]`
+table. The current countDecoupled selection uses six PE slots, one packed scheduler
+slot, and two packed diagnostic slots; the remaining thirteen physical taps
+are tied to zero and omitted from `pes[]`.
 
 | k | task / role |
 |---|-------------|
-| 0 | `whileLoopMain_reentry0_cont0[0]` (continuation PE) |
-| 1 | `memReader[0]` (graph memory reader) |
-| 2 | `whileLoopMain_reentry0[0]` (re-entry PE) |
+| 0 | `taskAdder_cont0[0]` |
+| 1 | `taskAdder_cont0[1]` |
+| 2 | `memReader[0]` |
+| 3 | `memReader[1]` |
+| 4 | `taskInitiator_reentry0[0]` |
+| 5 | `taskInitiator_reentry0[1]` |
+| 6 | four packed scheduler-congestion bits (sources listed in JSON order) |
+| 7 | `taskAdder_cont0` slow-update / eviction handshakes |
+| 8 | `taskAdder_cont0` fast-spawn lane 0 / lane 1 handshakes |
 
 Slots not listed in `pes[]` are reserved and should be ignored by viewers. Older
 or wider builds may use more slots, for example four PEs per task; always prefer
@@ -225,14 +264,35 @@ ACTIVE   : in_valid == 1 && in_ready == 1 (task consumed this cycle)
 Also useful: a **task consumed** event = `in_valid && in_ready`; a **result retired**
 event = `out_valid && out_ready`.
 
-For PE outputs wrapped by generated write buffers, `out_*` is the pre-buffer/raw PE
-completion boundary. If the PE emits coupled streams, such as `argDataOut` plus
-`argOut`, the watcher reports the combined fire condition: all coupled streams valid
-and all coupled streams ready. Downstream drain stalls after the write buffer become
-visible here only when backpressure fills the intervening buffer.
+### Packed diagnostic slots
+
+Non-PE slots use the exact same field mechanism. Four scheduler congestion flags
+are four ordered `boolean1` fields. Slow-handler, eviction-saver, and fast-spawn
+handshakes are `readyValid2` fields. A viewer must follow each field's `encoding`
+and `target`; it must not infer meaning from a slot label or fixed bit position.
+
+`schedulerServer` targets name the task/server and `signal: "congested"`.
+`slowUpdateHandler` and `evictionSaver` targets select their instance with `index`.
+`argumentServer` targets separately identify the server with `index` and its
+fast-spawn output with `port: "fastSpawn"` and `lane`.
+
+The two fast-spawn handshakes are tapped directly at
+`ArgumentServer.spawnTaskOutputs(0/1)`, before their scheduler-ring adapters. They
+therefore show both completed cache continuations and downstream spawn
+backpressure independently for each cache lane.
+
+These are diagnostic slots, not PE task acceptance/completion rows. Viewers and
+conservation checks must include only entries with `kind: "pe"` in ordinary PE
+input/output balance totals.
+
+For PE `argOut` targets wrapped by generated write buffers, the watcher uses the raw
+`argDataOut` payload handshake as the canonical completion event. Each result emits
+exactly one payload item, and this remains valid when the coupled streams retire on
+different cycles. Any PE port exposed by the generated wrapper may be selected by
+`port` in a `readyValid2` field whose target kind is `pe`.
 
 ### Timing model
-STATUS bundles are **edge-triggered**: the watcher emits one when the 48-bit status
+STATUS bundles are **edge-triggered**: the watcher emits one when the 88-bit status
 vector **changes**, plus one baseline STATUS bundle when the start gate opens. So a
 STATUS sample at `cycle_count = T` means "this state held from T until the next STATUS
 sample's cycle_count". Render each PE's state as a piecewise-constant timeline: hold
@@ -248,7 +308,7 @@ all zero are skipped. 31 ports are covered across 3 sub-bundles of 15 ports each
 and write are separate bundles.
 
 > **Timing a window.** `BW_READ`/`BW_WRITE` bundles carry no timestamp of their own.
-> Each emitted window also emits one `BW_ADDR` bundle (§5) whose `bits[124:53]` hold the
+> Each emitted window also emits one `BW_ADDR` bundle (§5) whose `bits[84:53]` hold the
 > window's final `cycle_count`; that is the time anchor for the whole set (the averages
 > cover cycles `[cycle-127 .. cycle]`). Idle/rounded-to-zero windows are skipped, so
 > anchor by reading that field — not by counting emitted sets.
@@ -272,10 +332,10 @@ bits [8 + slot*8 +: 8]  = port (sub*15 + slot) average, for slot = 0..14  (8-bit
 
 Port identity: **use the embedded descriptor (§0), not a fixed table** — the exact
 PE/scheduler attached to each port is per-build and emitted by the generator into
-`ports[]` (keyed by the same port index used here). For reference, a typical
-`triangleCountDecoupled` build has `m_axi_00..15` 32-bit, `m_axi_16..24` 512-bit
-(the graph `memReader` data ports — these dominate read bandwidth), `m_axi_25..26`
-256-bit, `m_axi_27` 64-bit, but always defer to the descriptor.
+`ports[]` (keyed by the same port index used here). For reference, the current
+`countDecoupled -r 16` build exposes compute/server ports `m_axi_00..15` in
+`ports[]`; the watcher's own top-level telemetry masters are `m_axi_16` and
+`m_axi_17`, but they are intentionally not listed because they are the trace sink.
 
 ---
 
@@ -291,11 +351,11 @@ bits [7:0]    = 8
 bits [12:8]   = port index (0..30)
 bits [32:13]  = AW address bits [39:20] (most-recent write address on that port)
 bits [52:33]  = AR address bits [39:20] (most-recent read  address on that port)
-bits [124:53] = cycle_count (72-bit) of the window's FINAL cycle  (see below)
-bits [127:125]= reserved (0)
+bits [84:53]  = cycle_count (32-bit) of the window's FINAL cycle  (see below)
+bits [127:85] = reserved (zero)
 ```
 
-### Window timestamp (`bits [124:53]`)
+### Window timestamp (`bits [84:53]`)
 This is the `cycle_count` (same clock/epoch as the STATUS timestamp, §3 — relative to
 the start gate) of the **last cycle of the 128-cycle window** that the accompanying
 `BW_READ`/`BW_WRITE` averages summarize. So a value `C` means the averages cover cycles
@@ -343,10 +403,10 @@ def decode(path, clock_hz=100_000_000):
             if header == 0:                      # NULL padding, payload ignored
                 continue
             elif header == 1:                    # STATUS
-                status = (bundle >> 8)  & ((1 << 48) - 1)
-                cycle  = (bundle >> 56) & ((1 << 72) - 1)
-                pes = [(status >> (k*4)) & 0xF for k in range(12)]  # 4 bits each
-                # bit0=in_valid bit1=in_ready bit2=out_valid bit3=out_ready
+                status = (bundle >> 8)  & ((1 << 88) - 1)
+                cycle  = (bundle >> 96) & ((1 << 32) - 1)
+                slots = [(status >> (k*4)) & 0xF for k in range(22)]
+                # Decode each occupied nibble through its descriptor fields.
             elif 2 <= header <= 7:               # BW_READ / BW_WRITE
                 is_write = header >= 5
                 sub = header - (5 if is_write else 2)
@@ -358,24 +418,24 @@ def decode(path, clock_hz=100_000_000):
                 port  = (bundle >> 8)  & 0x1F
                 aw    = (bundle >> 13) & ((1 << 20) - 1)
                 ar    = (bundle >> 33) & ((1 << 20) - 1)
-                cycle = (bundle >> 53) & ((1 << 72) - 1)  # window's FINAL cycle;
+                cycle = (bundle >> 53) & ((1 << 32) - 1)  # window's FINAL cycle;
                 # the BW_READ/BW_WRITE set in this window covers cycles [cycle-127 .. cycle]
 ```
 
 ### Finding the valid region
-**If the FPGA was reset (`xrt-smi reset` / reprogram) before the run** — the normal
-workflow — then `write_idx` is 0 and the trace **starts at byte offset 0**; just read
-beats until the first all-zero beat. This is the common case.
+For normal viewer input, the `.bin` already contains only the populated trace stream
+after `beats_offset`; read 32-byte beats until EOF. The host has already scanned raw
+HBM for the first non-zero beat and stopped at the first all-zero beat. In current
+two-port mode it has also read both raw port regions and globally ordered them into
+this single stream.
 
-`write_idx` only resets on FPGA reset, not between host runs that share one
-programming. So if you run **without** resetting, runs are appended back-to-back (no
-clean gap) and the dump may begin with stale beats from earlier runs. As a safety net,
-the host decoder scans for the first non-zero beat and dumps the contiguous populated
-run from there; the reference host decoder (`TriangleCountDecoupledDriver.h`) is the
-source of truth. Within a run, the start gate guarantees the first STATUS beat carries
-a small `cycle_count` (normally 1, not the ~hundreds-of-millions offset of
-FPGA-programming time), so a small monotonically-increasing `cycle_count` is a clean
-marker of a run's beginning.
+The raw watcher's per-port write cursors reset on FPGA reset/reprogramming, not
+between host runs that share one programming. If you run **without** resetting, raw
+regions can contain appended runs or stale prefixes; the host prints a warning and
+extracts the contiguous populated run it found. Within a clean run, the start gate
+guarantees the first STATUS beat carries a small `cycle_count` (normally 1, not the
+~hundreds-of-millions offset of FPGA-programming time), so a small
+monotonically-increasing `cycle_count` is a clean marker of a run's beginning.
 
 ---
 
@@ -385,13 +445,14 @@ marker of a run's beginning.
   until the spawn scheduler dispatches its first task. From that instant `cycle_count`
   and the bandwidth windows start counting from 0, so timestamps are relative to
   compute start, not to FPGA programming (which can be hundreds of millions of cycles
-  earlier). The gate latches and only re-arms on FPGA reset; it does **not** reset
-  `write_idx` between host runs (see §6).
-- **`write_idx` / offset 0.** `write_idx` is reset by FPGA reset/reprogramming, not by
-  the start gate. When the start gate opens, the watcher zeroes `cycle_count`, the
-  window counter and the bandwidth accumulators, then emits a baseline STATUS bundle
-  after incrementing `cycle_count` for the first compute cycle. So after an FPGA reset
-  the trace deterministically starts at **byte offset 0**.
+  earlier). The gate latches and only re-arms on FPGA reset; it does **not** reset the
+  raw HBM write cursor(s) between host runs (see §6).
+- **Raw write cursors / offset 0.** Raw HBM write cursors are reset by FPGA
+  reset/reprogramming, not by the start gate. When the start gate opens, the watcher
+  zeroes `cycle_count`, the window counter and the bandwidth accumulators, then emits
+  a baseline STATUS bundle after incrementing `cycle_count` for the first compute
+  cycle. So after an FPGA reset the raw trace deterministically starts at offset 0 of
+  each telemetry region, and the host-written `.bin` starts at `beats_offset`.
   The gate latches, so repeated host runs that share one FPGA programming keep the
   gate open and **append** (no per-run reset) — `xrt-smi reset` before a run is what
   gives a fresh offset-0 trace.
@@ -417,12 +478,13 @@ Header : magic "HCKTRACE", [8:12) u32 version, [12:16) u32 flags (bit0=is_emulat
          [16:24) u64 json_length, [24:32) u64 beats_offset, then JSON, pad, beats.
 Beat   : 32 bytes = slot0 (bytes 0..15), slot1 (bytes 16..31), each a 128-bit bundle.
 Bundle : [7:0] header.
-  1 STATUS : [55:8] 48 status bits (PE k -> [8+k*4 +:4] = in_v,in_r,out_v,out_r),
-             [127:56] cycle_count (72b, since start gate).
+  1 STATUS : [95:8] 88 status bits (slot k -> [8+k*4 +:4]),
+             [127:96] cycle_count (32b, since start gate).
   2..4 BW_READ  sub 0..2 : [8+slot*8 +:8] avg read  bytes/cycle, port = sub*15+slot.
   5..7 BW_WRITE sub 0..2 : [8+slot*8 +:8] avg write bytes/cycle, port = sub*15+slot.
   8 BW_ADDR : [12:8] port, [32:13] AW addr[39:20], [52:33] AR addr[39:20] (<<20 = byte addr),
-              [124:53] cycle_count of window's FINAL cycle (set covers [cycle-127 .. cycle]).
+              [84:53] cycle_count of window's FINAL cycle (set covers [cycle-127 .. cycle]),
+              [127:85] reserved zero.
   0 NULL   : skip.
 PE state (input handshake): WAITING=!in_valid, STALLED=in_valid&!in_ready, ACTIVE=in_valid&in_ready.
 bytes/s = bw_value * clock_hz.  window = 128 cycles.

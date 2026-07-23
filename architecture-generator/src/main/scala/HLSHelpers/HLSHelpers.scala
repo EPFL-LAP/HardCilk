@@ -131,6 +131,10 @@ class VitisWriteBufferModule(
     taskName: String,
     variableSpawn: Boolean = false
 ) extends Module {
+  // Task ABI: the child continuation address is bits [63:0], and its explicit
+  // metadata word is the adjacent fixed field at bits [95:64]. This mirrors the
+  // existing hard-coded continuation-address convention; it is not JSON policy.
+  private val continuationMetaOffset = 64
   override def desiredName: String = cfg.desiredName
 
   import scala.collection.immutable.SeqMap
@@ -146,6 +150,15 @@ class VitisWriteBufferModule(
 
   private val pe = Module(new VitisModule(cfg))
 
+  private val newSpawnTarget = fullSysGenDescriptor.spawnNextList
+    .getOrElse(taskName, Nil)
+    .flatMap(name => fullSysGenDescriptor.taskDescriptors.find(_.name == name))
+    .find(_.usesNewArgumentNotifier)
+  private val newArgumentTarget = fullSysGenDescriptor.sendArgumentList
+    .getOrElse(taskName, Nil)
+    .flatMap(name => fullSysGenDescriptor.taskDescriptors.find(_.name == name))
+    .find(_.usesNewArgumentNotifier)
+
   println(pe.name)
   pe.io.elements.foreach { case (name, port) =>
     println(s"[HLS:HELPERS:112] PE Port: $name -> ${port.getClass.getSimpleName}")
@@ -158,13 +171,22 @@ class VitisWriteBufferModule(
   private val taskOuts =
     (Seq(peTaskOut) ++ peTaskOutGlobal.toSeq).filterNot(_._2.isEmpty)
 
+  private val spawnNextBufferDepth = fullSysGenDescriptor.taskDescriptors
+    .find(_.name == taskName)
+    .map(_.spawnNextWriteBufferDepth)
+    .getOrElse(128)
+
   private val spawnNextWriteBufferConfig = wSpawnNext.map(w =>
     new WriteBufferConfig(
       wAddr = fullSysGenDescriptor.widthAddress,
       wData = w,
       wAllow = (if (variableSpawn) 0 else 32),
       wAllowData =
-        taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData)
+        taskOuts.map(x => x._2.get.asInstanceOf[axi4s.Interface].cfg.wData),
+      bufferDepth = spawnNextBufferDepth,
+      externalWriteSink = newSpawnTarget.isDefined,
+      releaseMetadataWidth = if (newSpawnTarget.isDefined) 32 else 0,
+      releaseMetadataOffset = continuationMetaOffset
     )
   )
 
@@ -175,7 +197,12 @@ class VitisWriteBufferModule(
         wAddr = fullSysGenDescriptor.widthAddress,
         wData = cfg.writeBufferDataWidth,
         wAllow = 32, // HardCoded?
-        wAllowData = Seq(fullSysGenDescriptor.widthAddress),
+        wAllowData = Seq(
+          if (newArgumentTarget.isDefined)
+            pe.getPort("argOut").asInstanceOf[axi4s.Interface].cfg.wData
+          else fullSysGenDescriptor.widthAddress
+        ),
+        externalWriteSink = newArgumentTarget.isDefined,
         isRemoteWriteBuffer = cfg.hasRemoteWriteBuffer
       )
     )
@@ -199,6 +226,12 @@ class VitisWriteBufferModule(
           spawnNextWriteBufferConfig.map(wbCfg =>
             "m_axi_spawnNext" -> axi4.Master(wbCfg.cfgAxi)
           ),
+          spawnNextWriteBufferConfig.map(_ =>
+            "watcher_spawnNext_valid" -> Output(Bool())
+          ),
+          spawnNextWriteBufferConfig.map(_ =>
+            "watcher_spawnNext_ready" -> Output(Bool())
+          ),
           argOutWriteBufferConfig.map(wbCfg =>
             "m_axi_argOut" -> axi4.Master(wbCfg.cfgAxi)
           ),
@@ -207,6 +240,11 @@ class VitisWriteBufferModule(
           ),
           argOutWriteBufferConfig.map(_ =>
             "watcher_argOut_ready" -> Output(Bool())
+          ),
+          newSpawnTarget.map(_ =>
+            "continuationMetaIn" -> axi4s.Slave(
+              axi4s.Config(wData = 32, onlyRV = true)
+            )
           ),
           Some("ap_clk" -> Input(Clock())),
           Some("ap_rst_n" -> Input(Bool())),
@@ -238,13 +276,21 @@ class VitisWriteBufferModule(
   /** Return the handshake that the telemetry watcher should report for a PE port.
     *
     * Most wrapper ports are direct PE boundaries, so the public wrapper IO is the
-    * right signal. `argOut` is different when the PE also has `argDataOut`: the
+    * right signal. `spawnNext` is exposed explicitly at the raw PE-to-write-buffer
+    * boundary. `argOut` is different when the PE also has `argDataOut`: the
     * wrapper inserts a WriteBuffer and exposes the post-buffer allow stream as
-    * public `argOut`. For PE-status telemetry, use the pre-buffer raw PE boundary
-    * and require both coupled streams to be able to fire together.
+    * public `argOut`. For PE-status telemetry, use the pre-buffer raw `argDataOut`
+    * payload handshake as the canonical completion boundary. The PE emits exactly
+    * one `argDataOut` item per result; unlike ANDing the two raw output handshakes,
+    * this remains correct when `argOut` and `argDataOut` retire on different cycles.
     */
   def getWatcherStatusHandshake(name: String): (Bool, Bool) = {
-    if (name == "argOut" && pe.io.elements.get("argDataOut").isDefined) {
+    if (name == "spawnNext" && spawnNextWriteBufferConfig.isDefined) {
+      (
+        io.elements("watcher_spawnNext_valid").asInstanceOf[Bool],
+        io.elements("watcher_spawnNext_ready").asInstanceOf[Bool]
+      )
+    } else if (name == "argOut" && pe.io.elements.get("argDataOut").isDefined) {
       (
         io.elements("watcher_argOut_valid").asInstanceOf[Bool],
         io.elements("watcher_argOut_ready").asInstanceOf[Bool]
@@ -265,7 +311,20 @@ class VitisWriteBufferModule(
       new WriteBuffer(wbCfg)
     )
 
-    mWriteBuffer.s_pkg <> pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
+    val rawSpawnNext = pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
+    mWriteBuffer.s_pkg <> rawSpawnNext
+    newSpawnTarget.foreach { _ =>
+      val metaIn =
+        io.elements("continuationMetaIn").asInstanceOf[axi4s.Interface]
+      val releaseMetadata = mWriteBuffer.s_releaseMetadata.get
+      releaseMetadata.TVALID := metaIn.TVALID
+      releaseMetadata.TDATA := metaIn.TDATA
+      metaIn.TREADY := releaseMetadata.TREADY
+    }
+    io.elements("watcher_spawnNext_valid").asInstanceOf[Bool] :=
+      rawSpawnNext.TVALID.asBool
+    io.elements("watcher_spawnNext_ready").asInstanceOf[Bool] :=
+      rawSpawnNext.TREADY.asBool
     mWriteBuffer.m_axi <> io.elements
       .get("m_axi_spawnNext")
       .get
@@ -276,6 +335,12 @@ class VitisWriteBufferModule(
       taskOuts(i)._2 match {
         case Some(value) => {
           value.asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(idx)
+          if (newSpawnTarget.isDefined) {
+            require(
+              taskOuts.length == 1,
+              s"NewArgumentNotifier metadata insertion currently requires one released child stream for $taskName"
+            )
+          }
           mWriteBuffer.m_allows(idx) <> getPort(taskOuts(i)._1)
           idx = idx + 1
         }
@@ -315,12 +380,11 @@ class VitisWriteBufferModule(
         pe.getPort("argOut") <> mWriteBuffer.s_allows(0)
         mWriteBuffer.m_allows(0) <> io.elements.get("argOut").get
 
-        val rawArgOut = pe.getPort("argOut").asInstanceOf[axi4s.Interface]
         val rawArgDataOut = pe.getPort("argDataOut").asInstanceOf[axi4s.Interface]
         io.elements("watcher_argOut_valid").asInstanceOf[Bool] :=
-          rawArgOut.TVALID.asBool && rawArgDataOut.TVALID.asBool
+          rawArgDataOut.TVALID.asBool
         io.elements("watcher_argOut_ready").asInstanceOf[Bool] :=
-          rawArgOut.TREADY.asBool && rawArgDataOut.TREADY.asBool
+          rawArgDataOut.TREADY.asBool
 
         if(cfg.hasRemoteWriteBuffer) {
           mWriteBuffer.fpgaId.get := RegNext(io.elements.get("fpgaId").get)

@@ -12,25 +12,39 @@ class GlobalTaskBufferIO(taskWidth: Int) extends Bundle {
 class GlobalTaskBuffer(taskWidth: Int, peCount: Int) extends Module {
 
   val io = IO(new GlobalTaskBufferIO(taskWidth))
-  // No need for buffer. We always try to push the task, and keep track of how many credits we need to consume later
-  io.connStealNtw.data.qOutTask.valid := io.in.valid
-  io.connStealNtw.data.qOutTask.bits := io.in.bits
-  io.in.ready := io.connStealNtw.data.qOutTask.ready
+
+  // Decouple request consumption from availability of an empty data-ring slot.
+  // A buffered task may consume a parked steal request before that task can be
+  // inserted into the ring. `pipe` preserves one-task-per-cycle throughput when
+  // a full queue dequeues and enqueues in the same cycle.
+  val taskQueue = Module(new Queue(UInt(taskWidth.W), 2, pipe = true))
+  taskQueue.io.enq.valid := io.in.valid
+  taskQueue.io.enq.bits := io.in.bits
+  io.in.ready := taskQueue.io.enq.ready
+
+  io.connStealNtw.data.qOutTask.valid := taskQueue.io.deq.valid
+  io.connStealNtw.data.qOutTask.bits := taskQueue.io.deq.bits
+  taskQueue.io.deq.ready := io.connStealNtw.data.qOutTask.ready
   io.connStealNtw.data.availableTask.ready := false.B
   io.connStealNtw.ctrl.stealReq.valid := false.B
 
-  // TODO: This should be sized according to the ring size. If this ring is >16, this might not be sufficient and can overflow!
-  val servedRequestCount = RegInit(0.U(32.W))
-  val pushedTask = io.in.valid && io.in.ready
+  // requestBalance = consumed steal requests - tasks pushed into the ring.
+  // A positive balance is backed by that many queued tasks. A negative balance
+  // is the old servedRequestCount case: tasks were pushed before their matching
+  // steal requests arrived. The conservative eligibility test intentionally
+  // does not count a task accepted into the queue in the current cycle.
+  val requestBalance = RegInit(0.S(33.W))
+  val pushedTask = taskQueue.io.deq.valid && taskQueue.io.deq.ready
+  val queuedTaskCount = taskQueue.io.count.zext
 
-  io.connStealNtw.ctrl.serveStealReq.valid := pushedTask || servedRequestCount > 0.U
+  io.connStealNtw.ctrl.serveStealReq.valid := requestBalance < queuedTaskCount
   val servedRequest =
     io.connStealNtw.ctrl.serveStealReq.valid && io.connStealNtw.ctrl.serveStealReq.ready
 
-  when(servedRequest && !pushedTask) {
-    servedRequestCount := servedRequestCount - 1.U
-  }.elsewhen(pushedTask && !servedRequest) {
-    servedRequestCount := servedRequestCount + 1.U
+  when(servedRequest =/= pushedTask) {
+    requestBalance := requestBalance + servedRequest.asUInt.zext - pushedTask.asUInt.zext
   }
 
+  // Every early-consumed request must remain backed by a real, unpushed task.
+  assert(requestBalance <= queuedTaskCount)
 }

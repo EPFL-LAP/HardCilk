@@ -2,7 +2,6 @@ package Allocator
 
 import chisel3._
 import chisel3.util._
-import chisel3.ChiselEnum
 
 import chext.amba.axi4
 import axi4.lite.components.RegisterBlock
@@ -10,11 +9,12 @@ import axi4.lite.components.RegisterBlock
 class AllocatorServerIO(
     dataWidth: Int,
     regBlock: RegisterBlock,
-    sysAddressWidth: Int,
-    pePortWidth: Int,
-    outPorts: Int
+    sysAddressWidth: Int
 ) extends Bundle {
-  val dataOut = Vec(outPorts, DecoupledIO(UInt(pePortWidth.W)))
+  // Raw packed beats straight off HBM. Unpacking into individual continuation
+  // addresses happens at the edge (BeatUnpacker), not here: the beat IS the unit
+  // of distribution on the allocator ring.
+  val dataOut = DecoupledIO(UInt(dataWidth.W))
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
   val read_address = DecoupledIO(UInt(sysAddressWidth.W))
   val read_data = Flipped(DecoupledIO(UInt(dataWidth.W)))
@@ -22,11 +22,10 @@ class AllocatorServerIO(
 }
 
 class AllocatorServer(
-    dataWidth: Int,        // memory/task/HBM-beat width (e.g. 256): read_data + packing basis
-    sysAddressWidth: Int,  // HBM address width (e.g. 34): read_address + compact significant bits
-    pePortWidth: Int,      // output pointer width to the PE (e.g. 64); addresses zero-extended
-    burstLength: Int,
-    numOutputPorts: Int
+    dataWidth: Int,       // memory/HBM-beat width (e.g. 256): read_data + packing basis
+    sysAddressWidth: Int, // HBM address width (e.g. 34): read_address + compact significant bits
+    burstLength: Int,     // AXI ARLEN (beats - 1); the RVtoAXIBridge issues FIXED bursts of this length
+    maxOutstandingReadBursts: Int = 8
 ) extends Module {
 
   assert(burstLength <= 15) // 15 is equivalent to 16 beats
@@ -34,17 +33,28 @@ class AllocatorServer(
   // Continuations point to dataWidth-bit (dataWidth/8-byte) aligned task closures,
   // so the low log2(dataWidth/8) address bits are always zero and are dropped. Each
   // pointer packs into sysAddressWidth - log2(dataWidth/8) significant bits =>
-  // dataWidth/that per beat (any remaining beat bits are left zero); on unpack it is
-  // shifted back and zero-extended to the pePortWidth pointer the PE expects.
+  // dataWidth/that per beat (any remaining beat bits are left zero). BeatUnpacker
+  // (at the PE tap) must use the SAME constants to slice them back out.
   private val addressAlignmentBits = log2Ceil(dataWidth / 8)
   private val continuationAddressBits = sysAddressWidth - addressAlignmentBits
   private val numPackedPerBeat = dataWidth / continuationAddressBits
-  require(
-    numPackedPerBeat % numOutputPorts == 0
-  ) // We MUST be able to cleanly divide the number packed per beat by the number of output ports
+  require(numPackedPerBeat >= 1)
+
+  private val burstBeats = burstLength + 1
+  private val contsPerBurst = burstBeats * numPackedPerBeat
+
+  // Read-ahead engine sized like SchedulerServer's: keep up to
+  // maxOutstandingReadBursts bursts claimed against a local buffer one burst
+  // deeper than the watermark, so a full HBM round-trip latency's worth of beats
+  // is in flight and the ring can drain a fresh beat EVERY cycle (8 addresses/
+  // cycle sustained) instead of trickling one burst at a time.
+  private val localQueueDepth = maxOutstandingReadBursts * burstBeats
+  private val readAheadLowWatermark = (maxOutstandingReadBursts - 1) * burstBeats
+  private val readCountWidth = log2Ceil(maxOutstandingReadBursts + 1) + 1
+  private val readBeatCountWidth = log2Ceil(localQueueDepth + burstBeats + 1) + 1
 
   val regBlock = new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
-  val io = IO(new AllocatorServerIO(dataWidth, regBlock, sysAddressWidth, pePortWidth, numOutputPorts))
+  val io = IO(new AllocatorServerIO(dataWidth, regBlock, sysAddressWidth))
 
   io.axi_mgmt.suggestName("0_S_AXI_MGMT")
   regBlock.s_axil <> io.axi_mgmt
@@ -53,7 +63,7 @@ class AllocatorServer(
   private val rPause = RegInit(0.U(64.W))
   private val avaialbleSize = RegInit(
     0.U(64.W)
-  ) // Size is in chunks, not continuations
+  ) // Size is in packed continuations, not bytes
 
   regBlock.base(0x00)
   regBlock.reg(
@@ -76,50 +86,65 @@ class AllocatorServer(
   )
   io.paused := rPause =/= 0.U
 
-  private val oustandingRequests = RegInit(0.U(2.W))
-  private val inflightReadBeats = RegInit(0.U(6.W))
-  private val returnedReadBeats = RegInit(0.U(6.W))
-
   val readyAddressChunksFIFO = Module(
-    new Queue(UInt(256.W), 2 * (burstLength + 1))
+    new Queue(UInt(dataWidth.W), localQueueDepth)
   )
 
-  // Whenever the readyAddressChunks passes below burstLength, request another set of chunks
-  private val needReadBurst = RegInit(false.B)
-  needReadBurst := readyAddressChunksFIFO.io.count +& inflightReadBeats < (burstLength + 1).U
+  private val outstandingReads = RegInit(0.U(readCountWidth.W))
+  private val inflightReadBeats = RegInit(0.U(readBeatCountWidth.W))
+  private val returnedReadBeats = RegInit(0.U(log2Ceil(burstBeats + 1).W))
 
+  // Issue-ahead: beats already buffered plus beats claimed by in-flight bursts.
+  // A new burst may issue while claimed is below the watermark; the buffer is one
+  // burst deeper than the watermark so an issued burst always has room to land.
+  private val claimedReadBeats =
+    readyAddressChunksFIFO.io.count +& inflightReadBeats
+  private val wantReadBurst =
+    outstandingReads < maxOutstandingReadBursts.U &&
+      claimedReadBeats < readAheadLowWatermark.U &&
+      rPause === 0.U
+
+  // The free-address FIFO is consumed from the top downward: each issued burst
+  // claims the contsPerBurst continuations just below avaialbleSize, which is
+  // decremented at issue so concurrent outstanding bursts never overlap.
   io.read_address.bits := (rAddr + (
-    ((avaialbleSize - ((burstLength + 1) * numPackedPerBeat).U) >> log2Ceil(numPackedPerBeat)) << addressAlignmentBits
+    ((avaialbleSize - contsPerBurst.U) >> log2Ceil(numPackedPerBeat)) << addressAlignmentBits
   ))(sysAddressWidth - 1, 0)
-  when(
-    oustandingRequests < 2.U && needReadBurst && rPause === 0.U
-  ) {
-    when(avaialbleSize >= ((burstLength + 1) * numPackedPerBeat).U) {
-      io.read_address.valid := true.B
-    }.otherwise {
-      io.read_address.valid := false.B
-      rPause := "hFFFFFFFFFFFFFFFF".U
-    }
+  io.read_address.valid := wantReadBurst && avaialbleSize >= contsPerBurst.U
 
-  }.otherwise {
-    io.read_address.valid := false.B
-  }
-
-  when(io.read_address.fire && !(io.read_data.fire && returnedReadBeats === burstLength.U)) {
-    oustandingRequests := oustandingRequests + 1.U
-  }.elsewhen(!io.read_address.fire && io.read_data.fire && returnedReadBeats === burstLength.U) {
-    oustandingRequests := oustandingRequests - 1.U
+  // Out of free continuations: self-pause (host observes rPause and refills /
+  // resizes). This also holds the engine off out of reset until the host programs
+  // rAddr/avaialbleSize and clears rPause.
+  when(wantReadBurst && avaialbleSize < contsPerBurst.U) {
+    rPause := "hFFFFFFFFFFFFFFFF".U
   }
 
   when(io.read_address.fire) {
-    needReadBurst := false.B
-    avaialbleSize := avaialbleSize - ((burstLength + 1) * numPackedPerBeat).U
+    avaialbleSize := avaialbleSize - contsPerBurst.U
   }
 
+  private val readLastBeat =
+    io.read_data.fire && returnedReadBeats === burstLength.U
+
+  // outstandingReads: +1 per issued AR, -1 per completed returned burst.
+  when(io.read_address.fire && !readLastBeat) {
+    outstandingReads := outstandingReads + 1.U
+  }.elsewhen(!io.read_address.fire && readLastBeat) {
+    outstandingReads := outstandingReads - 1.U
+  }
+
+  // inflightReadBeats: += the issued burst, -= each returned beat.
+  inflightReadBeats := inflightReadBeats +
+    Mux(io.read_address.fire, burstBeats.U, 0.U) -
+    Mux(io.read_data.fire, 1.U, 0.U)
+
+  // Bursts are fixed-length and same-id (in-order), so a mod-burstBeats counter
+  // of returned beats is enough to detect burst completion.
   when(io.read_data.fire) {
-    returnedReadBeats := returnedReadBeats + 1.U
     when(returnedReadBeats === burstLength.U) {
       returnedReadBeats := 0.U
+    }.otherwise {
+      returnedReadBeats := returnedReadBeats + 1.U
     }
   }
 
@@ -127,82 +152,9 @@ class AllocatorServer(
   readyAddressChunksFIFO.io.enq.valid := io.read_data.valid
   readyAddressChunksFIFO.io.enq.bits := io.read_data.bits
   io.read_data.ready := readyAddressChunksFIFO.io.enq.ready
-  inflightReadBeats := inflightReadBeats + Mux(
-    io.read_address.fire,
-    (burstLength + 1).U,
-    0.U
-  ) - Mux(io.read_data.fire, 1.U, 0.U)
 
-  // ALWAYS try to shove chunks into the ring
-  val shallowPerOutputQueues = Seq.fill(numOutputPorts)(
-    Module(new Queue(UInt(pePortWidth.W), numPackedPerBeat / numOutputPorts * 2))
-  )
-  val equalSizedBuffer = Wire(Decoupled(UInt((numOutputPorts * continuationAddressBits).W)))
-
-  if (numPackedPerBeat != numOutputPorts) {
-    val interBeatCounter =
-      RegInit(0.U(log2Ceil(numPackedPerBeat / numOutputPorts).W))
-    val intermediateInterbeatQueue = Module(
-      new Queue(UInt((numOutputPorts * continuationAddressBits).W), 1, pipe = true)
-    )
-    equalSizedBuffer <> intermediateInterbeatQueue.io.deq
-
-    intermediateInterbeatQueue.io.enq.valid := readyAddressChunksFIFO.io.deq.valid
-    intermediateInterbeatQueue.io.enq.bits := readyAddressChunksFIFO.io.deq.bits(numOutputPorts * continuationAddressBits - 1, 0)
-    readyAddressChunksFIFO.io.deq.ready := false.B
-
-    when(interBeatCounter === 0.U) {
-      readyAddressChunksFIFO.io.deq.ready := false.B
-    }.otherwise {
-
-      for (k <- 1 until numPackedPerBeat / numOutputPorts) {
-        when(interBeatCounter === k.U) {
-          intermediateInterbeatQueue.io.enq.bits := readyAddressChunksFIFO.io.deq
-            .bits(
-              numOutputPorts * continuationAddressBits * (k + 1) - 1,
-              numOutputPorts * continuationAddressBits * k
-            )
-        }
-      }
-      when(interBeatCounter === (numPackedPerBeat / numOutputPorts - 1).U) {
-        readyAddressChunksFIFO.io.deq.ready := intermediateInterbeatQueue.io.enq.ready
-      }
-    }
-
-    when(intermediateInterbeatQueue.io.enq.fire) {
-      interBeatCounter := interBeatCounter + 1.U
-      when(interBeatCounter === (numPackedPerBeat / numOutputPorts - 1).U) {
-        interBeatCounter := 0.U
-      }
-    }
-  } else {
-    equalSizedBuffer.valid := readyAddressChunksFIFO.io.deq.valid
-    equalSizedBuffer.bits := readyAddressChunksFIFO.io.deq.bits(numOutputPorts * continuationAddressBits - 1, 0)
-    readyAddressChunksFIFO.io.deq.ready := equalSizedBuffer.ready
-  }
-
-  val allShallowPortsReadyToAccept =
-    shallowPerOutputQueues.map(_.io.enq.ready).reduce(_ && _)
-  equalSizedBuffer.ready := false.B
-  for (i <- 0 until numOutputPorts) {
-    shallowPerOutputQueues(i).io.enq.valid := false.B
-    shallowPerOutputQueues(i).io.enq.bits := Cat(
-      0.U((pePortWidth - continuationAddressBits - addressAlignmentBits).W),
-      equalSizedBuffer.bits(
-        (i + 1) * continuationAddressBits - 1,
-        i * continuationAddressBits
-      ),
-      0.U(addressAlignmentBits.W)
-    )
-
-    when(allShallowPortsReadyToAccept) {
-      shallowPerOutputQueues(i).io.enq.valid := equalSizedBuffer.valid
-      equalSizedBuffer.ready := true.B
-
-    }
-
-    shallowPerOutputQueues(i).io.deq <> io.dataOut(i)
-  }
+  // Whole beats go out; the ring carries them to whichever PE tap wants one.
+  io.dataOut <> readyAddressChunksFIFO.io.deq
 
   // Reply to axi management operations.
   when(regBlock.rdReq) {
