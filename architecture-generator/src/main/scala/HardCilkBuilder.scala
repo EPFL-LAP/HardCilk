@@ -307,31 +307,52 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         recordHC(connection.srcPort)
         portsToExport += PortToExport(connection.srcPort, connection.dstPort, isSource = true)
       } else {
-        try {
-          // Calls the helper from HardCilkUtil
-          val physicalSourcePort = getPhysicalPort(
-            connection.srcPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs
-          )
+        def portLabel(p: PortDescriptor): String =
+          s"${p.parentType}(${p.parentName}).${p.portType}[${p.portIndex}]"
 
-          // Calls the helper from HardCilkUtil
-          val physicalDestinationPort = getPhysicalPort(
-            connection.dstPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs
-          )
-
-          physicalSourcePort <> physicalDestinationPort
-          recordHC(connection.srcPort)
-          recordHC(connection.dstPort)
-
-          // Log the connection
-          println("[HardCilk:Builder:237] Connected " +
-            s"${connection.srcPort.parentType}(${connection.srcPort.parentName}).${connection.srcPort.portType}.${connection.srcPort.portIndex} " +
-            s"--> ${connection.dstPort.parentType}(${connection.dstPort.parentName}).${connection.dstPort.portType}.${connection.dstPort.portIndex}")
-
-        } catch {
-          case e: Exception => {
-            println(s"ERROR during connection: ${e.getMessage}")
-            println(s"Failed connection details: ${connection}")
+        // Resolve each side independently so we can report *which* endpoint's
+        // port lookup failed and which endpoint is consequently left dangling.
+        // A dangling sink (input) is exactly what firtool later reports as
+        // "sink not fully initialized" with an unhelpful empty name.
+        val physicalSourcePort =
+          try Some(getPhysicalPort(
+            connection.srcPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs))
+          catch {
+            case e: Exception =>
+              println(s"[HardCilk:Builder] ERROR resolving SOURCE port ${portLabel(connection.srcPort)}: ${e.getMessage}")
+              None
           }
+
+        val physicalDestinationPort =
+          try Some(getPhysicalPort(
+            connection.dstPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs))
+          catch {
+            case e: Exception =>
+              println(s"[HardCilk:Builder] ERROR resolving DEST port ${portLabel(connection.dstPort)}: ${e.getMessage}")
+              None
+          }
+
+        (physicalSourcePort, physicalDestinationPort) match {
+          case (Some(src), Some(dst)) =>
+            try {
+              src <> dst
+              recordHC(connection.srcPort)
+              recordHC(connection.dstPort)
+              println("[HardCilk:Builder:237] Connected " +
+                s"${portLabel(connection.srcPort)} --> ${portLabel(connection.dstPort)}")
+            } catch {
+              case e: Exception =>
+                println(s"[HardCilk:Builder] ERROR wiring ${portLabel(connection.srcPort)} <> ${portLabel(connection.dstPort)}: ${e.getMessage}")
+                println(s"[HardCilk:Builder] Failed connection details: ${connection}")
+            }
+          case _ =>
+            // At least one endpoint could not be resolved. Name the endpoint(s)
+            // that WILL be left unconnected so the firtool error is traceable.
+            val dangling =
+              (if (physicalSourcePort.isEmpty) Seq(portLabel(connection.srcPort)) else Seq.empty) ++
+              (if (physicalDestinationPort.isEmpty) Seq(portLabel(connection.dstPort)) else Seq.empty)
+            println(s"[HardCilk:Builder] UNCONNECTED due to failed port resolution: ${dangling.mkString(" and ")}")
+            println(s"[HardCilk:Builder] Failed connection details: ${connection}")
         }
       }
     }
