@@ -107,7 +107,9 @@ class VitisModule(cfg: VitisModuleConfig) extends BlackBox {
 
   def getPort(name: String) = io.elements.getOrElse(
     name,
-    throw new RuntimeException(f"IO port not found: ${name}")
+    throw new RuntimeException(
+      s"IO port not found: '$name' in VitisModule '${cfg.desiredName}'. " +
+      s"Available ports: ${io.elements.keys.mkString(", ")}")
   )
 }
 
@@ -275,14 +277,29 @@ class VitisWriteBufferModule(
           }
         } else Seq.empty[(String, Data)]) ++
         // New-style: one m_axi_argOut_<target> AXI-MM port per named argDataOut.
-        // The payload width is taken directly from the parsed argDataOut_<target>
-        // interface, so distinct targets may carry distinct argument widths.
+        // The payload width MUST be the argument DATA width (e.g. 32 for a uint32
+        // return/store), NOT the full _arg_out struct TDATA width carried on
+        // argDataOut_<target> (which also includes addr/size/allow/padding). It must
+        // match the WriteBuffer that drives this port (built with the same
+        // argumentSizeList width in the wiring below): a wider port zero-extends the
+        // buffer's 32-bit data+strobe onto lane 0 of the bus, mis-placing every write
+        // whose address is not bus-aligned (all counts collapse onto one address).
+        // The width is looked up per target by port name, so distinct targets may
+        // carry distinct widths regardless of declaration order.
         (if (isNewStyleArgOut) {
+          val argOutTaskDesc =
+            fullSysGenDescriptor.taskDescriptors.find(_.name == taskName)
           newStyleArgOutPairs.map { case (target, iface) =>
+            val argW = argOutTaskDesc
+              .flatMap(_.argumentSizeList.get(iface.name))
+              .getOrElse(throw new RuntimeException(
+                s"[HLS] No argumentSizeList entry for port '${iface.name}' in task " +
+                s"'$taskName' (sizing m_axi_argOut). Available: " +
+                s"${argOutTaskDesc.map(_.argumentSizeList).getOrElse(Map.empty)}"))
             s"m_axi_argOut_$target" -> (axi4.Master(
               new axi4.Config(
                 wAddr = fullSysGenDescriptor.widthAddress,
-                wData = iface.config.wData
+                wData = argW
               )
             ): Data)
           }
@@ -291,13 +308,17 @@ class VitisWriteBufferModule(
 
   def getPort(name: String) = io.elements.getOrElse(
     name,
-    throw new RuntimeException(f"IO port not found: ${name}")
+    throw new RuntimeException(
+      s"IO port not found: '$name' in VitisWriteBufferModule '${cfg.desiredName}' " +
+      s"(task '$taskName'). Available ports: ${io.elements.keys.mkString(", ")}")
   )
 
   // Resolves a port by its *logical type name* (as used in PortDescriptor) plus an
   // ordinal index.  For legacy modules both names are identical and no translation is
   // needed.  For new-style modules some logical names differ from the physical IO names:
-  //   "taskOutGlobal" (index N) → the Nth taskGlobalOut_* port in sorted IO order
+  //   "taskOutGlobal" (index N) → the taskGlobalOut_* port whose name encodes
+  //   spawnList(taskName)(N), falling back to declaration order for ports named
+  //   after an inner kernel (overlap wrappers).
   // Falls back to exact-name lookup for all other types.
   def getPortByLegacyType(portType: String, portIndex: Int): chisel3.Data = {
     // New-style argOut: the Nth argOut connection (N = position in this task's
@@ -310,22 +331,48 @@ class VitisWriteBufferModule(
       return getPort(s"argOut_${targets(portIndex)}")
     }
 
-    // taskOutGlobal: the logical Nth global-spawn output maps to the Nth
-    // taskGlobalOut_* port in sorted IO order. This holds whenever the PE has
-    // named taskGlobalOut_* ports — independent of whether it also owns a
-    // spawnNext. A task may tail-spawn a reentry/continuation (and so have a
-    // taskGlobalOut_* port) without owning a spawn_next closure, in which case
-    // isNewStyleSpawnNext is false but the translation is still required.
-    // Fall back to the legacy bare "taskOutGlobal" only when no named ports exist.
+    // taskOutGlobal: the logical Nth global-spawn output is the Nth entry of this
+    // task's spawn list (self-spawns excluded — mirrors the index assignment in
+    // Descriptors.spawnedConnections). Each entry is resolved to a physical port
+    // by name: a port encodes its target task as taskGlobalOut_<task> or
+    // taskGlobalOut_<task>_depends_<cont>. Entries with no name match (overlap
+    // wrappers, whose port is named after the inner kernel rather than the
+    // wrapper task) take the remaining ports in declaration order — io.elements
+    // is a SeqMap preserving the parsed Verilog port order, which follows the
+    // compiler-emitted C++ signature, i.e. spawn-list order. Note the ports must
+    // NOT be resolved by sorted-name position: name order need not agree with
+    // spawn-list order (e.g. a _depends_ port sorting after a plain one), which
+    // silently transposes scheduler connections.
+    // This translation applies whenever the PE has named taskGlobalOut_* ports —
+    // independent of whether it also owns a spawnNext. Fall back to the legacy
+    // bare "taskOutGlobal" only when no named ports exist.
     if (portType == "taskOutGlobal") {
       val taskGlobalOutPorts = io.elements.keys
         .filter(_.startsWith("taskGlobalOut_"))
-        .toSeq.sorted
+        .toSeq
       if (taskGlobalOutPorts.nonEmpty) {
-        assert(portIndex < taskGlobalOutPorts.size,
+        val spawned = fullSysGenDescriptor.spawnList
+          .getOrElse(taskName, List())
+          .filterNot(_ == taskName)
+        assert(portIndex < spawned.size,
           s"[HLS] getPortByLegacyType: portIndex $portIndex out of range for 'taskOutGlobal' " +
-          s"in module '${cfg.desiredName}'. Available taskGlobalOut ports: ${taskGlobalOutPorts.mkString(", ")}")
-        return io.elements(taskGlobalOutPorts(portIndex))
+          s"in module '${cfg.desiredName}'. Spawn list for '$taskName': ${spawned.mkString(", ")}")
+
+        def targetOf(port: String): String =
+          port.stripPrefix("taskGlobalOut_").split("_depends_", 2)(0)
+
+        val byName: Map[String, String] = spawned.flatMap { t =>
+          taskGlobalOutPorts.find(p => targetOf(p) == t).map(t -> _)
+        }.toMap
+        val leftoverEntries = spawned.filterNot(byName.contains)
+        val leftoverPorts   = taskGlobalOutPorts.filterNot(byName.values.toSet)
+        assert(leftoverEntries.size == leftoverPorts.size,
+          s"[HLS] getPortByLegacyType: cannot pair spawn-list entries with taskGlobalOut ports " +
+          s"in module '${cfg.desiredName}'. Unmatched entries: ${leftoverEntries.mkString(", ")}; " +
+          s"unmatched ports: ${leftoverPorts.mkString(", ")}")
+        val mapping = byName ++ leftoverEntries.zip(leftoverPorts)
+
+        return io.elements(mapping(spawned(portIndex)))
       }
     }
     getPort(portType)
@@ -690,7 +737,11 @@ object VitisModuleFactory {
   }
 
   def findParameterValue(param: String, content: String): Int = {
-    val paramRegex = s"""parameter\\s+$param\\s*=\\s*(\\d+)\\s*;""".r
+    // Match both body-style `parameter X = N ;` and header-style
+    // `parameter X = N` (terminated by comma / `)` / newline, no semicolon — as
+    // emitted in an OVERLAP wrapper's `#( ... )` parameter list). The `\b` after
+    // the name prevents matching a longer parameter with the same prefix.
+    val paramRegex = s"""parameter\\s+$param\\b\\s*=\\s*(\\d+)""".r
     paramRegex.findFirstMatchIn(content) match {
       case Some(m) => m.group(1).toInt
       case None =>
@@ -720,52 +771,55 @@ object VitisModuleFactory {
         throw new RuntimeException("Module not found!")
       )
 
-    // search for parameters in the moduleContent with M_AXI_GMEM and create an Aximm_VitisInterface
-    val idWidth = extractSignalWidth("m_axi_gmem_ARID", moduleContent)
-    val addrWidth = extractSignalWidth("m_axi_gmem_ARADDR", moduleContent)
-    val dataWidth = extractSignalWidth("m_axi_gmem_RDATA", moduleContent)
-    val awuserWidth = extractSignalWidth("m_axi_gmem_AWUSER", moduleContent)
-    val aruserWidth = extractSignalWidth("m_axi_gmem_ARUSER", moduleContent)
-    val wuserWidth = extractSignalWidth("m_axi_gmem_WUSER", moduleContent)
-    val ruserWidth = extractSignalWidth("m_axi_gmem_RUSER", moduleContent)
-    val buserWidth = extractSignalWidth("m_axi_gmem_BUSER", moduleContent)
-    val userValue = findParameterValue("C_M_AXI_GMEM_USER_VALUE", moduleContent)
-    val protValue = findParameterValue("C_M_AXI_GMEM_PROT_VALUE", moduleContent)
-    val cacheValue =
-      findParameterValue("C_M_AXI_GMEM_CACHE_VALUE", moduleContent)
-    val wstrbWidth = extractSignalWidth("m_axi_gmem_WSTRB", moduleContent)
+    // Enumerate every AXI4 memory master exposed by the module. A normal Vitis PE
+    // exposes exactly one, literally named `m_axi_gmem`. A `#pragma BOMBYX OVERLAP`
+    // wrapper exposes one per collapsed sub-PE, each with a per-sub-PE prefix
+    // (`m_axi_gmem_<sub>`). Every master has exactly one ARADDR, so we derive the
+    // distinct prefixes from the ARADDR ports (lazy match stops at the first
+    // `_ARADDR`, so `m_axi_gmem_ARADDR` yields just `m_axi_gmem`).
+    val gmemPrefixRegex = """(m_axi_gmem[A-Za-z0-9_]*?)_ARADDR\b""".r
+    val gmemPrefixes: Seq[String] =
+      gmemPrefixRegex.findAllMatchIn(moduleContent).map(_.group(1)).toSeq.distinct
 
-    val arlen = extractSignalWidth("m_axi_gmem_ARLEN", moduleContent)
-
-    println(s"[HLS:HELPERS:393] ARLEN ${arlen}")
-    // var axiWstrbWidth = extractSignalWidth("m_axi_gmem_ARID", moduleContent) // not used
-
-    // Create an Aximm_VitisInterface
-    val M_AXI_GMEM_INTERFACE = if (dataWidth > 0) {
-      Some(
-        Aximm_VitisInterface(
-          "m_axi_gmem",
-          InterfaceRole.master,
-          chext.amba.axi4.Config(
-            wId = idWidth,
-            wAddr = addrWidth,
-            wData = dataWidth,
-            wUserAW = awuserWidth,
-            wUserAR = aruserWidth,
-            wUserW = wuserWidth,
-            wUserR = ruserWidth,
-            wUserB = buserWidth,
-            axi3Compat = arlen <= 4,
-            hasQos = false || arlen > 4,
-            hasProt = false|| arlen > 4,
-            hasCache = false|| arlen > 4,
-            hasRegion = false|| arlen > 4,
-            hasLock = false|| arlen > 4
+    // Build one Aximm_VitisInterface per prefix. The interface name MUST equal the
+    // exact Verilog port prefix so the BlackBox Record binds `<prefix>_ARADDR` etc.
+    val gmemInterfaces: Seq[Aximm_VitisInterface] = gmemPrefixes.flatMap { p =>
+      val idWidth = extractSignalWidth(s"${p}_ARID", moduleContent)
+      val addrWidth = extractSignalWidth(s"${p}_ARADDR", moduleContent)
+      val dataWidth = extractSignalWidth(s"${p}_RDATA", moduleContent)
+      val awuserWidth = extractSignalWidth(s"${p}_AWUSER", moduleContent)
+      val aruserWidth = extractSignalWidth(s"${p}_ARUSER", moduleContent)
+      val wuserWidth = extractSignalWidth(s"${p}_WUSER", moduleContent)
+      val ruserWidth = extractSignalWidth(s"${p}_RUSER", moduleContent)
+      val buserWidth = extractSignalWidth(s"${p}_BUSER", moduleContent)
+      val arlen = extractSignalWidth(s"${p}_ARLEN", moduleContent)
+      println(s"[HLS:HELPERS:393] ${p} ARLEN ${arlen} dataWidth ${dataWidth}")
+      if (dataWidth > 0) {
+        Some(
+          Aximm_VitisInterface(
+            p,
+            InterfaceRole.master,
+            chext.amba.axi4.Config(
+              wId = idWidth,
+              wAddr = addrWidth,
+              wData = dataWidth,
+              wUserAW = awuserWidth,
+              wUserAR = aruserWidth,
+              wUserW = wuserWidth,
+              wUserR = ruserWidth,
+              wUserB = buserWidth,
+              axi3Compat = arlen <= 4,
+              hasQos = false || arlen > 4,
+              hasProt = false || arlen > 4,
+              hasCache = false || arlen > 4,
+              hasRegion = false || arlen > 4,
+              hasLock = false || arlen > 4
+            )
           )
         )
-      )
-    } else {
-      None
+      } else {
+        None
+      }
     }
 
 
@@ -803,7 +857,12 @@ object VitisModuleFactory {
         )
       }
 
-    val tdataRegex = raw"""^\s*(input|output)\s+(?:\w+\s+)?\[\d+:\d+\]\s+(\w+)_TDATA\s*;""".r
+    // Accept both non-ANSI Vitis declarations (`input [31:0] x_TDATA ;`) and the
+    // ANSI module-header form used by the OVERLAP wrapper (`input [255:0] x_TDATA ,`
+    // — trailing comma, or `)` for the last port). Widths may be literal or a
+    // parameter expression (`[MEM_DATA_WIDTH-1:0]`). The extractor matches the
+    // whole line, so the trailing terminator/whitespace must be covered.
+    val tdataRegex = raw"""^\s*(input|output)\s+(?:\w+\s+)?\[[^\]]+\]\s+(\w+)_TDATA\s*[;,)]?\s*""".r
 
     val tdataInterfaces = tdataLines.collect {
       case line @ tdataRegex(direction, name) =>
@@ -859,8 +918,7 @@ object VitisModuleFactory {
     }
 
     val config_seq =
-      (Seq(
-        M_AXI_GMEM_INTERFACE,
+      (gmemInterfaces ++ Seq(
         aximmInterface_s_axi_control
       ).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
 
