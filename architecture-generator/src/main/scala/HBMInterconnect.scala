@@ -75,7 +75,17 @@ trait HasHBMInterconnect extends Module {
           .filter { case (name, _) => name.startsWith("m_axi_argOut_") }
           .foreach { case (_, p) => interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull) }
         if (task.hasAXI) {
-          interfacesPE.addOne(pe.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull)
+          // A normal PE exposes exactly one memory master named `m_axi_gmem`; an
+          // OVERLAP wrapper exposes one per collapsed sub-PE (`m_axi_gmem_<sub>`).
+          // Add them all to the pool — the reducer below buckets them by width and
+          // muxes each bucket, so the wrapper's (width-homogeneous) masters are
+          // handled like any other PE ports.
+          pe.io.elements.keys
+            .filter(_.startsWith("m_axi_gmem"))
+            .toSeq
+            .sorted
+            .foreach(n =>
+              interfacesPE.addOne(pe.getPort(n).asInstanceOf[axi4.RawInterface].asFull))
         }
       }
     }
