@@ -44,26 +44,19 @@ object TclGeneratorMemPEs {
     tclWriteln("connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]")
     tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins */s_axi_xdma]")
 
-    // Connect the smart connect masters to the HBM
-    // [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${systemAXIPort}]
-    for (i <- 0 until reduce_axi) {
-      // create an AXI register slice
-      // tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 axi_register_slice_${i}%02d")
-      // tclWriteln(f"set_property -dict [list CONFIG.REG_AR {15} CONFIG.REG_AW {15} CONFIG.REG_B {15} CONFIG.REG_R {15} CONFIG.REG_W {15} CONFIG.USE_AUTOPIPELINING {1}] [get_bd_cells axi_register_slice_${i}%02d]")
-      // tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins axi_register_slice_${i}%02d/S_AXI] [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/m_axi_${i}%02d]")
-      // tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins axi_register_slice_${i}%02d/M_AXI] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
-      // tclWriteln(f"connect_bd_net [get_bd_pins axi_register_slice_${i}%02d/aclk] [get_bd_pins clk_wiz_0/clk_out1]")
-      // tclWriteln(f"connect_bd_net [get_bd_pins axi_register_slice_${i}%02d/aresetn] [get_bd_pins proc_sys_reset_1/peripheral_aresetn]")
-
-
-      tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI] [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/m_axi_${i}%02d]")
-      val portName = f"m_axi_${i}%02d"
-
-      //tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${portName}] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
-    }
-
     // Create the clocking wizard and reset for the system
     tclWriteln(TclGeneralConfigs.getSytstemClockingAndResetConfigTclSyntax(fullSysGenDescriptor))
+
+    // Connect each exported AXI4 master to its HBM AXI3 slave through a 1:1
+    // SmartConnect, which handles the data-width and AXI4 -> AXI3 conversion.
+    tclWriteln(
+      TclGeneralConfigs.getHbmSmartConnectTcl(
+        descriptorName = fullSysGenDescriptor.name,
+        numPorts = reduce_axi,
+        clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
+        resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]"
+      )
+    )
 
     // // clock and reset of register slices
     // tclWriteln("connect_bd_net [get_bd_pins axi_register_slice_*/aclk] [get_bd_pins clk_wiz_0/clk_out1]")

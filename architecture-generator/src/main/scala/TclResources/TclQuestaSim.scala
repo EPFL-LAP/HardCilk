@@ -11,6 +11,16 @@ object TclQuestaSim {
       tclCommands.append("\n")
     }
 
+    // The testbench data VIP drives HBM through its own port, so one more HBM
+    // slave port than the design exports has to be enabled.
+    val vipHbmPort = reduce_axi
+    require(
+      vipHbmPort + 1 <= 32,
+      s"[TclQuestaSim] The design exports $reduce_axi HBM port(s); the QuestaSim testbench needs " +
+        s"one more for its memory VIP, which exceeds the 32 HBM slave ports. Reduce the AXI port " +
+        s"count (-r) to at most 31."
+    )
+
     // Make the tcl file as one group of commands
     // tclWriteln("startgroup")
 
@@ -26,60 +36,86 @@ object TclQuestaSim {
     // Create and configure the axi verfication IPs to replace the xdma
     tclWriteln(TclGeneralConfigs.getAxiVipConfig())
 
-    // Create and configure the hbm
+    // Create and configure the hbm (one extra port for the testbench memory VIP)
     tclWriteln(
-      TclGeneralConfigs.getHBMConfigTclSyntax(reduce_axi)
+      TclGeneralConfigs.getHBMConfigTclSyntax(vipHbmPort + 1)
     )
 
-    // Connect the management port from axi_vip_1 to the compute system
-    tclWriteln("create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 axi_dwidth_converter_0")
-
-    tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_dwidth_converter_0/M_AXI] [get_bd_intf_pins */s_axil_mgmt_hardcilk]")
-    tclWriteln(
-      "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins axi_dwidth_converter_0/S_AXI]"
-    )
+    // Connect the management port from axi_vip_1 to the compute system. A Vitis
+    // descriptor already exposes a 32-bit AXI-Lite slave, so the width converter
+    // is only needed for the 64-bit (non-Vitis) management slave.
+    if (fullSysGenDescriptor.isVitisProject) {
+      tclWriteln(
+        "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins */s_axil_mgmt_hardcilk]"
+      )
+    } else {
+      tclWriteln("create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 axi_dwidth_converter_0")
+      tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_dwidth_converter_0/M_AXI] [get_bd_intf_pins */s_axil_mgmt_hardcilk]")
+      tclWriteln(
+        "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins axi_dwidth_converter_0/S_AXI]"
+      )
+    }
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_clock_converter_1/s_axi_aclk]")
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_clock_converter_1/s_axi_aresetn]")
 
-    // Connect the data port from the axi_vip_0 to the compute system
+    // Connect the data port of axi_vip_0 to its own HBM port. This mirrors what
+    // XRT does on hardware: the host writes/reads HBM directly instead of
+    // tunneling through the kernel.
     tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_vip_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]")
-    tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins */s_axi_xdma]")
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_clock_converter_0/s_axi_aclk]")
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_clock_converter_0/s_axi_aresetn]")
 
-    // Connect the smart connect masters to the HBM
-    // [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${systemAXIPort}]
-    for (i <- 0 until reduce_axi) {
-        val portName = f"m_axi_${i}%02d"
-        // Add an axi firewall to the connection, checking slave side transactions
-        tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:axi_firewall:1.2 axi_firewall_${i}")
-        tclWriteln(f"set_property -dict [list  CONFIG.FIREWALL_MODE {SI_SIDE}   CONFIG.NUM_READ_OUTSTANDING {128} CONFIG.NUM_WRITE_OUTSTANDING {128}]  [get_bd_cells axi_firewall_${i}]")
-        tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins axi_firewall_${i}/M_AXI] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]")
-        tclWriteln(f"connect_bd_intf_net [get_bd_intf_pins ${fullSysGenDescriptor.name}_0/${portName}] [get_bd_intf_pins axi_firewall_${i}/S_AXI]")
-        
+    if (fullSysGenDescriptor.hasAXIDMAInput) {
+      println(
+        "[TclQuestaSim] WARNING: the design exports s_axi_xdma but the QuestaSim testbench " +
+          "drives HBM directly; s_axi_xdma is left unconnected."
+      )
+      tclWriteln(
+        "puts \"WARNING: s_axi_xdma is left unconnected; the QuestaSim testbench VIP accesses HBM directly.\""
+      )
     }
 
     // Create the clocking wizard and reset for the system
     tclWriteln(TclGeneralConfigs.getSytstemClockingAndResetConfigTclSyntax(fullSysGenDescriptor, true))
 
-    for(i <- 0 until reduce_axi){
-        tclWriteln(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_firewall_${i}/aclk]")
-        tclWriteln(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_firewall_${i}/aresetn]")
-    }
+    // Connect each exported AXI4 master to its HBM AXI3 slave through a 1:1
+    // SmartConnect, which handles the data-width and AXI4 -> AXI3 conversion.
+    tclWriteln(
+      TclGeneralConfigs.getHbmSmartConnectTcl(
+        descriptorName = fullSysGenDescriptor.name,
+        numPorts = reduce_axi,
+        clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
+        resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]"
+      )
+    )
 
-    // Assign addresses
+    // Same conversion for the testbench memory VIP on the spare HBM port.
+    val vipSmartConnect = f"smartconnect_hbm_${vipHbmPort}%02d"
+    tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 ${vipSmartConnect}")
+    tclWriteln(
+      f"set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] [get_bd_cells ${vipSmartConnect}]"
+    )
+    tclWriteln(
+      f"connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins ${vipSmartConnect}/S00_AXI]"
+    )
+    tclWriteln(
+      f"connect_bd_intf_net [get_bd_intf_pins ${vipSmartConnect}/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_${vipHbmPort}%02d_8HI]"
+    )
+    tclWriteln(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ${vipSmartConnect}/aclk]")
+    tclWriteln(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins ${vipSmartConnect}/aresetn]")
+
+    // Assign addresses. This maps the HBM segments into the axi_vip_0 master
+    // address space and the management registers into the axi_vip_1 one.
     tclWriteln("assign_bd_address")
-    // tclWriteln(
-    // f"assign_bd_address -target_address_space /xdma_0/M_AXI_LITE [get_bd_addr_segs ${fullSysGenDescriptor.name}_0/s_axil_mgmt_hardcilk/reg0]"
-    // )
     tclWriteln(
       f"assign_bd_address -target_address_space /axi_vip_1/Master_AXI [get_bd_addr_segs ${fullSysGenDescriptor.name}_0/s_axil_mgmt_hardcilk/reg0]"
     )
 
-    tclWriteln("set_property range 32K [get_bd_addr_segs {axi_vip_1/Master_AXI/SEG_axi_gpio_0_Reg}]")
-    tclWriteln("set_property offset 0x0008000 [get_bd_addr_segs {axi_vip_1/Master_AXI/SEG_axi_gpio_0_Reg}]")
-    
-    tclWriteln(f"set_property range 16G [get_bd_addr_segs {axi_vip_0/Master_AXI/SEG_${fullSysGenDescriptor.name}_0_reg0}]")
+    // The reset GPIO keeps whatever address assign_bd_address gives it: only the
+    // PCIe driver pokes it (RESET_ADDR in pcie_main.cpp), while the QuestaSim
+    // testbench drives the resets from main_sim.sv and relies on the GPIO's
+    // 0xFFFFFFFF default. Pinning it at 0x8000 as the PCIe flow does would
+    // collide with the management window, which is 2M wide on larger systems.
 
     tclWriteln(f"set_property target_simulator Questa [current_project]\nset_property compxlib.questa_compiled_library_dir /alpha/questa [current_project]")
 
@@ -99,10 +135,17 @@ object TclQuestaSim {
     tclFile.close()
 
     // Read the do file at ./software_template/simulate.do
-    val doFile = scala.io.Source.fromFile("./software_template/simulate.do")
+    val doFilePath = "./software_template/simulate.do"
+    require(
+      new java.io.File(doFilePath).exists(),
+      s"[TclQuestaSim] $doFilePath not found. The emitter must be run from the " +
+        s"`architecture-generator` directory."
+    )
+    val doFile = scala.io.Source.fromFile(doFilePath)
 
     // Replace "DESCRIPTOR_NAME" with the name of the descriptor
     val doFileString = doFile.mkString.replace("DESCRIPTOR_NAME", fullSysGenDescriptor.name)
+    doFile.close()
 
     // Write the do file to the tcl directory of the output
     val doFileOut = new java.io.PrintWriter(new java.io.File(s"${tclFileDirectory}/simulate.do"))
@@ -115,6 +158,10 @@ object TclQuestaSim {
 
     val shellFileStringBuilder = new StringBuilder()
     shellFileStringBuilder.append("#!/bin/bash\n")
+    // Stop at the first failing step: without this a failed block design build
+    // shows up much later as a confusing "cannot open questa_main.cpp" from
+    // sccom, because the simulation directory was never created.
+    shellFileStringBuilder.append("set -e\n")
     shellFileStringBuilder.append("export XILINX_ROOT=/alpha/tools/Xilinx/\n")
     shellFileStringBuilder.append("source $XILINX_ROOT/Vivado/2024.1/settings64.sh\n")
     shellFileStringBuilder.append(f"vivado -mode batch -source ${fullSysGenDescriptor.name}_questa.tcl\n")

@@ -207,6 +207,47 @@ object TclGeneralConfigs {
     sb.toString()
   }
 
+  /**
+    * One 1:1 SmartConnect per exported HBM master.
+    *
+    * The HardCilk top level exports plain AXI4 masters whose data width is the
+    * native width of the interfaces muxed behind them (no Widen, no AXI3
+    * conversion inside the design). The HBM slaves are 256-bit AXI3, so a
+    * SmartConnect with a single SI and a single MI is inserted in between: it
+    * infers both sides from the connected pins and performs the data-width
+    * conversion and the AXI4 -> AXI3 conversion (including burst splitting)
+    * automatically -- the same job v++ does for us in the Vitis flow.
+    *
+    * @param cellPrefix name prefix of the generated SmartConnect cells
+    * @param clkPin     TCL object expression for the clock to drive them with
+    * @param resetPin   TCL object expression for the active-low reset
+    */
+  def getHbmSmartConnectTcl(
+      descriptorName: String,
+      numPorts: Int,
+      clkPin: String,
+      resetPin: String,
+      cellPrefix: String = "smartconnect_hbm"
+  ): String = {
+    val sb = new StringBuilder
+    for (i <- 0 until numPorts) {
+      val cell = f"${cellPrefix}_${i}%02d"
+      sb.append(f"create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 ${cell}\n")
+      sb.append(
+        f"set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] [get_bd_cells ${cell}]\n"
+      )
+      sb.append(
+        f"connect_bd_intf_net [get_bd_intf_pins ${descriptorName}_0/m_axi_${i}%02d] [get_bd_intf_pins ${cell}/S00_AXI]\n"
+      )
+      sb.append(
+        f"connect_bd_intf_net [get_bd_intf_pins ${cell}/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_${i}%02d_8HI]\n"
+      )
+      sb.append(f"connect_bd_net ${clkPin} [get_bd_pins ${cell}/aclk]\n")
+      sb.append(f"connect_bd_net ${resetPin} [get_bd_pins ${cell}/aresetn]\n")
+    }
+    sb.toString()
+  }
+
   def getXdmaConfigTclSyntax(): String = {
     """
         # 1.Create the xdma
@@ -316,12 +357,15 @@ object TclGeneralConfigs {
 
 
 
-    sb.append(
-      "connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter*/*clk*]\n"
-    )
-    sb.append(
-      "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter*/*aresetn*]\n"
-    ) 
+    // The AXI-Lite width converter only exists when the management slave is
+    // 64-bit wide (non-Vitis descriptors); guard the wildcards so the connect
+    // does not fail on an empty object list.
+    sb.append("""
+        if {[llength [get_bd_cells -quiet axi_dwidth_converter*]] > 0} {
+          connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter*/*clk*]
+          connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter*/*aresetn*]
+        }
+    """)
 
     // Reset coming from AXI through the pcie
     sb.append("""

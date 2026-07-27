@@ -31,6 +31,11 @@ object HardCilkEmitter extends App {
 
       if (!cfg.rtl_generation) {
         println("RTL generation not requested.")
+        if (cfg.tcl_generation || cfg.questa_generation)
+          System.err.println(
+            "ERROR: -b/--tcl-scripts and -q/--questa-sim need the RTL to be generated in the " +
+              "same run (they use the number of exported HBM ports); add -g/--rtl-generation."
+          )
       } else {
         val outputDirPathRTL = s"${cfg.output_dir}/$outputDirName/rtl"
         Files.createDirectories(Paths.get(outputDirPathRTL))
@@ -53,19 +58,25 @@ object HardCilkEmitter extends App {
           isSimulation = false
         )
         println(s"Emitted RTL to: $outputDirPathRTL")
-        if(cfg.tcl_generation){
+        if (cfg.tcl_generation || cfg.questa_generation) {
           val outputDirPathTCL = s"${cfg.output_dir}/$outputDirName/tcl"
           new java.io.File(outputDirPathTCL).mkdirs()
-          TclGeneratorMemPEs.generate(
-            systemDescriptor,
-            outputDirPathTCL,
-            numHbmPortExports
-          )
-          TclQuestaSim.generate(
-            systemDescriptor,
-            outputDirPathTCL,
-            numHbmPortExports
-          )
+          if (cfg.tcl_generation) {
+            TclGeneratorMemPEs.generate(
+              systemDescriptor,
+              outputDirPathTCL,
+              numHbmPortExports
+            )
+            println(s"Emitted Vivado Block Design TCL to: $outputDirPathTCL")
+          }
+          if (cfg.questa_generation) {
+            TclQuestaSim.generate(
+              systemDescriptor,
+              outputDirPathTCL,
+              numHbmPortExports
+            )
+            println(s"Emitted QuestaSim project (run ./simulate.sh) to: $outputDirPathTCL")
+          }
         }
       }
 

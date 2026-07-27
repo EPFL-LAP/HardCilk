@@ -9,6 +9,7 @@ case class BuilderConfig(
   timestamped: Boolean = false,
   cpp_header_generation: Boolean = false,
   tcl_generation: Boolean = false,
+  questa_generation: Boolean = false,
   rtl_generation: Boolean = false,
   sc_header_generation: Boolean = false,
   project_sc_generation: Boolean = false,
@@ -52,6 +53,9 @@ object ArgParser {
       opt[Unit]('b', "tcl-scripts")
         .action((_, c) => c.copy(tcl_generation = true))
         .text("Generates the TCL output for Vivado Block Design"),
+      opt[Unit]('q', "questa-sim")
+        .action((_, c) => c.copy(questa_generation = true))
+        .text("Generates the QuestaSim one-click simulation project (TCL + simulate.do + simulate.sh)"),
       opt[Unit]('s', "sc-headers")
         .action((_, c) => c.copy(sc_header_generation = true))
         .text("Generates the C++ header for SystemC simulation"),
