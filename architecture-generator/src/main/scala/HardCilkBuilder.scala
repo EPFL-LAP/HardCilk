@@ -31,7 +31,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
 
   case class SubsystemBlueprint(
       peFactories: Map[String, () => Seq[VitisWriteBufferModule]],
-      schedulerFactories: Map[String, () => Scheduler],
+      schedulerFactories: Map[String, () => SchedulerLike],
       allocatorFactories: Map[String, () => Allocator],
       argNotifierFactories: Map[String, () => ArgumentNotifier],
       memAllocatorFactories: Map[String, () => Allocator],
@@ -49,24 +49,46 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         task.name -> (() => VitisModuleFactory(task, desc))
       }.toMap
 
-    val schedulerFactories = desc.taskDescriptors.map { task =>
-      task.name -> (() => new Scheduler(
-        addrWidth = desc.widthAddress,
-        taskWidth = task.widthTask,
-        queueDepth = task.getCapacityPhysicalQueue("scheduler"),
-        peCount = task.numProcessingElements,
-        spawnsItself = desc.selfSpawnedCount(task.name) > 0,
-        peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
-        argRouteServersNumber = task.getNumServers("argumentNotifier"),
-        schedulerServersNumber = task.getNumServers("scheduler"),
-        pePortWidth = task.widthTask,
-        peType = task.name,
-        debug = debug,
-        spawnerServerNumber = task.spawnServersCount,
-        argRouteServersCreateTasks = task.sidesConfigs.length > 2,
-        taskId = task.taskId,
-        mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth
-      ))
+    // A task that never spawns itself has nothing to steal back from its own PEs, so it gets the
+    // streaming DataFlowScheduler instead of the classic one. The root keeps the classic scheduler:
+    // it is the one the host seeds. See Descriptors.usesDataFlowScheduler.
+    val schedulerFactories: Map[String, () => SchedulerLike] = desc.taskDescriptors.map { task =>
+      task.name -> (if (desc.usesDataFlowScheduler(task)) { () =>
+        new DataFlowScheduler.DataFlowScheduler(
+          taskWidth = task.widthTask,
+          peCount = task.numProcessingElements,
+          peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
+          argRouteServersNumber = task.getNumServers("argumentNotifier"),
+          pePortWidth = task.widthTask,
+          // The classic scheduler infers this from the side-config count. Here it decides whether
+          // the task has any input at all, so ask the question directly.
+          argRouteServersCreateTasks = task.getNumServers("argumentNotifier") > 0,
+          // Not task.spawnServersCount: for a dataflow task the spawner exists only to break a
+          // dependency cycle, and which task hosts it comes from the graph analysis.
+          hasSpawnerServer = desc.dataFlowSpawnerTasks.contains(task.name),
+          peType = task.name
+        )
+      } else { () =>
+        new Scheduler(
+          addrWidth = desc.widthAddress,
+          taskWidth = task.widthTask,
+          queueDepth = task.getCapacityPhysicalQueue("scheduler"),
+          peCount = task.numProcessingElements,
+          spawnsItself = desc.selfSpawnedCount(task.name) > 0,
+          peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
+          argRouteServersNumber = task.getNumServers("argumentNotifier"),
+          schedulerServersNumber = task.getNumServers("scheduler"),
+          pePortWidth = task.widthTask,
+          peType = task.name,
+          debug = debug,
+          // Through the descriptor helper, so the hardware cannot disagree with the number of
+          // management blocks the address map reserved for this task.
+          spawnerServerNumber = desc.spawnerCount(task),
+          argRouteServersCreateTasks = task.sidesConfigs.length > 2,
+          taskId = task.taskId,
+          mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth
+        )
+      })
     }.toMap
 
     val allocatorFactories = desc.taskDescriptors
@@ -207,7 +229,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
    * Pure wiring logic — connects instantiated modules.
    */
   def connectSubsystems(
-      scheds: Map[String, Scheduler],
+      scheds: Map[String, SchedulerLike],
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
       memAllocs: Map[String, Allocator],

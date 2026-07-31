@@ -53,12 +53,18 @@ trait HardCilkHasMfpgaSupport extends Module {
 
   val demux : axi4.lite.components.Demux 
   val fullSysGenDescriptor: FullSysGenDescriptor
-  val schedulerMap: Map[String, Scheduler]
+  val schedulerMap: Map[String, SchedulerLike]
   val notifierMap: Map[String, ArgumentNotifier]
   
   val peMap: Map[String, Seq[VitisWriteBufferModule]]
   val remoteStreamToMemMap: Map[String, RemoteStreamToMem]
 
+  /** The remote steal path exists only on the classic scheduler, and
+    * `FullSysGenDescriptor.validate()` rejects mFPGA together with the DataFlowScheduler, so under
+    * mFPGA this is the whole scheduler map.
+    */
+  private def classicSchedulerMap: Map[String, Scheduler] =
+    schedulerMap.collect { case (name, sched: Scheduler) => name -> sched }
 
   def buildMfpgaConnections(): Unit = {
     val mfpgaSupport = fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth
@@ -139,9 +145,9 @@ trait HardCilkHasMfpgaSupport extends Module {
 
 
       // Connect the scheduler to the registers above
-      val tasksToMove  = schedulerMap.map(_._2.numberOfTasksToMove.get).toSeq 
-      val fpgaCount  = schedulerMap.map(_._2.fpgaCountInputReg.get).toSeq 
-      val fpgaIndex  = schedulerMap.map(_._2.fpgaIndexInputReg.get).toSeq ++ notifierMap.map(_._2.fpgaIndexInputReg.get).toSeq
+      val tasksToMove  = classicSchedulerMap.map(_._2.numberOfTasksToMove.get).toSeq 
+      val fpgaCount  = classicSchedulerMap.map(_._2.fpgaCountInputReg.get).toSeq 
+      val fpgaIndex  = classicSchedulerMap.map(_._2.fpgaIndexInputReg.get).toSeq ++ notifierMap.map(_._2.fpgaIndexInputReg.get).toSeq
 
       // Broadcast the management registers to all schedulers/argument-notifiers
       for (t <- tasksToMove) {
@@ -202,7 +208,7 @@ trait HardCilkHasMfpgaSupport extends Module {
       val slavesCount = fullSysGenDescriptor.taskDescriptors.length + fullSysGenDescriptor.taskDescriptors.count(task => task.getNumServers("argumentNotifier") > 0) + fullSysGenDescriptor.taskDescriptors.count(task => task.generateArgOutWriteBuffer)
 
       val arbiterToMfpgaNetwork = Module(
-        new elastic.AdvArbiter(chiselTypeOf(m_axis_mFPGA.get.asFull.bits), slavesCount, chooserFn = elastic.Chooser.rr, isLastFn = (x : axi4s.FullChannel) => x.last)
+        new elastic.AdvArbiter(chiselTypeOf(m_axis_mFPGA.get.asFull.bits), slavesCount, chooserFn = elastic.RoundRobinChooser(), isLastFn = (x : axi4s.FullChannel) => x.last)
       )
 
 
@@ -216,7 +222,7 @@ trait HardCilkHasMfpgaSupport extends Module {
       elastic.SourceBuffer(arbiterToMfpgaNetwork.io.sink) <> m_axis_mFPGA.get.asFull  
       
       // each source is coming from the schedulers of each task and the argumentNotifier of each task that has argumentNotifier
-      val sources = schedulerMap.map(_._2.m_axis_remote.get.asFull).toSeq ++ notifierMap.map(_._2.m_axis_remote.get.asFull).toSeq ++ remoteStreamToMemMap.map(_._2.io.m_axis_remote.asFull).toSeq
+      val sources = classicSchedulerMap.map(_._2.m_axis_remote.get.asFull).toSeq ++ notifierMap.map(_._2.m_axis_remote.get.asFull).toSeq ++ remoteStreamToMemMap.map(_._2.io.m_axis_remote.asFull).toSeq
 
       // Connect the sources to the arbiter
       for (i <- 0 until slavesCount) {
@@ -455,7 +461,7 @@ trait HardCilkHasMfpgaSupport extends Module {
           }
 
           // A demux to connect the m_axis_mFPGA_schedulers to the correct Scheduler of the correct task ID
-          val schedulers = schedulerMap.toSeq.sortBy(_._2.taskId).map(_._2.s_axis_remote.get.asFull)
+          val schedulers = classicSchedulerMap.toSeq.sortBy(_._2.taskId).map(_._2.s_axis_remote.get.asFull)
 
           new elastic.Fork(elastic.SourceBuffer(s_axis_mFPGA_schedulers.get)) {
             override def onFork(): Unit = {
@@ -491,7 +497,7 @@ trait HardCilkHasMfpgaSupport extends Module {
         } else {
           // There are only schedulers!
           // Create a sequence of the schedulers' s_axis_remote interfaces ordered by task ID
-          val schedulers = schedulerMap.toSeq.sortBy(_._2.taskId).map(_._2.s_axis_remote.get.asFull)
+          val schedulers = classicSchedulerMap.toSeq.sortBy(_._2.taskId).map(_._2.s_axis_remote.get.asFull)
           new elastic.Fork(elastic.SourceBuffer(s_axis_mFPGA.get.asFull)) {
             override def onFork(): Unit = {
               val schedulers_demux_select = Wire(Irrevocable(UInt(4.W)))

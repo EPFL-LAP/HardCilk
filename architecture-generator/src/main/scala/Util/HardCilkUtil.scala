@@ -18,7 +18,7 @@ object HardCilkUtil {
    */
   def getPhysicalSubsystemPort(
       port: PortDescriptor,
-      scheds: Map[String, Scheduler],
+      scheds: Map[String, SchedulerLike],
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
       memAllocs: Map[String, Allocator]
@@ -57,7 +57,7 @@ object HardCilkUtil {
    */
   def getPhysicalPort(
       port: PortDescriptor,
-      scheds: Map[String, Scheduler],
+      scheds: Map[String, SchedulerLike],
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
       memAllocs: Map[String, Allocator],

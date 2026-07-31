@@ -71,7 +71,7 @@ class Scheduler(
     maxNumnberToStealOrServe: Int = 256,
     override val taskId: Int = 0,
     override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
-) extends Module with SchedulerHasMfpgaSupport {
+) extends Module with SchedulerHasMfpgaSupport with HardCilkSchedulerLike {
 
   val vssAxiFullCfg = axi4.Config(
     wAddr = addrWidth,
@@ -207,6 +207,13 @@ class Scheduler(
   // DEBUG
 
   val connArgumentNotifier = IO(Vec(argRouteServersNumber, new SchedulerNetworkClientIO(taskWidth)))
+
+  // HardCilkSchedulerLike: the servers this scheduler actually instantiated, in the order the
+  // management address map assigns them.
+  override def vssAxiMgmt: Seq[axi4.lite.Interface] = io_internal.axi_mgmt_vss.toSeq
+  override def vssAxiFull: Seq[axi4.full.Interface] = io_internal.vss_axi_full.toSeq
+  override def spawnerAxiMgmt: Seq[axi4.lite.Interface] = spawnerServerMgmt.getOrElse(Seq.empty)
+  override def spawnerAxiFull: Seq[axi4.full.Interface] = spawnerServerAXI.getOrElse(Seq.empty)
 
   for (i <- 0 until schedulerServersNumber) {
     io_internal.axi_mgmt_vss(i) :=> schedulerServers(i).io.axi_mgmt

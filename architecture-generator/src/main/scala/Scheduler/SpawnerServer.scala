@@ -20,6 +20,7 @@ class SpawnerServerIO(taskWidth: Int, regBlock: RegisterBlock, axiCfg : axi4.Con
   val connNetwork_master = Flipped(new SchedulerNetworkClientIO(taskWidth)) // Connection to the stealing Network
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
   val serveRemote = Output(Bool())         // A signal from the VSS to the RemoteTaskServer
+  val paused = Output(Bool())              // High while the FSM is stopped waiting for the host
 }
 
 class CircularQueueRegisterInc(width:Int) extends Module{
@@ -144,6 +145,10 @@ class SpawnerServer(
   }.otherwise{
     io.serveRemote := false.B
   }
+
+  // The FSM below is gated on rPause. It boots paused and self-pauses when the virtual FIFO runs
+  // out of room, in both cases waiting for the host to grow maxLength and clear rPause.
+  io.paused := rPause =/= 0.U
   
   val writeAddressDone = RegInit(false.B)
   val writeDataDone = RegInit(false.B)

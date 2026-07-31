@@ -124,7 +124,7 @@ class HardCilk(
 
   private def exportMissingPEPorts(
       portsToExport: Seq[PortToExport],
-      scheds: Map[String, Scheduler],
+      scheds: Map[String, SchedulerLike],
       allocs: Map[String, Allocator],
       notifiers: Map[String, ArgumentNotifier],
       memAllocs: Map[String, Allocator],
@@ -235,7 +235,7 @@ class HardCilk(
 
   private def connectManagement(
       demux: axi4.lite.components.Demux,
-      schedulerMap: Map[String, Scheduler],
+      schedulerMap: Map[String, SchedulerLike],
       closureAllocatorMap: Map[String, Allocator],
       memoryAllocatorMap: Map[String, Allocator],
       argumentNotifierMap: Map[String, ArgumentNotifier],
@@ -244,19 +244,35 @@ class HardCilk(
     var j = 0 // Management port index
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       val taskSched = schedulerMap(task.name)
+
+      // The descriptor decides how many servers exist; the hardware must have exactly that many,
+      // or every later task's registers end up at the wrong address. A DataFlowScheduler
+      // contributes no scheduler servers at all.
+      val numSchedulerServers = fullSysGenDescriptor.schedulerServerCount(task)
+      val numSpawnerServers = fullSysGenDescriptor.spawnerCount(task)
+
+      require(
+        taskSched.vssAxiMgmt.length == numSchedulerServers,
+        s"Task '${task.name}': scheduler has ${taskSched.vssAxiMgmt.length} scheduler servers but " +
+          s"the address map reserved $numSchedulerServers."
+      )
+      require(
+        taskSched.spawnerAxiMgmt.length == numSpawnerServers,
+        s"Task '${task.name}': scheduler has ${taskSched.spawnerAxiMgmt.length} spawner servers but " +
+          s"the address map reserved $numSpawnerServers."
+      )
+
       // Connect Scheduler Management
-      for (i <- j until j + task.getNumServers("scheduler")) {
-        demux.m_axil(i) :=> taskSched.io_internal.axi_mgmt_vss(i - j)
+      for (i <- j until j + numSchedulerServers) {
+        demux.m_axil(i) :=> taskSched.vssAxiMgmt(i - j)
       }
-      j += task.getNumServers("scheduler")
+      j += numSchedulerServers
 
       // Connect Scheduler Spawner Management (if any)
-      if (taskSched.spawnerServerMgmt.isDefined) {
-        for (i <- j until j + task.spawnServersCount) {
-          demux.m_axil(i) :=> taskSched.spawnerServerMgmt.get(i - j)
-        }
-        j += task.spawnServersCount
+      for (i <- j until j + numSpawnerServers) {
+        demux.m_axil(i) :=> taskSched.spawnerAxiMgmt(i - j)
       }
+      j += numSpawnerServers
 
       // Connect Closure Allocator Management (if any)
       if (closureAllocatorMap.contains(task.name)) {
@@ -279,9 +295,10 @@ class HardCilk(
 
     // if mfpga support connect the info ports
     if(fullSysGenDescriptor.mFPGASynth || fullSysGenDescriptor.mFPGASimulation){
-      // each scheduler has an extra port
+      // each scheduler has an extra port. Only the classic scheduler has a remote task server, and
+      // validate() rejects mFPGA together with the DataFlowScheduler, so this cast always holds.
       fullSysGenDescriptor.taskDescriptors.foreach { task =>
-        val taskSched = schedulerMap(task.name)
+        val taskSched = schedulerMap(task.name).asInstanceOf[Scheduler]
         demux.m_axil(j) :=> taskSched.s_axi_remote_task_server.get
         j += 1
       }
@@ -321,7 +338,7 @@ class HardCilk(
   }
 
   private def connectGlobalSignals(
-      schedulerMap: Map[String, Scheduler],
+      schedulerMap: Map[String, SchedulerLike],
       closureAllocatorMap: Map[String, Allocator],
       memoryAllocatorMap: Map[String, Allocator],
       argumentNotifierMap: Map[String, ArgumentNotifier]

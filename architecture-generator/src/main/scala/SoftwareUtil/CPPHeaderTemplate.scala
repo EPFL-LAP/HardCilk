@@ -20,6 +20,11 @@ object CppHeaderTemplate {
          |    std::vector<SideConfig> sidesConfigs;
          |    MemSystemDescriptor mgmtBaseAddresses;
          |    int tag;
+         |    // True when this task is served by the streaming DataFlowScheduler, which has no
+         |    // scheduler servers. Its schedulerServersBaseAddresses then holds only spawner
+         |    // servers, which have the same register layout and are managed the same way.
+         |    bool usesDataFlowScheduler;
+         |    int spawnServersCount;
          |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
          |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToMallocBaseAddress;
          |
@@ -72,7 +77,9 @@ object CppHeaderTemplate {
          |    ${td.widthTask},
          |    {${generateSideConfig(td.sidesConfigs)}},
          |    ${generateMemSystemDescriptor(td.mgmtBaseAddresses)},
-         |    ${td.tag}
+         |    ${td.tag},
+         |    ${descriptor.usesDataFlowScheduler(td)},
+         |    ${descriptor.spawnerCount(td)}
          |}
          """.stripMargin
       }
@@ -94,6 +101,10 @@ object CppHeaderTemplate {
        |    std::vector<int> schedulerServersBaseAddresses;
        |    std::vector<int> allocationServersBaseAddresses;
        |    std::vector<int> memoryAllocatorServersBaseAddresses;
+       |    // A subset of schedulerServersBaseAddresses: the entries that are spawner servers.
+       |    // They are initialised and grown exactly like a scheduler server, this vector only
+       |    // lets the host tell the two apart.
+       |    std::vector<int> spawnerServersBaseAddresses;
        |};
        |
        |class SideConfig {
@@ -160,10 +171,12 @@ object CppHeaderTemplate {
   def hex(xs: Seq[Int]) =
     xs.map(addr => f"0x${addr.toHexString.toUpperCase}").mkString(", ")
 
+  // Same order as the members of MemSystemDescriptor above.
   s"""{
      |    {${hex(memDesc.schedulerServersBaseAddresses)}},
      |    {${hex(memDesc.allocationServersBaseAddresses)}},
-     |    {${hex(memDesc.memoryAllocatorServersBaseAddresses)}}
+     |    {${hex(memDesc.memoryAllocatorServersBaseAddresses)}},
+     |    {${hex(memDesc.spawnerServersBaseAddresses)}}
      |}""".stripMargin
   }
 }
