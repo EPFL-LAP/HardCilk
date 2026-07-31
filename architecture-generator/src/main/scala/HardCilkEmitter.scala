@@ -26,15 +26,31 @@ object HardCilkEmitter extends App {
           else
             s"${jsonName}_hardcilk_output"
    
-      val systemDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
+      val parsedDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
+      // -x/--vitis-xclbin requires the Vitis management convention: a 32-bit
+      // AXI-Lite control port and the 0x10 register-map offset (the first 0x10
+      // bytes are reserved for the kernel's own ap_ctrl block). Force it on so
+      // the RTL wrapper and the software header can never silently disagree with
+      // the flag. `copy` re-runs the descriptor body, which recomputes every
+      // mgmtBaseAddresses with the 0x10 base (Descriptors.scala).
+      val systemDescriptor =
+        if (cfg.vitis_generation && !parsedDescriptor.isVitisProject) {
+          println(
+            "[HardCilkEmitter] WARNING: -x/--vitis-xclbin was given but the JSON has " +
+              "isVitisProject=false; forcing isVitisProject=true so the 0x10 management " +
+              "offset and the 32-bit AXI-Lite control port are generated."
+          )
+          parsedDescriptor.copy(isVitisProject = true)
+        } else parsedDescriptor
 
 
       if (!cfg.rtl_generation) {
         println("RTL generation not requested.")
-        if (cfg.tcl_generation || cfg.questa_generation)
+        if (cfg.tcl_generation || cfg.questa_generation || cfg.cpp_header_generation)
           System.err.println(
-            "ERROR: -b/--tcl-scripts and -q/--questa-sim need the RTL to be generated in the " +
-              "same run (they use the number of exported HBM ports); add -g/--rtl-generation."
+            "ERROR: -b/--tcl-scripts, -q/--questa-sim and -c/--cpp-headers need the RTL to be " +
+              "generated in the same run (they use the number of exported HBM ports); add " +
+              "-g/--rtl-generation."
           )
       } else {
         val outputDirPathRTL = s"${cfg.output_dir}/$outputDirName/rtl"
@@ -50,22 +66,34 @@ object HardCilkEmitter extends App {
         }
 
         // Call the generate RTL function
-        val numHbmPortExports = generateRTL(
+        val rtlResult = generateRTL(
           systemDescriptor = systemDescriptor,
           pathInputJsonFile = cfg.json_path,
           outputDirPathRTL = outputDirPathRTL,
           flags = cfg,
           isSimulation = false
         )
+        val numHbmPortExports = rtlResult.numHbmPortExports
         println(s"Emitted RTL to: $outputDirPathRTL")
         if (cfg.tcl_generation || cfg.questa_generation) {
           val outputDirPathTCL = s"${cfg.output_dir}/$outputDirName/tcl"
           new java.io.File(outputDirPathTCL).mkdirs()
+          // With --raw-hbm-ports the design exports one master per memory unit,
+          // so the block designs reduce them to the requested -r ports with
+          // SmartConnects instead of taking the exported count as the port count.
+          val rawLabels = if (cfg.rawHbmPorts) rtlResult.hbmPortLabels else Seq.empty
+          // Clamped: asking for more HBM ports than there are masters would leave
+          // SmartConnects with no slave, which is not a legal cell. A design with
+          // fewer masters than -r simply maps them 1:1.
+          val numTclHbmPorts =
+            if (cfg.rawHbmPorts) math.min(cfg.reduce_axi, numHbmPortExports) else numHbmPortExports
           if (cfg.tcl_generation) {
             TclGeneratorMemPEs.generate(
               systemDescriptor,
               outputDirPathTCL,
-              numHbmPortExports
+              numTclHbmPorts,
+              rtlResult.hbmPortWidths,
+              rawLabels
             )
             println(s"Emitted Vivado Block Design TCL to: $outputDirPathTCL")
           }
@@ -73,10 +101,24 @@ object HardCilkEmitter extends App {
             TclQuestaSim.generate(
               systemDescriptor,
               outputDirPathTCL,
-              numHbmPortExports
+              numTclHbmPorts,
+              rtlResult.ramaPortIndices.toSet,
+              rtlResult.hbmPortWidths,
+              cfg.questaRamaStriping,
+              rawLabels
             )
             println(s"Emitted QuestaSim project (run ./simulate.sh) to: $outputDirPathTCL")
           }
+        }
+        // Standalone driver header. Lands in the same place the -p project would
+        // put it, so a run that already produced the software project can refresh
+        // just the header. numHbmPortExports feeds getNumberAxiMasters().
+        if (cfg.cpp_header_generation) {
+          val includeDir =
+            s"${cfg.output_dir}/$outputDirName/software/projects/$jsonName/include"
+          Files.createDirectories(Paths.get(includeDir))
+          CppHeaderTemplate.generateCppHeader(systemDescriptor, includeDir, numHbmPortExports)
+          println(s"Emitted FullSysGenDescriptor.h to: $includeDir")
         }
       }
 
@@ -87,6 +129,19 @@ object HardCilkEmitter extends App {
         val outputDirPathVitis = s"${cfg.output_dir}/$outputDirName/vitis"
         val outputDirPathRTLForVitis = s"${cfg.output_dir}/$outputDirName/rtl"
         Files.createDirectories(Paths.get(outputDirPathVitis))
+        // The Vitis flow has no aggregation stage of its own: v++ builds the
+        // interconnect from one `sp=` line per exported master, and the generator
+        // takes that count from hbm_port_widths.txt rather than from -r, so raw
+        // mode passes through untouched -- but with every raw master exposed,
+        // which is untested at scale.
+        if (cfg.rawHbmPorts) {
+          println(
+            "[HardCilkEmitter] WARNING: --raw-hbm-ports with -x is untested: conn_u55c.cfg will " +
+              "carry one sp= line per raw master and let v++ build the interconnect for all of " +
+              s"them, rather than the ${cfg.reduce_axi} SmartConnect-reduced port(s) the " +
+              "Vivado/QuestaSim flows build."
+          )
+        }
         VitisFlowGenerator.generate(systemDescriptor, outputDirPathVitis, cfg.reduce_axi, outputDirPathRTLForVitis)
         println(s"Emitted Vitis xclbin project to: $outputDirPathVitis")
       }
@@ -130,7 +185,7 @@ object HardCilkEmitter extends App {
           s"$outputDirPathSC/projects/${jsonName}/hdl",
           cfg,
           true
-        )
+        ).numHbmPortExports
 
         // Generate the SystemC project in the `outputDirPathSC/project/${jsonName}/include`
         new java.io.File(s"$outputDirPathSC/projects/${jsonName}/include")

@@ -10,6 +10,8 @@ case class BuilderConfig(
   cpp_header_generation: Boolean = false,
   tcl_generation: Boolean = false,
   questa_generation: Boolean = false,
+  questaRamaStriping: Boolean = false,
+  rawHbmPorts: Boolean = false,
   rtl_generation: Boolean = false,
   sc_header_generation: Boolean = false,
   project_sc_generation: Boolean = false,
@@ -56,6 +58,16 @@ object ArgParser {
       opt[Unit]('q', "questa-sim")
         .action((_, c) => c.copy(questa_generation = true))
         .text("Generates the QuestaSim one-click simulation project (TCL + simulate.do + simulate.sh)"),
+      opt[Unit]("questa-rama-striping")
+        .action((_, c) => c.copy(questaRamaStriping = true))
+        .text("In the QuestaSim memory path, replace the 1:1 HBM SmartConnects with striped RAMA IPs"),
+      opt[Unit]("raw-hbm-ports")
+        .action((_, c) => c.copy(rawHbmPorts = true))
+        .text(
+          "Export every memory master as its own m_axi_XX instead of muxing them by bus group " +
+            "inside the design, and reduce them to -r HBM ports with multi-SI SmartConnects in the " +
+            "generated TCL, dealing masters of different unit types onto the same SmartConnect"
+        ),
       opt[Unit]('s', "sc-headers")
         .action((_, c) => c.copy(sc_header_generation = true))
         .text("Generates the C++ header for SystemC simulation"),
@@ -114,5 +126,4 @@ object ArgParserExample extends App {
       // parser already printed usage
   }
 }
-
 

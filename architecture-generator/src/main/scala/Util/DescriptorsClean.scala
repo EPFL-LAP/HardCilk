@@ -125,6 +125,16 @@ case class TaskDescriptor(
     var mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     spawnServersCount: Int = 0, // Defaulted
     hasAXI: Boolean = true,
+    // Put a Xilinx RAMA (Random Access Memory Attachment) IP in front of the HBM
+    // ports this task's PEs reach memory through. RAMA reorders/fragments random
+    // accesses so the HBM controller sees a friendlier pattern, but it is only
+    // worth its area when the port carries this task's traffic alone, so setting
+    // this also makes the HBM interconnect give those PE masters their own
+    // dedicated (un-muxed) HBM ports -- see HasHBMInterconnect.buildAndConnectHBM.
+    // Applies to the `m_axi_gmem*` data masters only: the spawnNext/argOut
+    // closure writes stay in the shared muxing pool, since RAMA buys nothing on
+    // their short sequential bursts.
+    generateRAMA: Boolean = false,
     isAIE: Boolean = false,
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
@@ -184,6 +194,13 @@ case class TaskDescriptor(
     }
 
     require(closureWriteBeats >= 1, s"Task '$name': closureWriteBeats must be >= 1")
+
+    if (generateRAMA) {
+      require(peHDLPath.nonEmpty,
+        s"Task '$name': generateRAMA needs PEs in the design, but no 'peHDLPath' is set")
+      require(hasAXI,
+        s"Task '$name': generateRAMA applies to the PEs' m_axi_gmem masters, but hasAXI is false")
+    }
     
 
   }
@@ -680,6 +697,15 @@ case class FullSysGenDescriptor(
     require(mallocList.keys.forall(taskNames.contains), "mallocList contains unknown task names")
     
     require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
+
+    require(axiNumOutstanding >= 1 && axiNumOutstanding <= 256,
+      s"axiNumOutstanding must be between 1 and 256, got $axiNumOutstanding")
+    if (axiNumOutstanding <= 2) {
+      DescriptorLogger.logger.warn(
+        s"axiNumOutstanding=$axiNumOutstanding will make every SmartConnect on the HBM path " +
+          "throttle the design to that many transactions in flight."
+      )
+    }
 
     // Check if the system is supposed to support MFPGA, and has argument notification is that
     // tasks with argument notifiers must have contigous ids startting from ID zero

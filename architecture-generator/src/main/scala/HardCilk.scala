@@ -32,7 +32,8 @@ class HardCilk(
     unitedHbm: Boolean,
     isSimulation: Boolean,
     argumentNotifierCutCount: Int,
-    override val addressTransformFlag: Boolean = false // Made public for trait
+    override val addressTransformFlag: Boolean = false, // Made public for trait
+    override val rawHbmPorts: Boolean = false // Made public for trait
 ) extends Module with HasHBMInterconnect with HardCilkHasMfpgaSupport { // <-- MIXIN THE TRAIT HERE
 
 
@@ -51,6 +52,8 @@ class HardCilk(
   val interfacesAxiManagement =
     scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
   var numHbmPortExports = reduceAxi
+  var ramaPortIndices: Seq[Int] = Seq.empty
+  var hbmPortLabels: Seq[String] = Seq.empty
   val interfaceBuffer = new ArrayBuffer[hdlinfo.Interface]()
   val exportedPeHdlinfoPorts = new ArrayBuffer[hdlinfo.Port]()
 
