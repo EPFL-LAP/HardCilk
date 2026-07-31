@@ -160,8 +160,12 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
     // read the raddr of the server
     uint64_t addr = memory_->readReg64(base_address + alloc_server_raddr_shift);
 
-    // Get the size of the queue from the taskDescriptor
-    int size = taskDescriptor.getCapacityVirtualQueue("allocator");
+    // Get the size of the queue from the taskDescriptor.
+    // 64-bit throughout: `count * widthTask` is evaluated in the operand type, so an int
+    // count overflows once capacity*widthTask exceeds INT_MAX (any capacity above 4Mi
+    // entries at widthTask=512) and silently yields wrapped sizes and addresses.
+    uint64_t size = taskDescriptor.getCapacityVirtualQueue("allocator");
+    const uint64_t task_bytes = static_cast<uint64_t>(taskDescriptor.widthTask) / 8;
 
     // Log the information of calling this function
     std::cout << "Managing allocation server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << std::endl;
@@ -172,17 +176,27 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
     for (auto address : taskDescriptor.mapServerAddressToClosureBaseAddress[base_address])
     {
         // read the whole memory block and check each address
-        char *data = (char *)malloc(address.second * taskDescriptor.widthTask / 8);
-        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(data), address.first, address.second * taskDescriptor.widthTask / 8);
+        const uint64_t block_entries = static_cast<uint64_t>(address.second);
+        const uint64_t block_bytes   = block_entries * task_bytes;
+        char *data = (char *)malloc(block_bytes);
+        if (!data)
+            throw std::runtime_error("manageAllocationServer: failed to allocate "
+                                     + std::to_string(block_bytes) + " host bytes");
+        memory_->copyFromDevice(reinterpret_cast<uint8_t *>(data), address.first, block_bytes);
 
         // iterate over data and check if the value is less than 0
-        for (int i = 0; i < address.second && addresses.size() < size; i++)
+        for (uint64_t i = 0; i < block_entries && addresses.size() < size; i++)
         {
-            int val = *(int *)(data + i * taskDescriptor.widthTask / 8);
+            int val = *(int *)(data + i * task_bytes);
             if (val == 0x1000000)
             {
                 // Indication of a freed closure, tagged from the ArgumentNotifier
-                addresses.push_back(address.first + i * taskDescriptor.widthTask / 8);
+                uint64_t closure_addr = address.first + i * task_bytes;
+                // Re-stamp this continuation's tag into the high 8 bits [63:56] so
+                // re-queued closures keep routing correctly (tag == 0 => untagged run).
+                if (taskDescriptor.tag != 0)
+                    closure_addr = (closure_addr & ~(0xFFULL << 56)) | (static_cast<uint64_t>(taskDescriptor.tag & 0xFF) << 56);
+                addresses.push_back(closure_addr);
             }
         }
     }
@@ -190,20 +204,27 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
     // check the size of the addresses if less than size allocate memory to complete it
     if (addresses.size() < size)
     {
-        int left_size = size - addresses.size();
-        uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(left_size * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
+        uint64_t left_size = size - addresses.size();
+        uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(left_size * task_bytes, task_bytes);
         taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].push_back(std::pair<uint64_t, int>(continuation_tasks_holder_addr, left_size));
 
-        for (auto i = 0; i < left_size; i++)
+        for (uint64_t i = 0; i < left_size; i++)
         {
-            addresses.push_back(continuation_tasks_holder_addr + i * taskDescriptor.widthTask / 8);
+            uint64_t closure_addr = continuation_tasks_holder_addr + i * task_bytes;
+            // Stamp this continuation's tag into the high 8 bits [63:56] so a PE that
+            // sends to multiple continuations can route by CONT_TAG(cont) == <tag>.
+            // tag == 0 means the run has no continuation tags, so leave it untouched.
+            if (taskDescriptor.tag != 0)
+                closure_addr = (closure_addr & ~(0xFFULL << 56)) | (static_cast<uint64_t>(taskDescriptor.tag & 0xFF) << 56);
+            addresses.push_back(closure_addr);
         }
     }
 
     assert(addresses.size() == size);
 
     // Write the addresses to the continuation queue
-    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(addresses.data()), addresses.size() * sizeof(uint64_t));
+    const uint64_t queue_bytes = addresses.size() * sizeof(uint64_t);
+    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(addresses.data()), queue_bytes);
 
     // Write the new addresses to the continuation queue
     memory_->writeReg64(base_address + alloc_server_availableSize_shift, size);
@@ -248,7 +269,8 @@ int hardCilkDriver::manageMemoryAllocatorServer(uint64_t base_address, TaskDescr
     assert(addresses.size() == size);
 
     // Write the addresses to the continuation queue
-    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(addresses.data()), addresses.size() * sizeof(uint64_t));
+    const uint64_t queue_bytes = addresses.size() * sizeof(uint64_t);
+    memory_->copyToDevice(addr, reinterpret_cast<const uint8_t *>(addresses.data()), queue_bytes);
 
     // Write the new addresses to the continuation queue
     memory_->writeReg64(base_address + mem_alloc_server_availableSize_shift, size);

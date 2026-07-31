@@ -10,12 +10,11 @@ set(HC_SYSTEMC_COMPILE_DEFINITIONS VERILATED_TRACE_ENABLED)
 # maybe make these variables overridable
 
 
-set(HC_ENABLE_SYSTEMC_TARGETS OFF)
-set(HC_ENABLE_PCIE_TARGETS OFF)
-
+# SystemC stays off by default: it needs sctlm, verilator and SystemC, which are
+# not part of a normal checkout. Turn it on explicitly when those are available.
 if(NOT DEFINED HC_ENABLE_SYSTEMC_TARGETS)
     set(
-        HC_ENABLE_SYSTEMC_TARGETS ON
+        HC_ENABLE_SYSTEMC_TARGETS OFF
         CACHE BOOL
         "Enables SystemC targets, requires sctlm, verilator, and SystemC."
     )
@@ -25,7 +24,7 @@ if(NOT DEFINED HC_ENABLE_PCIE_TARGETS)
     set(
         HC_ENABLE_PCIE_TARGETS ON
         CACHE BOOL
-        "Enables SystemC targets, requires sctlm, verilator, and SystemC."
+        "Enables the XDMA/PCIe targets, requires the svm d4e library and the xdma kernel driver."
     )
 endif()
 

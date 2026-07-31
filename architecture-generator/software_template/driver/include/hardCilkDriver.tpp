@@ -33,9 +33,30 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
         }
     }
 
+    // Validate every queue geometry before touching the device. The copy path is
+    // 64-bit now, so the only ceiling enforced here is the multiply itself; how much
+    // memory actually exists is the allocator's business and it reports that in its
+    // own terms (per-bank capacity, aggregate free bytes).
+    for(auto const& td : descriptor.taskDescriptors){
+        struct { const char* side; uint64_t entry_bits; } regions[] = {
+            {"scheduler",      static_cast<uint64_t>(td.widthTask)},
+            {"allocator",      static_cast<uint64_t>(td.widthTask)},
+            {"allocator",      static_cast<uint64_t>(descriptor.widthAddress)},
+            {"memoryAllocator", td.getVirtualEntryWidth("memoryAllocator")},
+        };
+        for(auto const& r : regions){
+            uint64_t capacity = td.getCapacityVirtualQueue(r.side);
+            if(capacity == 0 || r.entry_bits == 0) continue;
+            uint64_t bytes = capacity * (r.entry_bits / 8);
+            if(bytes / (r.entry_bits / 8) != capacity)
+                throw std::runtime_error("initSystem: task " + td.name + " " + r.side
+                    + " queue size overflows 64 bits (capacity " + std::to_string(capacity) + ")");
+        }
+    }
+
     // Initialize the different servers
     for(auto taskDescriptor : descriptor.taskDescriptors){
-      
+
             // Log which task is being initialized
             printf("Initializing task %s\n", taskDescriptor.name.c_str());
 
@@ -95,9 +116,20 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
                 std::vector<uint64_t> addresses;
-                for(auto i = 0; i < taskDescriptor.getCapacityVirtualQueue("allocator"); i++){
+                // i must be 64-bit: `i * widthTask` is evaluated in the type of i, so an
+                // int counter overflows once capacity*widthTask exceeds INT_MAX (e.g. any
+                // capacity above 4Mi entries at widthTask=512), wrapping the tail of the
+                // closure addresses back over earlier allocations.
+                for(uint64_t i = 0; i < taskDescriptor.getCapacityVirtualQueue("allocator"); i++){
                     uint64_t addr = continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8;
                     addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56); // address space for the fpgaId
+                    // Stamp this continuation's tag into the high 8 bits [63:56] of the
+                    // closure address so a PE sending to multiple continuations can route
+                    // by CONT_TAG(cont) == <tag>. Only when a tag exists; tag == 0 means
+                    // the run has no continuation tags, so leave the address untouched.
+                    if(taskDescriptor.tag != 0){
+                        addr = (addr & ~(0xFFULL << 56)) | (static_cast<uint64_t>(taskDescriptor.tag & 0xFF) << 56);
+                    }
                     addresses.push_back(addr);
                 }
 

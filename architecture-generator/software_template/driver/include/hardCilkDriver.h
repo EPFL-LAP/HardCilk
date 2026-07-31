@@ -15,12 +15,7 @@
 #include <cmath>
 
 
-// This is used to track memory freed by the processor to extend one of the FPGA queues to another location
-struct freedMemBlock
-{
-    uint64_t addr;
-    uint64_t size;
-};
+// freedMemBlock now lives in memIO.h (shared by the driver and every Memory backend)
 
 class hardCilkDriver
 {

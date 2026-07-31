@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 
 #include <memIO.h>
 
@@ -7,11 +8,7 @@
 #include <stdexcept>
 
 
-struct freedMemBlock
-{
-    uint64_t addr;
-    uint64_t size;
-};
+// freedMemBlock now lives in memIO.h (shared by the driver and every Memory backend)
 
 struct PCIeMemory : Memory {
     PCIeMemory() {
@@ -27,30 +24,50 @@ struct PCIeMemory : Memory {
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
 
     public:
-    void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint32_t size) {
-        d4e_dma_h2d(&xil_device.device, dest_addr, src, size);
+    // The d4e DMA size argument is narrower than uint64_t, so split large
+    // transfers rather than letting the value truncate silently.
+    static constexpr uint64_t HC_DMA_CHUNK = 1ULL << 30;   // 1 GiB
+
+    void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint64_t size) override {
+        while (size > 0) {
+            uint64_t chunk = std::min<uint64_t>(size, HC_DMA_CHUNK);
+            // The underlying write() can come up short; treating that as success
+            // leaves silently truncated data in HBM.
+            if (d4e_dma_h2d(&xil_device.device, dest_addr, src, chunk) < 0)
+                throw std::runtime_error("copyToDevice: DMA host-to-device transfer failed");
+            dest_addr += chunk;
+            src       += chunk;
+            size      -= chunk;
+        }
     }
 
-    void copyFromDevice(uint8_t* dest, uint64_t src_addr, uint32_t size) {
-        d4e_dma_d2h(&xil_device.device, dest, src_addr, size);
+    void copyFromDevice(uint8_t* dest, uint64_t src_addr, uint64_t size) override {
+        while (size > 0) {
+            uint64_t chunk = std::min<uint64_t>(size, HC_DMA_CHUNK);
+            if (d4e_dma_d2h(&xil_device.device, dest, src_addr, chunk) < 0)
+                throw std::runtime_error("copyFromDevice: DMA device-to-host transfer failed");
+            dest     += chunk;
+            src_addr += chunk;
+            size     -= chunk;
+        }
     }
 
-    void writeReg32(uint64_t addr, uint32_t value) {
+    void writeReg32(uint64_t addr, uint32_t value) override {
         d4e_reg_write32(&xil_device.device, addr, value);
     }
 
-    void writeReg64(uint64_t addr, uint64_t value) {
+    void writeReg64(uint64_t addr, uint64_t value) override {
         d4e_reg_write64(&xil_device.device, addr, value);
     }
 
-    uint32_t readReg32(uint64_t addr) {
+    uint32_t readReg32(uint64_t addr) override {
         return d4e_reg_read32(&xil_device.device, addr);
     }
-    uint64_t readReg64(uint64_t addr) {
+    uint64_t readReg64(uint64_t addr) override {
         return d4e_reg_read64(&xil_device.device, addr);
     }
 
-    uint64_t allocateMemFPGA(uint64_t size, uint64_t alignment /** alignment is a byte value */)
+    uint64_t allocateMemFPGA(uint64_t size, uint64_t alignment /** alignment is a byte value */) override
     {
 
         // Check if any memory freed by the processor can be used, if yes return and remove it from the freed memory
