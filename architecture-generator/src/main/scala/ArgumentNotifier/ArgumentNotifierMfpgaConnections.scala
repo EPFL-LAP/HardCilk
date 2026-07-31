@@ -36,7 +36,7 @@ trait NotifierHasMfpgaSupport extends Module {
           new elastic.BasicArbiter(
             chiselTypeOf(argRouteServers.head.io.m_axis_remote.get.asFull.bits),
             argRouteServersNumber,
-            chooserFn = elastic.Chooser.rr
+            chooserFn = elastic.RoundRobinChooser()
           )
         )
       

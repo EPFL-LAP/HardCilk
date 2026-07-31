@@ -141,7 +141,7 @@ class RemoteStreamToMem(val cfg: RemoteStreamToMemConfig) extends Module {
 
   //////////////////////////////////////////////////////////////////
   /////////// mfpga arbiter used for both requests and replies
-  val mfpga_master_arbiter = Module(new elastic.BasicArbiter(chiselTypeOf(io.m_axis_remote.asFull.bits), 3, chooserFn = elastic.Chooser.rr))
+  val mfpga_master_arbiter = Module(new elastic.BasicArbiter(chiselTypeOf(io.m_axis_remote.asFull.bits), 3, chooserFn = elastic.RoundRobinChooser()))
 
   mfpga_master_arbiter.io.select.nodeq()
   when(mfpga_master_arbiter.io.select.valid) {
@@ -154,7 +154,7 @@ class RemoteStreamToMem(val cfg: RemoteStreamToMemConfig) extends Module {
   //////////////////////////////////////////////////////////////////
   /////////// The logic of requesting remote memory access
   // First create an arbiter for the incoming requests from local modules
-  val local_modules_req_arbiter = Module (new elastic.BasicArbiter(chiselTypeOf(io.mem_req_in(0).bits), localModulesCount, chooserFn = elastic.Chooser.rr))
+  val local_modules_req_arbiter = Module (new elastic.BasicArbiter(chiselTypeOf(io.mem_req_in(0).bits), localModulesCount, chooserFn = elastic.RoundRobinChooser()))
   local_modules_req_arbiter.io.select.nodeq()
   for (i <- 0 until localModulesCount) {
     local_modules_req_arbiter.io.sources(i) <> io.mem_req_in(i)

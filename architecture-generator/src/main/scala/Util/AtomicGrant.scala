@@ -80,8 +80,8 @@ class AtomicGrant(peCount: Int, bitWidth: Int, depth: Int) extends Module {
   val registerFile = RegInit(VecInit(Seq.fill(1 << bitWidth)(false.B)))
 
   // Arbitration for lock and unlock requests
-  val lockArbiter = Module(new elastic.BasicArbiter(UInt(bitWidth.W), peCount, elastic.Chooser.rr))
-  val unlockArbiter = Module(new elastic.BasicArbiter(UInt(bitWidth.W), peCount, elastic.Chooser.rr))
+  val lockArbiter = Module(new elastic.BasicArbiter(UInt(bitWidth.W), peCount, elastic.RoundRobinChooser()))
+  val unlockArbiter = Module(new elastic.BasicArbiter(UInt(bitWidth.W), peCount, elastic.RoundRobinChooser()))
 
   lockArbiter.io.select.deq();
   unlockArbiter.io.select.deq();

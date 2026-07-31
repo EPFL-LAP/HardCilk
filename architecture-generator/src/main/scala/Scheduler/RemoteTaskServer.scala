@@ -143,7 +143,7 @@ class RemoteTaskServer(
 
   // We need to arbitrate the m_axis_taskAndReq
   val arbiter = Module(
-    new elastic.BasicArbiter(chiselTypeOf(io.m_axis_taskAndReq.asFull.bits), 3, chooserFn = elastic.Chooser.rr)
+    new elastic.BasicArbiter(chiselTypeOf(io.m_axis_taskAndReq.asFull.bits), 3, chooserFn = elastic.RoundRobinChooser())
   )
   arbiter.io.select.nodeq()
   when(arbiter.io.select.valid) {

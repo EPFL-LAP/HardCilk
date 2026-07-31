@@ -58,7 +58,7 @@ class ArgumentServer(
   private val memInflight = Reg(Vec(nInflight, new InflightArgument()))
 
   prefix("input") {
-    val arbInput = Module(new elastic.BasicArbiter(chiselTypeOf(io.connNetwork.bits), 2, chooserFn = elastic.Chooser.rr))
+    val arbInput = Module(new elastic.BasicArbiter(chiselTypeOf(io.connNetwork.bits), 2, chooserFn = elastic.RoundRobinChooser()))
     new elastic.Transform(io.connNetwork, arbInput.io.sources(0)) {
       protected def onTransform: Unit =
         out := in(in.getWidth - 1, tagBitsShift) ## 0.U(tagBitsShift.W)
