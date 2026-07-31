@@ -166,10 +166,22 @@ module top_pcie
   wire [15:0]PEX_txn;
   wire [15:0]PEX_txp;
 
-  assign PEX_rxn = {PEX_RX0_N, PEX_RX1_N, PEX_RX2_N, PEX_RX3_N, PEX_RX4_N, PEX_RX5_N, PEX_RX6_N, PEX_RX7_N, PEX_RX8_N, PEX_RX9_N, PEX_RX10_N, PEX_RX11_N, PEX_RX12_N, PEX_RX13_N, PEX_RX14_N, PEX_RX15_N};
-  assign PEX_rxp = {PEX_RX0_P, PEX_RX1_P, PEX_RX2_P, PEX_RX3_P, PEX_RX4_P, PEX_RX5_P, PEX_RX6_P, PEX_RX7_P, PEX_RX8_P, PEX_RX9_P, PEX_RX10_P, PEX_RX11_P, PEX_RX12_P, PEX_RX13_P, PEX_RX14_P, PEX_RX15_P};
-  assign PEX_txn = {PEX_TX0_N, PEX_TX1_N, PEX_TX2_N, PEX_TX3_N, PEX_TX4_N, PEX_TX5_N, PEX_TX6_N, PEX_TX7_N, PEX_TX8_N, PEX_TX9_N, PEX_TX10_N, PEX_TX11_N, PEX_TX12_N, PEX_TX13_N, PEX_TX14_N, PEX_TX15_N};
-  assign PEX_txp = {PEX_TX0_P, PEX_TX1_P, PEX_TX2_P, PEX_TX3_P, PEX_TX4_P, PEX_TX5_P, PEX_TX6_P, PEX_TX7_P, PEX_TX8_P, PEX_TX9_P, PEX_TX10_P, PEX_TX11_P, PEX_TX12_P, PEX_TX13_P, PEX_TX14_P, PEX_TX15_P};
+  // Lane N of the xdma pcie_mgt interface is bit N of these vectors, so the
+  // concatenation runs from lane 15 (MSB, leftmost) down to lane 0 (LSB).
+  //
+  // PCIe lane 0 is the topmost GT of the topmost selected quad (PG213, "GT
+  // Locations"), which on the U55C is package pin AL2 = GTYE4_CHANNEL_X1Y15 in
+  // quad 227 -- the pin the XDC constrains PEX_RX0_P to. Lane 15 is BC2 =
+  // GTYE4_CHANNEL_X1Y0 in quad 224. Writing these ascending-leftmost, as they
+  // were, put PEX_RX15_P on lane 0 and reversed the whole link.
+  assign PEX_rxn = {PEX_RX15_N, PEX_RX14_N, PEX_RX13_N, PEX_RX12_N, PEX_RX11_N, PEX_RX10_N, PEX_RX9_N, PEX_RX8_N, PEX_RX7_N, PEX_RX6_N, PEX_RX5_N, PEX_RX4_N, PEX_RX3_N, PEX_RX2_N, PEX_RX1_N, PEX_RX0_N};
+  assign PEX_rxp = {PEX_RX15_P, PEX_RX14_P, PEX_RX13_P, PEX_RX12_P, PEX_RX11_P, PEX_RX10_P, PEX_RX9_P, PEX_RX8_P, PEX_RX7_P, PEX_RX6_P, PEX_RX5_P, PEX_RX4_P, PEX_RX3_P, PEX_RX2_P, PEX_RX1_P, PEX_RX0_P};
+  // PEX_TX* are outputs, so the concatenation goes on the left: design_1 drives
+  // PEX_txn/PEX_txp and those bits fan out to the pins. Assigning the other way,
+  // as this did, drove the internal wire from undriven outputs and left every TX
+  // pin floating.
+  assign {PEX_TX15_N, PEX_TX14_N, PEX_TX13_N, PEX_TX12_N, PEX_TX11_N, PEX_TX10_N, PEX_TX9_N, PEX_TX8_N, PEX_TX7_N, PEX_TX6_N, PEX_TX5_N, PEX_TX4_N, PEX_TX3_N, PEX_TX2_N, PEX_TX1_N, PEX_TX0_N} = PEX_txn;
+  assign {PEX_TX15_P, PEX_TX14_P, PEX_TX13_P, PEX_TX12_P, PEX_TX11_P, PEX_TX10_P, PEX_TX9_P, PEX_TX8_P, PEX_TX7_P, PEX_TX6_P, PEX_TX5_P, PEX_TX4_P, PEX_TX3_P, PEX_TX2_P, PEX_TX1_P, PEX_TX0_P} = PEX_txp;
   
 
   design_1 design_1_i
