@@ -4,22 +4,66 @@ import Descriptors._
 
 object TclQuestaSim {
 
-  def generate(fullSysGenDescriptor: FullSysGenDescriptor, tclFileDirectory: String, reduce_axi: Int) = {
+  /**
+    * @param ramaPorts indices of the exported `m_axi_XX` masters carrying an `m_axi_gmem*` port of a
+    *                  `generateRAMA` task; each gets a RAMA IP in front of its
+    *                  HBM slave. Computed by the HBM interconnect, since only it
+    *                  knows which bucket a task's masters landed in.
+    * @param reduce_axi number of HBM ports to end up with. With `--raw-hbm-ports`
+    *                  this is the `-r` target rather than the design's exported
+    *                  master count.
+    * @param rawPortLabels `<kind>/<task>` per exported master; non-empty selects
+    *                  raw mode, where the design's masters are aggregated onto
+    *                  `reduce_axi` multi-SI SmartConnects (mixing unit kinds --
+    *                  see [[HbmPortDistribution]]) instead of mapping 1:1.
+    */
+  def generate(
+      fullSysGenDescriptor: FullSysGenDescriptor,
+      tclFileDirectory: String,
+      reduce_axi: Int,
+      ramaPorts: Set[Int] = Set.empty,
+      hbmPortWidths: Seq[Int] = Seq.empty,
+      enableRamaStriping: Boolean = false,
+      rawPortLabels: Seq[String] = Seq.empty
+  ) = {
+    val rawMode = rawPortLabels.nonEmpty
+    // Which raw masters share each HBM port.
+    val assignment =
+      if (rawMode) Some(HbmPortDistribution.distribute(rawPortLabels, reduce_axi)) else None
+    // Raw mode shares every HBM port between several masters, so the interconnect
+    // reserves no dedicated RAMA port and none is placed here either.
+    val effectiveRamaPorts = if (rawMode) Set.empty[Int] else ramaPorts
+    if (rawMode && ramaPorts.nonEmpty) {
+      println(
+        "[TclQuestaSim] WARNING: raw HBM export shares every HBM port between several masters, " +
+          "so no per-port RAMA IP is placed; use --questa-rama-striping for a RAMA on every port."
+      )
+    }
+
     val tclCommands = new StringBuilder()
     def tclWriteln(s: String) = {
       tclCommands.append(s)
       tclCommands.append("\n")
     }
 
-    // The testbench data VIP drives HBM through its own port, so one more HBM
-    // slave port than the design exports has to be enabled.
+    // In the default flow, the testbench data VIP drives HBM through its own
+    // spare port. Striped-RAMA mode gives it the port after the design's too,
+    // behind its own RAMA, or shares port 00 when there is no spare port left.
     val vipHbmPort = reduce_axi
-    require(
-      vipHbmPort + 1 <= 32,
-      s"[TclQuestaSim] The design exports $reduce_axi HBM port(s); the QuestaSim testbench needs " +
-        s"one more for its memory VIP, which exceeds the 32 HBM slave ports. Reduce the AXI port " +
-        s"count (-r) to at most 31."
-    )
+    if (!enableRamaStriping) {
+      require(
+        vipHbmPort + 1 <= 32,
+        s"[TclQuestaSim] The design exports $reduce_axi HBM port(s); the QuestaSim testbench needs " +
+          s"one more for its memory VIP, which exceeds the 32 HBM slave ports. Reduce the AXI port " +
+          s"count (-r) to at most 31, or use --questa-rama-striping."
+      )
+    } else {
+      require(
+        reduce_axi <= 32,
+        s"[TclQuestaSim] The design exports $reduce_axi HBM port(s), which exceeds the 32 HBM " +
+          s"slave ports. Reduce the AXI port count (-r) to at most 32."
+      )
+    }
 
     // Make the tcl file as one group of commands
     // tclWriteln("startgroup")
@@ -34,11 +78,19 @@ object TclQuestaSim {
     val memConnectionsStats = fullSysGenDescriptor.getMemoryConnectionsStats(reduce_axi)
 
     // Create and configure the axi verfication IPs to replace the xdma
-    tclWriteln(TclGeneralConfigs.getAxiVipConfig())
-
-    // Create and configure the hbm (one extra port for the testbench memory VIP)
     tclWriteln(
-      TclGeneralConfigs.getHBMConfigTclSyntax(vipHbmPort + 1)
+      TclGeneralConfigs.getAxiVipConfig(
+        dataVipAddrWidth = if (enableRamaStriping) fullSysGenDescriptor.widthAXIAddress else 64
+      )
+    )
+
+    // Create and configure the hbm. Every enabled HBM slave port has to be
+    // driven, so only the ports the memory fabric actually connects are enabled.
+    tclWriteln(
+      TclGeneralConfigs.getHBMConfigTclSyntax(
+        if (enableRamaStriping) TclGeneralConfigs.getHbmRamaStripingPortCount(reduce_axi)
+        else vipHbmPort + 1
+      )
     )
 
     // Connect the management port from axi_vip_1 to the compute system. A Vitis
@@ -58,9 +110,8 @@ object TclQuestaSim {
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_clock_converter_1/s_axi_aclk]")
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_clock_converter_1/s_axi_aresetn]")
 
-    // Connect the data port of axi_vip_0 to its own HBM port. This mirrors what
-    // XRT does on hardware: the host writes/reads HBM directly instead of
-    // tunneling through the kernel.
+    // Connect the data port of axi_vip_0 into the memory clock domain. The
+    // downstream memory fabric is selected below.
     tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_vip_0/M_AXI] [get_bd_intf_pins axi_clock_converter_0/S_AXI]")
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_clock_converter_0/s_axi_aclk]")
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_clock_converter_0/s_axi_aresetn]")
@@ -78,31 +129,90 @@ object TclQuestaSim {
     // Create the clocking wizard and reset for the system
     tclWriteln(TclGeneralConfigs.getSytstemClockingAndResetConfigTclSyntax(fullSysGenDescriptor, true))
 
-    // Connect each exported AXI4 master to its HBM AXI3 slave through a 1:1
-    // SmartConnect, which handles the data-width and AXI4 -> AXI3 conversion.
-    tclWriteln(
-      TclGeneralConfigs.getHbmSmartConnectTcl(
-        descriptorName = fullSysGenDescriptor.name,
-        numPorts = reduce_axi,
-        clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
-        resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]"
+    // Raw export: reduce the design's masters to `reduce_axi` buses first. Both
+    // memory paths below then see one master per HBM port, exactly as a
+    // bus-group-muxed design does. In striping mode this also means the RAMA
+    // fabric sees 256-bit masters and its width adapters collapse to wires.
+    if (rawMode && enableRamaStriping) {
+      tclWriteln(
+        TclGeneralConfigs.getHbmAggregateSmartConnectTcl(
+          descriptorName = fullSysGenDescriptor.name,
+          assignment = assignment.get,
+          labels = rawPortLabels,
+          clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
+          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]"
+        )
       )
-    )
+    }
+    if (rawMode) {
+      println(
+        s"[TclQuestaSim] Raw HBM export: ${rawPortLabels.length} master(s) aggregated onto " +
+          s"$reduce_axi SmartConnect(s).\n" + HbmPortDistribution.summary(assignment.get, rawPortLabels)
+      )
+    }
 
-    // Same conversion for the testbench memory VIP on the spare HBM port.
-    val vipSmartConnect = f"smartconnect_hbm_${vipHbmPort}%02d"
-    tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 ${vipSmartConnect}")
-    tclWriteln(
-      f"set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] [get_bd_cells ${vipSmartConnect}]"
-    )
-    tclWriteln(
-      f"connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins ${vipSmartConnect}/S00_AXI]"
-    )
-    tclWriteln(
-      f"connect_bd_intf_net [get_bd_intf_pins ${vipSmartConnect}/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_${vipHbmPort}%02d_8HI]"
-    )
-    tclWriteln(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ${vipSmartConnect}/aclk]")
-    tclWriteln(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins ${vipSmartConnect}/aresetn]")
+    if (enableRamaStriping) {
+      // Put a RAMA IP on every generated AXI memory master and on the data VIP
+      // memory path. All instances use the same per-memory striping config so
+      // host-side memory accesses and design-side accesses remain address-map
+      // coherent.
+      tclWriteln(
+        TclGeneralConfigs.getHbmRamaStripingTcl(
+          descriptorName = fullSysGenDescriptor.name,
+          numPorts = reduce_axi,
+          portWidths = if (rawMode) Seq.fill(reduce_axi)(256) else hbmPortWidths,
+          clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
+          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
+          extMasterPin = "[get_bd_intf_pins axi_clock_converter_0/M_AXI]",
+          extCellPrefix = "rama_vip",
+          masterPinOf =
+            if (rawMode) Some((i: Int) => f"[get_bd_intf_pins smartconnect_hbm_${i}%02d/M00_AXI]")
+            else None
+        )
+      )
+      val stripedPorts = TclGeneralConfigs.getHbmRamaStripingPortCount(reduce_axi)
+      println(
+        s"[TclQuestaSim] Striped RAMA mode enabled: $reduce_axi design memory master(s) and the " +
+          s"data VIP each get a RAMA IP on their own HBM port ($stripedPorts port(s) in total), " +
+          s"striping 64-byte fragments across all 32 pseudo channels (16 GB)." +
+          (if (reduce_axi >= 32) " The data VIP shares port 00 with design master 00." else "")
+      )
+    } else {
+      // Connect each exported AXI4 master to its HBM AXI3 slave through a 1:1
+      // SmartConnect, which handles the data-width and AXI4 -> AXI3 conversion.
+      tclWriteln(
+        TclGeneralConfigs.getHbmSmartConnectTcl(
+          descriptorName = fullSysGenDescriptor.name,
+          numPorts = reduce_axi,
+          clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
+          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
+          ramaPorts = effectiveRamaPorts,
+          assignment = assignment,
+          labels = rawPortLabels
+        )
+      )
+      if (effectiveRamaPorts.nonEmpty) {
+        println(
+          s"[TclQuestaSim] RAMA IP inserted in front of HBM port(s) " +
+            s"${effectiveRamaPorts.toSeq.sorted.map(i => f"$i%02d").mkString(", ")}"
+        )
+      }
+
+      // Same conversion for the testbench memory VIP on the spare HBM port.
+      val vipSmartConnect = f"smartconnect_hbm_${vipHbmPort}%02d"
+      tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 ${vipSmartConnect}")
+      tclWriteln(
+        f"set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] [get_bd_cells ${vipSmartConnect}]"
+      )
+      tclWriteln(
+        f"connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins ${vipSmartConnect}/S00_AXI]"
+      )
+      tclWriteln(
+        f"connect_bd_intf_net [get_bd_intf_pins ${vipSmartConnect}/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_${vipHbmPort}%02d_8HI]"
+      )
+      tclWriteln(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ${vipSmartConnect}/aclk]")
+      tclWriteln(f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins ${vipSmartConnect}/aresetn]")
+    }
 
     // Assign addresses. This maps the HBM segments into the axi_vip_0 master
     // address space and the management registers into the axi_vip_1 one.
