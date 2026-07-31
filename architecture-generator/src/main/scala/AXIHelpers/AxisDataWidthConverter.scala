@@ -17,12 +17,6 @@ class AxisDataWidthConverterIO(dataWidthIn: Int, dataWidthOut: Int) extends Bund
 
 class AxisUpscaler(dataWidthIn: Int, dataWidthOut: Int) extends Module {
 
-  // Define the states for the module state machine
-  object state extends ChiselEnum {
-    val bufferData = Value(0.U)
-    val writeDataToOutput = Value(1.U)
-  }
-
   // Make sure the data widths is power of two
   assert((isPow2(dataWidthIn) && isPow2(dataWidthOut)) || dataWidthIn == dataWidthOut)
   val upScaleFactor = dataWidthOut / dataWidthIn
@@ -30,44 +24,33 @@ class AxisUpscaler(dataWidthIn: Int, dataWidthOut: Int) extends Module {
   // Define the IO
   val io = IO(new AxisDataWidthConverterIO(dataWidthIn, dataWidthOut))
 
-  // Take the data in LS bits and register each packet until the upScaleFactor is reached
-  val buffer = RegInit(0.U(dataWidthOut.W))
-  val readCounter = RegInit(0.U)
-  val stateReg = RegInit(state.bufferData)
+  // Gather `upScaleFactor` beats, first beat in the least significant bits, then hand the whole
+  // word over. The buffer is a Vec rather than an accumulated UInt so that a beat overwrites its
+  // slot instead of being OR-ed into whatever the previous word left there.
+  val buffer = Reg(Vec(upScaleFactor, UInt(dataWidthIn.W)))
+  val readCounter = RegInit(0.U(log2Ceil(upScaleFactor + 1).W))
+  val full = RegInit(false.B)
 
-  when(stateReg === state.bufferData) {
-    when(io.dataIn.TVALID && readCounter < (upScaleFactor - 1).U) {
-      buffer := buffer | (io.dataIn.TDATA << (readCounter * dataWidthIn.U))
-      readCounter := readCounter + 1.U
-    }.elsewhen(io.dataIn.TVALID && readCounter === (upScaleFactor - 1).U) {
-      buffer := buffer | (io.dataIn.TDATA << (readCounter * dataWidthIn.U))
-      stateReg := state.writeDataToOutput
-    }
-  }.elsewhen(stateReg === state.writeDataToOutput) {
-    when(io.dataOut.TREADY) {
+  io.dataIn.TREADY := !full
+  io.dataOut.TVALID := full
+  io.dataOut.TDATA := buffer.asUInt
+
+  when(!full && io.dataIn.TVALID) {
+    buffer(readCounter) := io.dataIn.TDATA
+    readCounter := readCounter + 1.U
+
+    when(readCounter === (upScaleFactor - 1).U) {
       readCounter := 0.U
-      stateReg := state.bufferData
+      full := true.B
     }
   }
 
-  io.dataIn.TREADY := false.B
-  io.dataOut.TVALID := false.B
-  io.dataOut.TDATA := buffer
-
-  when(stateReg === state.bufferData) {
-    io.dataIn.TREADY := true.B
-  }.elsewhen(stateReg === state.writeDataToOutput) {
-    io.dataOut.TVALID := true.B
+  when(full && io.dataOut.TREADY) {
+    full := false.B
   }
 }
 
 class AxisDownscaler(dataWidthIn: Int, dataWidthOut: Int) extends Module {
-
-  // Define the states for the module state machine
-  object state extends ChiselEnum {
-    val bufferData = Value(0.U)
-    val writeDataToOutput = Value(1.U)
-  }
 
   // Make sure the data widths is power of two
   assert(isPow2(dataWidthIn) && isPow2(dataWidthOut))
@@ -76,33 +59,29 @@ class AxisDownscaler(dataWidthIn: Int, dataWidthOut: Int) extends Module {
   // Define the IO
   val io = IO(new AxisDataWidthConverterIO(dataWidthIn, dataWidthOut))
 
-  // Take a beat from the input and push each packet to the slave until the downScaleFactor is reached
-  val buffer = RegInit(0.U(dataWidthIn.W))
-  val writeCounter = RegInit(0.U)
-  val stateReg = RegInit(state.bufferData)
+  // Take a word from the input and push it out one beat at a time, least significant beat first,
+  // which is the order AxisUpscaler gathers them in.
+  val buffer = Reg(Vec(downScaleFactor, UInt(dataWidthOut.W)))
+  val writeCounter = RegInit(0.U(log2Ceil(downScaleFactor + 1).W))
+  val busy = RegInit(false.B)
 
-  when(stateReg === state.bufferData) {
-    when(io.dataIn.TVALID) {
-      buffer := io.dataIn.TDATA
-      writeCounter := 0.U
-    }
-  }.elsewhen(stateReg === state.writeDataToOutput) {
-    when(io.dataOut.TREADY && writeCounter < (downScaleFactor - 1).U) {
-      io.dataOut.TDATA := buffer >> (writeCounter * dataWidthOut.U)
-      writeCounter := writeCounter + 1.U
-    }.elsewhen(io.dataOut.TREADY && writeCounter === (downScaleFactor - 1).U) {
-      stateReg := state.bufferData
-    }
+  io.dataIn.TREADY := !busy
+  io.dataOut.TVALID := busy
+  io.dataOut.TDATA := buffer(writeCounter)
+
+  when(!busy && io.dataIn.TVALID) {
+    buffer := io.dataIn.TDATA.asTypeOf(buffer)
+    writeCounter := 0.U
+    busy := true.B
   }
 
-  io.dataIn.TREADY := false.B
-  io.dataOut.TVALID := false.B
-  io.dataOut.TDATA := 0.U
+  when(busy && io.dataOut.TREADY) {
+    writeCounter := writeCounter + 1.U
 
-  when(stateReg === state.bufferData) {
-    io.dataIn.TREADY := true.B
-  }.elsewhen(stateReg === state.writeDataToOutput) {
-    io.dataOut.TVALID := true.B
+    when(writeCounter === (downScaleFactor - 1).U) {
+      writeCounter := 0.U
+      busy := false.B
+    }
   }
 }
 
