@@ -13,7 +13,16 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+// QuestaSim's sccom uses an older bundled GCC (7.4.0) that provides only
+// <experimental/filesystem>; the XRT/HW build uses a modern GCC with <filesystem>.
+// Alias both to `hcfs` so the telemetry-path helper compiles in either.
+#ifdef MTI_SYSTEMC
+#include <experimental/filesystem>
+namespace hcfs = std::experimental::filesystem;
+#else
 #include <filesystem>
+namespace hcfs = std::filesystem;
+#endif
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -34,14 +43,14 @@ static constexpr uint64_t TELEMETRY_IO_CHUNK_BYTES = 64ULL << 20;
 
 struct __attribute__((packed)) CountDecoupledRootTask
 {
-  Addr cont;
-  uint32_t continuation_meta;
+  uint8_t affinity : 4;
+  uint8_t _affinity_pad : 4;
   Addr A;
   Addr count;       // running match count (starts at 0), carried in the closure
   Addr count_final; // memory address the finished initiator writes the result to
   uint32_t size;
   uint32_t i;
-  uint8_t _padding[20];
+  uint8_t _padding[31];
 };
 
 static_assert(sizeof(CountDecoupledRootTask) ==
@@ -94,6 +103,17 @@ public:
     // problem, so one reference count applies to all.
     std::vector<int32_t> A;
     buildInputs(size_, A);
+    // Optional: skip the per-instance input-array upload (COUNTDECOUPLED_SKIP_
+    // ARRAY_UPLOAD=1). countDecoupled's control flow is data-INDEPENDENT -- every
+    // instance runs exactly `size` iterations whatever A holds -- so leaving the
+    // arrays at their zeroed HBM value reproduces identical scheduling and
+    // continuation behaviour. That matters under RTL co-simulation, where this
+    // upload is thousands of 4 KB DPI transactions and dominates the run.
+    // Validation stays meaningful rather than disabled: the reference is
+    // recomputed over the same all-zero data (so expected becomes 0), and the
+    // per-instance done-flag completion check is untouched.
+    if (skip_array_upload_)
+      std::fill(A.begin(), A.end(), 0);
     const int32_t expected = referenceCount(A);
     const uint64_t array_bytes = (uint64_t)size_ * sizeof(int32_t);
 
@@ -145,14 +165,24 @@ public:
     const uint64_t all_array_bytes = array_bytes * N;
     Addr all_A_addr = allocateGraphInput(all_array_bytes);
 
-    std::vector<int32_t> all_A((uint64_t)N * size_);
-    for (uint32_t k = 0; k < N; ++k)
+    if (skip_array_upload_)
     {
-      std::copy(A.begin(), A.end(), all_A.begin() + (uint64_t)k * size_);
+      std::cout << "[countDecoupled] SKIPPING input-array upload ("
+                << all_array_bytes
+                << " bytes); arrays stay zeroed, so expected_matches_each=0. "
+                   "Iteration counts and scheduling are unchanged.\n";
     }
-    memory_->copyToDevice(all_A_addr,
-                          reinterpret_cast<const uint8_t *>(all_A.data()),
-                          all_array_bytes);
+    else
+    {
+      std::vector<int32_t> all_A((uint64_t)N * size_);
+      for (uint32_t k = 0; k < N; ++k)
+      {
+        std::copy(A.begin(), A.end(), all_A.begin() + (uint64_t)k * size_);
+      }
+      memory_->copyToDevice(all_A_addr,
+                            reinterpret_cast<const uint8_t *>(all_A.data()),
+                            all_array_bytes);
+    }
 
     // Build N non-overlapping instances and one root task each.
     std::vector<CountDecoupledRootTask> roots(N);
@@ -162,17 +192,15 @@ public:
     {
       Addr A_addr = all_A_addr + (uint64_t)k * array_bytes;
       Addr count_addr = count_addrs[k];
-      Addr done_addr = done_addrs[k];
       CountDecoupledRootTask &r = roots[k];
-      r.cont = done_addr;
-      r.continuation_meta = 0;
+      r.affinity = 15;
+      r._affinity_pad = 0;
       r.A = A_addr;
       r.count = 0;               // running value, accumulated in the closure
       r.count_final = count_addr; // final result + done flag land here (8-byte store)
       r.size = size_;
       r.i = 0;
       count_addrs[k] = count_addr;
-      done_addrs[k] = done_addr;
     }
 
     std::cout << "[countDecoupled] instances=" << N << " size=" << size_
@@ -189,6 +217,32 @@ public:
     startSystem();
     int rc = pollAllDone(count_addrs, t_kernel_start);
     auto t_kernel_done = std::chrono::high_resolution_clock::now();
+
+    // COUNTDECOUPLED_DUMP_FINAL=1 prints the scheduler ring registers after the
+    // run, not just on a stall. On a PASSING run this is the evidence that the
+    // HBM spill path round-tripped: a ring whose final tail exceeds the number
+    // of host-seeded tasks wrote entries to HBM, and a head that caught up to
+    // that tail read every one of them back -- with all instances validating, so
+    // the data came back intact. Without it, the spill/refill path is only ever
+    // observed on runs that failed.
+    if (const char *e = std::getenv("COUNTDECOUPLED_DUMP_FINAL"); e && e[0] == '1')
+    {
+      std::cout << "[countDecoupled-FINAL] rc=" << rc
+                << " (seeded roots=" << N << ")\n";
+      for (const auto &task : descriptor.taskDescriptors)
+        for (uint64_t base : task.mgmtBaseAddresses.schedulerServersBaseAddresses)
+          std::cout << "[countDecoupled-FINAL] task=" << task.name
+                    << " base=0x" << std::hex << base << std::dec
+                    << " currLen="
+                    << memory_->readReg64(base + scheduler_server_currLen_shift)
+                    << " head="
+                    << memory_->readReg64(base + scheduler_server_fifoHeadReg_shift)
+                    << " tail="
+                    << memory_->readReg64(base + scheduler_server_fifoTailReg_shift)
+                    << " rpause="
+                    << memory_->readReg64(base + scheduler_server_rpause_shift)
+                    << "\n";
+    }
 
     // Validate every instance's result.
     uint32_t passed = 0;
@@ -297,10 +351,10 @@ private:
   static std::string telemetryOutputPath()
   {
     const char *configured = std::getenv("HARDCILK_TELEMETRY_DIR");
-    const std::filesystem::path dir =
+    const hcfs::path dir =
         configured != nullptr && configured[0] != '\0' ? configured : "/tmp";
     std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
+    hcfs::create_directories(dir, ec);
     if (ec)
       std::cerr << "[telemetry] could not create output directory " << dir
                 << ": " << ec.message() << "\n";
@@ -312,8 +366,48 @@ private:
   // Per-port telemetry region size. Each of the watcher's two physical ports owns
   // a 4 GiB HBM half: port A = HBM[16:23] at the reserve base, port B = HBM[24:31]
   // exactly TELEMETRY_PORT_STRIDE higher. This is the per-region scan/zero window.
+  // True when the memory backend is a simulation bridge (QuestaSim/TLM), i.e.
+  // not the XRT/HW backend. Reading HBM back over the sim DPI bridge is slow, so
+  // the telemetry code uses a much smaller scan/zero window in this mode.
+  bool isSimBackend() const
+  {
+    return dynamic_cast<XRTMemory *>(memory_) == nullptr;
+  }
+
+  // Scheduler/allocator queue floor used under RTL simulation (entries).
+  // Override with HARDCILK_QUESTA_QUEUE_FLOOR.
+  // Size of the low-HBM window zeroed under simulation (bytes); 0 = skip.
+  //
+  // Default is 0 because the Xilinx HBM behavioural model already returns zero
+  // for never-written locations -- which is exactly the state the slow path's
+  // "counter == 0" case depends on -- while pushing megabytes through the DPI
+  // bridge costs tens of minutes of wall time (measured: a 4 MiB clear did not
+  // finish in 39 minutes). Set HARDCILK_QUESTA_CLEAR_BYTES to force a clear if
+  // that assumption is ever in doubt.
+  static uint64_t questaSimClearBytes()
+  {
+    const char *v = std::getenv("HARDCILK_QUESTA_CLEAR_BYTES");
+    return (v && *v) ? std::strtoull(v, nullptr, 10) : 0ULL;
+  }
+
+  static uint64_t questaSimQueueFloor()
+  {
+    const char *v = std::getenv("HARDCILK_QUESTA_QUEUE_FLOOR");
+    return (v && *v) ? std::strtoull(v, nullptr, 10) : 256ULL;
+  }
+
   uint64_t perRegionWindowBytes() const
   {
+    if (isSimBackend())
+    {
+      // RTL simulation: the watcher only writes a handful of KB for the tiny
+      // instance counts a co-sim can run, and the readback is over DPI, so keep
+      // the window small (overridable). readTelemetryRegion still stops at the
+      // zero terminator, so this only bounds the worst-case DPI traffic.
+      const char *w = std::getenv("HARDCILK_QUESTA_TELEMETRY_WINDOW_KB");
+      const uint64_t kb = (w && *w) ? std::strtoull(w, nullptr, 10) : 1024ULL;
+      return kb << 10;
+    }
     return isEmulation() ? (256ULL << 20) : (4ULL << 30);
   }
 
@@ -424,8 +518,27 @@ private:
     XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
     if (xrtMem == nullptr)
     {
-      std::cerr << "[countDecoupled] memory is not XRTMemory; "
-                   "full HBM clear skipped\n";
+      // Simulation backend. Clearing all 8 GiB through the DPI bridge is not
+      // viable, but the clear is NOT optional for fidelity: the argument-server
+      // slow path reads a continuation line straight from HBM, and the hardware
+      // behaviour it must reproduce (counter == 0 for a line that was never
+      // evicted-and-saved) depends on that memory being ZERO. Under simulation
+      // every allocation lands in a small low region (a few hundred KB), so zero
+      // just that window instead.
+      const uint64_t bytes = questaSimClearBytes();
+      if (bytes == 0)
+      {
+        std::cout << "[countDecoupled] (sim) HBM clear skipped (model "
+                     "zero-initialises; set HARDCILK_QUESTA_CLEAR_BYTES to force)\n";
+        return;
+      }
+      std::vector<uint8_t> zeros(
+          static_cast<size_t>(std::min<uint64_t>(64ULL << 10, bytes)), 0);
+      for (uint64_t off = 0; off < bytes; off += zeros.size())
+        memory_->copyToDevice(off, zeros.data(),
+                              std::min<uint64_t>(zeros.size(), bytes - off));
+      std::cout << "[countDecoupled] (sim) zeroed low HBM window: "
+                << (bytes >> 10) << " KB\n";
       return;
     }
 
@@ -442,17 +555,56 @@ private:
     // timed execution independent of the management/refill path.
     const uint64_t continuationsNeeded =
         ((uint64_t)size_ * 2 + 1) * num_instances_;
-    const uint64_t allocatorCapacity = std::max<uint64_t>(
-        INITIAL_SCHEDULER_VIRTUAL_CAPACITY, continuationsNeeded);
+    // On HW the queues are provisioned generously up front (cheap, and it keeps
+    // the timed window free of refills). Under RTL simulation every byte of that
+    // provisioning is written through the DPI bridge one AXI burst at a time, so
+    // a 32768-entry scheduler queue costs a multi-megabyte zero-fill and hours of
+    // wall time. Simulation runs only a handful of instances, so scale the floor
+    // down to what the run actually needs (still overridable).
+    const uint64_t schedulerFloor =
+        isSimBackend()
+            ? questaSimQueueFloor()
+            : (uint64_t)INITIAL_SCHEDULER_VIRTUAL_CAPACITY;
+    uint64_t allocatorCapacity =
+        std::max<uint64_t>(schedulerFloor, continuationsNeeded);
+    // The allocator free list is uploaded ENTIRELY up front (initSystem's
+    // copyToDevice of packedAddresses), and continuations are never recycled
+    // during a run, so this is (2*size+1)*instances entries -- e.g. 4.8M entries
+    // (~19 MB, ~4700 DPI bursts) for 200x12000. That is hours of wall time under
+    // RTL co-simulation before the kernel even starts.
+    //
+    // COUNTDECOUPLED_ALLOC_CAPACITY_CAP=N clamps it to N entries. The pool is
+    // then smaller than the full run needs, so a run that gets far enough will
+    // legitimately exhaust it -- but exhaustion is unambiguous (allocator_
+    // available reaches 0) and therefore never mistakable for a deadlock, which
+    // wedges with plenty still available. Intended for deliberately reproducing
+    // an early failure in simulation; leave unset (0) everywhere else.
+    if (const char *v = std::getenv("COUNTDECOUPLED_ALLOC_CAPACITY_CAP");
+        v && *v)
+    {
+      const uint64_t cap = std::strtoull(v, nullptr, 10);
+      if (cap != 0 && cap < allocatorCapacity)
+      {
+        std::cout << "[countDecoupled] CAPPING allocator capacity "
+                  << allocatorCapacity << " -> " << cap
+                  << " entries (COUNTDECOUPLED_ALLOC_CAPACITY_CAP); the run will"
+                     " exhaust the pool if it outlives the cap\n";
+        allocatorCapacity = cap;
+      }
+    }
 
     for (auto &task : descriptor.taskDescriptors)
     {
       for (auto &config : task.sidesConfigs)
       {
         if (config.sideType == "scheduler")
-          config.capacityVirtualQueue = std::max(
-              config.capacityVirtualQueue,
-              INITIAL_SCHEDULER_VIRTUAL_CAPACITY);
+          // Unary + forces a prvalue so the constexpr member is not odr-used by
+          // std::max's const& parameter. Without it a pre-C++17 build (QuestaSim's
+          // sccom defaults to gcc-7.4.0/C++14, where static constexpr members are
+          // not implicitly inline) fails to link: "undefined symbol
+          // CountDecoupledDriver::INITIAL_SCHEDULER_VIRTUAL_CAPACITY".
+          config.capacityVirtualQueue = std::max<uint64_t>(
+              config.capacityVirtualQueue, schedulerFloor);
         else if (config.sideType == "allocator")
           config.capacityVirtualQueue = std::max<uint64_t>(
               config.capacityVirtualQueue, allocatorCapacity);
@@ -460,7 +612,7 @@ private:
     }
     // initSystem doubles capacityVirtualQueue when allocating the backing BO.
     std::cout << "[countDecoupled] initial scheduler backing capacity: "
-              << (2 * INITIAL_SCHEDULER_VIRTUAL_CAPACITY)
+              << (2 * schedulerFloor)
               << " entries per server; continuation allocator capacity: "
               << allocatorCapacity << " entries\n";
   }
@@ -479,8 +631,35 @@ private:
     XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
     if (xrtMem == nullptr)
     {
-      std::cerr << "[telemetry] memory is not XRTMemory; telemetry disabled\n";
-      return 0;
+      // Simulation backend (QuestaSim/TLM). The watcher still writes telemetry to
+      // the fixed TELEMETRY_GLOBAL_BASE in the HBM model, so telemetry works the
+      // same way as on HW -- there is just no bank-pinned allocation to perform
+      // (host writes/reads go through the Memory abstraction). Opt-in because the
+      // zero-fill + readback traverse the slow DPI bridge.
+      if (std::getenv("HARDCILK_QUESTA_TELEMETRY") == nullptr)
+      {
+        std::cerr << "[telemetry] simulation backend; telemetry disabled "
+                     "(set HARDCILK_QUESTA_TELEMETRY=1 to enable)\n";
+        return 0;
+      }
+      const Addr base = TELEMETRY_GLOBAL_BASE;
+      const uint64_t windowBytes = getTelemetryWindowBytes();
+      std::vector<uint8_t> zeros(
+          static_cast<size_t>(std::min<uint64_t>(TELEMETRY_IO_CHUNK_BYTES, windowBytes)), 0);
+      auto zeroSimWindow = [&](Addr wbase)
+      {
+        for (uint64_t off = 0; off < windowBytes; off += zeros.size())
+        {
+          const uint64_t n = std::min<uint64_t>(zeros.size(), windowBytes - off);
+          memory_->copyToDevice(wbase + off, zeros.data(), n);
+        }
+      };
+      zeroSimWindow(base);
+      if (!legacy_single_port_watcher_)
+        zeroSimWindow(base + TELEMETRY_PORT_STRIDE);
+      std::cout << "[telemetry] (sim) region at 0x" << std::hex << base << std::dec
+                << "; zeroed " << (windowBytes >> 10) << " KB per port region\n";
+      return base;
     }
     try
     {
@@ -1476,6 +1655,20 @@ private:
           ++stagnantReports;
           if (stagnantReports == 2)
             dumpStallState(done, states);
+          // Deadlock abort (opt-in, default off). Under RTL co-simulation the
+          // `run` cap is the only other bound, so a deadlocked design burns
+          // hours of wall time polling. N consecutive reports with neither an
+          // allocator issue nor a completion means the machine is wedged; give
+          // up so the caller can stop the sim and keep the waveform.
+          if (stallAbortReports_ != 0 && stagnantReports >= stallAbortReports_)
+          {
+            std::cerr << "[countDecoupled] STALL-ABORT: " << stagnantReports
+                      << " consecutive progress reports with no allocator "
+                         "issue and no completion; "
+                      << remaining << "/" << count_addrs.size()
+                      << " instances NOT done\n";
+            return -1;
+          }
         }
         else
           stagnantReports = 0;
@@ -1501,6 +1694,19 @@ private:
   uint32_t size_;
   uint32_t num_instances_;
   double watchdog_s_;
+  // Consecutive no-progress reports after which pollAllDone gives up. 0 = never
+  // (the default everywhere except deliberate deadlock captures under RTL
+  // co-simulation). Set via COUNTDECOUPLED_STALL_ABORT_REPORTS.
+  unsigned stallAbortReports_ = [] {
+    const char *v = std::getenv("COUNTDECOUPLED_STALL_ABORT_REPORTS");
+    return (v && *v) ? (unsigned)std::strtoul(v, nullptr, 10) : 0u;
+  }();
+  // Skip the input-array upload; see run_test_bench. Off by default -- the
+  // normal path uploads real data and validates against a real match count.
+  bool skip_array_upload_ = [] {
+    const char *v = std::getenv("COUNTDECOUPLED_SKIP_ARRAY_UPLOAD");
+    return v && v[0] == '1';
+  }();
   bool fast_mode_;
   bool legacy_single_port_watcher_;
   bool hbm_strided_writes_;

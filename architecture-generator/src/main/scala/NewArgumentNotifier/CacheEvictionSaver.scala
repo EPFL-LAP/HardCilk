@@ -72,7 +72,7 @@ class CacheEvictionSaver(
   val m_axi = IO(axi4.full.Master(cfgAxi))
 
   private val inputQ = Module(
-    new Queue(chiselTypeOf(io.evictionIn.bits), queueDepth)
+    new BankedQueue(chiselTypeOf(io.evictionIn.bits), queueDepth)
   )
   inputQ.io.enq <> io.evictionIn
 

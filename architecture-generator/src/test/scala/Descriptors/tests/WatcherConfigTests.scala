@@ -45,6 +45,28 @@ class WatcherConfigTests extends AnyFlatSpec {
     assert(wc.statusSlots.flatMap(_.fields).forall(_.target.kind == "pe"))
   }
 
+  it should "validate the explicit compact argument-update packet shape" in {
+    val desc = countDescriptor
+    val source = desc.taskDescriptors.find(_.name == "memReader").get
+    assert(source.argumentSizeList == List(512))
+    assert(source.argumentOffsetWidth.contains(0))
+    desc.validate()
+
+    val invalidSource = source.copy(argumentOffsetWidth = Some(1))
+    val invalid = desc.copy(taskDescriptors = desc.taskDescriptors.map { task =>
+      if (task.name == source.name) invalidSource else task
+    })
+    val error = intercept[IllegalArgumentException](invalid.validate())
+    assert(error.getMessage.contains("expected 0"))
+
+    val missing = desc.copy(taskDescriptors = desc.taskDescriptors.map { task =>
+      if (task.name == source.name) source.copy(argumentOffsetWidth = None)
+      else task
+    })
+    val missingError = intercept[IllegalArgumentException](missing.validate())
+    assert(missingError.getMessage.contains("explicitly specify"))
+  }
+
   it should "reject more than twenty-two physical slots" in {
     val desc = countDescriptor
     val wc = desc.watcherConfig.get

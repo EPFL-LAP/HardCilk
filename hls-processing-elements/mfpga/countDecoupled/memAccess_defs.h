@@ -40,16 +40,15 @@ using addr_t = uint64_t;
 
 struct __attribute__((packed)) taskAdder_cont0_task {
   uint32_t _counter;
-  addr_t _cont;
-  uint32_t continuation_meta;
   addr_t A;
+  addr_t index;
   addr_t count;       // running match count, carried in the closure (NOT a memory address)
   addr_t count_final; // memory address the initiator writes the final count to when done
   uint32_t size;
   uint32_t i;
   uint32_t _value_pad;
   uint32_t value;
-  uint8_t _padding[8];
+  uint8_t _padding[12];
 };
 
 struct taskAdder_cont0_spawn_next {
@@ -61,7 +60,7 @@ struct taskAdder_cont0_spawn_next {
 };
 
 struct __attribute__((packed))memReader_task {
-  addr_t _cont;
+  addr_t _cont; // low 4 bits carry scheduler affinity; mask before dereference
   uint32_t continuation_meta;
   addr_t mem;
   uint32_t idx;
@@ -79,38 +78,40 @@ struct __attribute__((packed)) uint32_t_arg_out {
 #else
 // Internal NewArgumentNotifier update packet. This deliberately exceeds the
 // external-AXI width limits: it is an on-chip stream carrying exactly the
-// address/metadata/data/strobe information consumed by ArgumentServer.
+// address/metadata/OR-payload information consumed by ArgumentServer.  This
+// benchmark uses a full-continuation payload because one completion updates
+// two non-contiguous fields (index and value); zero bits are naturally inert
+// under the notifier's OR merge.
 struct __attribute__((packed)) taskAdder_cont0_argument_update {
   addr_t address;
   uint32_t continuation_meta;
-  ap_uint<512> dataWrite;
-  ap_uint<512> dataWriteStrobe;
+  ap_uint<512> payload;
 };
 #endif
 
 struct __attribute__((packed)) taskInitiator_reentry0_task {
-  addr_t _cont;
-  uint32_t continuation_meta;
+  uint8_t affinity : 4;
+  uint8_t _affinity_pad : 4;
   addr_t A;
   addr_t count;       // running match count, carried in the closure (NOT a memory address)
   addr_t count_final; // memory address to write the final count to when done
   uint32_t size;
   uint32_t i;
-  uint8_t _padding[20];
+  uint8_t _padding[31];
 };
 
 static_assert(sizeof(taskAdder_cont0_task) == 64, "continuation line ABI");
+static_assert((offsetof(taskAdder_cont0_task, value) & 0xf) == 0,
+              "value address low nibble is reserved for task affinity");
 static_assert(sizeof(memReader_task) == 32, "memReader task ABI");
 static_assert(sizeof(taskInitiator_reentry0_task) == 64, "root task ABI");
 static_assert(offsetof(memReader_task, continuation_meta) == 8,
               "continuation_meta must immediately follow the child address");
-static_assert(offsetof(taskInitiator_reentry0_task, continuation_meta) == 8,
-              "continuation_meta must immediately follow the child address");
 #if COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER
 static_assert(sizeof(uint32_t_arg_out) == 32, "legacy write packet ABI");
 #else
-static_assert(offsetof(taskAdder_cont0_argument_update, dataWrite) == 12,
+static_assert(offsetof(taskAdder_cont0_argument_update, payload) == 12,
               "update packet field order");
-static_assert(offsetof(taskAdder_cont0_argument_update, dataWriteStrobe) == 76,
-              "update packet field order");
+static_assert(sizeof(taskAdder_cont0_argument_update) == 76,
+              "full-width OR update packet ABI");
 #endif

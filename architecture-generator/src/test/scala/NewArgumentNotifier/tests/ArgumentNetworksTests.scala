@@ -32,7 +32,8 @@ class ArgumentNetworksTests extends AnyFlatSpec with ChiselScalatestTester {
     realAddressWidth = 32,
     serverIDWidth = 2, // 4 slots per server -> quick wrap
     continuationSize = 128,
-    updateDataWidth = 32,
+    updatePayloadWidth = 8,
+    updateOffsetWidth = 4,
     slowCutCount = 2
   )
 
@@ -271,18 +272,16 @@ class ArgumentNetworksTests extends AnyFlatSpec with ChiselScalatestTester {
         lane: BigInt
     ): Unit = {
       val update = dut.s_update(index)
-      val bitOffset = (addr & (cfg.lineBytes - 1)) * 8
-      var bitStrobe = BigInt(0)
-      for (byte <- 0 until cfg.updateDataWidth / 8) {
-        if (((strb >> byte) & 1) != 0)
-          bitStrobe |= BigInt(0xff) << (bitOffset.toInt + byte * 8)
-      }
+      val byteOffset = addr & (cfg.lineBytes - 1)
+      val payloadBytes = cfg.updatePayloadWidth / 8
+      require(byteOffset % payloadBytes == 0)
+      require(data < (BigInt(1) << cfg.updatePayloadWidth))
       update.bits.address.poke((addr >> cfg.lineShift).U)
       update.bits.metadata.server.poke(server.U)
       update.bits.metadata.id.poke(id.U)
       update.bits.metadata.lane.poke(lane.U)
-      update.bits.dataWrite.poke((data << bitOffset.toInt).U)
-      update.bits.dataWriteStrobe.poke(bitStrobe.U)
+      update.bits.payload.poke(data.U)
+      update.bits.offset.foreach(_.poke((byteOffset / payloadBytes).U))
       update.valid.poke(true.B)
       var guard = 0
       while (!update.ready.peek().litToBoolean) {

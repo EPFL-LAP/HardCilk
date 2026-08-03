@@ -12,6 +12,12 @@
 #include <iostream>
 #include <vector>
 
+// Under the QuestaSim/SystemC (sccom) build the XRT runtime is unavailable, so
+// the real XRTMemory (and the xrt headers it needs) are compiled out and a dead
+// stub is provided instead (see the #else branch at the bottom of this file).
+// The normal XRT/HW build (MTI_SYSTEMC undefined) is byte-for-byte unchanged.
+#ifndef MTI_SYSTEMC
+
 #include <xrt/xrt_bo.h>
 #include <xrt/xrt_device.h>
 #include <experimental/xrt_xclbin.h>
@@ -506,3 +512,33 @@ private:
     }
 
 };
+
+#else // MTI_SYSTEMC
+
+// QuestaSim/SystemC build. XRT is not available, but CountDecoupledDriver's
+// XRT-only code paths are all guarded by `dynamic_cast<XRTMemory*>(memory_)`,
+// which returns null under simulation (questaMemory is the real backend). This
+// stub only has to make those branches COMPILE; none of its methods ever run.
+// Keep the method signatures in sync with the real XRTMemory above.
+struct XRTMemory : Memory
+{
+  // Memory interface (never used in sim; questaMemory services the DPI bridge).
+  void writeReg32(uint64_t, uint32_t) override {}
+  void writeReg64(uint64_t, uint64_t) override {}
+  uint32_t readReg32(uint64_t) override { return 0; }
+  uint64_t readReg64(uint64_t) override { return 0; }
+  void copyToDevice(uint64_t, uint8_t const *, uint64_t) override {}
+  void copyFromDevice(uint8_t *, uint64_t, uint64_t) override {}
+  uint64_t allocateMemFPGA(uint64_t, uint64_t) override { return 0; }
+
+  // XRT-specific helpers the shared driver references inside dead branches.
+  bool isEmulation() const { return true; }
+  void setDefaultBankRange(int, int) {}
+  void clearHBMBankRange(int, int) {}
+  uint64_t allocateMemFPGAInBankRange(uint64_t, uint64_t, int, int) { return 0; }
+  uint64_t allocateMemFPGASpanFromBank(uint64_t, uint64_t, int) { return 0; }
+  bool syncRegionFromDevice(uint64_t, uint64_t) { return false; }
+  bool syncRegionToDevice(uint64_t, uint64_t) { return false; }
+};
+
+#endif // MTI_SYSTEMC

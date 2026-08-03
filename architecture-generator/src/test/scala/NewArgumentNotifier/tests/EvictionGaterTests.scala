@@ -64,7 +64,6 @@ class EvictionGaterTests extends AnyFlatSpec with ChiselScalatestTester {
     in.bits.updateValid.poke(update.B)
     in.bits.update.update.address.poke(updateAddress.U)
     in.bits.update.update.dataWrite.poke(0xaa.U)
-    in.bits.update.update.dataWriteStrobe.poke(0xff.U)
     in.bits.update.metadata.server.poke(0.U)
     in.bits.update.metadata.id.poke(updateId.U)
     in.bits.update.metadata.lane.poke(0.U)

@@ -127,7 +127,11 @@ class WriteBufferCounter(
   val m_allows = cfgAxisAllows.map(c => IO(axi4s.Master(c)))
   val s_releaseMetadata =
     if (releaseMetadataWidth > 0)
-      Some(IO(axi4s.Slave(axi4s.Config(wData = releaseMetadataWidth, onlyRV = true))))
+      Some(
+        IO(
+          axi4s.Slave(axi4s.Config(wData = releaseMetadataWidth, onlyRV = true))
+        )
+      )
     else None
 
   // Implementation
@@ -147,16 +151,16 @@ class WriteBufferCounter(
 
   private val s_pkg_payload = s_pkg_.bits.asTypeOf(wb_t)
   when(s_pkg_.fire) {
-    printf(
-      "WriteBuffer: addr = %x, data = %x, size = %x, allow = ",
-      s_pkg_payload.addr,
-      s_pkg_payload.data,
-      s_pkg_payload.size
-    )
-    for (i <- 0 until nAllow) {
-      printf(" %x", s_pkg_payload.allow(i))
-    }
-    printf("\n")
+    // printf(
+    //   "WriteBuffer: addr = %x, data = %x, size = %x, allow = ",
+    //   s_pkg_payload.addr,
+    //   s_pkg_payload.data,
+    //   s_pkg_payload.size
+    // )
+    // for (i <- 0 until nAllow) {
+    //   printf(" %x", s_pkg_payload.allow(i))
+    // }
+    // printf("\n")
   }
 
   new elastic.Fork(s_pkg_) {
@@ -226,7 +230,10 @@ class WriteBufferCounter(
             (((BigInt(1) << releaseMetadataWidth) - 1) << releaseMetadataOffset)
               .U(wAllowData(i).W)
           out := (allow.asUInt & ~mask) |
-            ((metadata.asUInt.pad(wAllowData(i)) << releaseMetadataOffset)(wAllowData(i) - 1, 0))
+            ((metadata.asUInt.pad(wAllowData(i)) << releaseMetadataOffset)(
+              wAllowData(i) - 1,
+              0
+            ))
         }
       }
     } else {

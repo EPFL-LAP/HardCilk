@@ -50,7 +50,10 @@ class SlowArgumentHandler(
   private val nInflight = 1 << axiIdWidth
 
   private val inputQ = Module(
-    new Queue(new SlowUpdate(lineAddressWidth, continuationSize), inputQueueDepth)
+    new BankedQueue(
+      new SlowUpdate(lineAddressWidth, continuationSize),
+      inputQueueDepth
+    )
   )
   inputQ.io.enq <> io.slowUpdateIn
 
@@ -61,7 +64,6 @@ class SlowArgumentHandler(
     val address = UInt(lineAddressWidth.W)
     val stage = InflightStage()
     val dataWrite = UInt(continuationSize.W)
-    val dataWriteStrobe = UInt(continuationSize.W)
     val decrement = UInt(counterWidth.W)
   }
   private val inflightValid = RegInit(VecInit.fill(nInflight)(false.B))
@@ -71,17 +73,14 @@ class SlowArgumentHandler(
   // recycled, just as in the current ArgumentServer, so unrelated requests do
   // not suffer head-of-line blocking.
   private val feedbackQ = Module(
-    new Queue(new SlowUpdate(lineAddressWidth, continuationSize), 8)
+    new BankedQueue(new SlowUpdate(lineAddressWidth, continuationSize), 8)
   )
   private val inputArb = Module(
-    new elastic.BasicArbiter(
+    new BankedRRArbiter(
       new SlowUpdate(lineAddressWidth, continuationSize),
-      2,
-      chooserFn = elastic.Chooser.rr
+      2
     )
   )
-  inputArb.io.select.nodeq()
-  when(inputArb.io.select.valid) { inputArb.io.select.deq() }
 
   inputQ.io.deq :=> inputArb.io.sources(0)
   feedbackQ.io.deq :=> inputArb.io.sources(1)
@@ -129,19 +128,15 @@ class SlowArgumentHandler(
   }
 
   when(candidate.fire && canCoalesce) {
-    val masked = candidate.bits.dataWrite & candidate.bits.dataWriteStrobe
-    inflight(matchId).dataWrite := inflight(matchId).dataWrite | masked
-    inflight(matchId).dataWriteStrobe :=
-      inflight(matchId).dataWriteStrobe | candidate.bits.dataWriteStrobe
+    inflight(matchId).dataWrite :=
+      inflight(matchId).dataWrite | candidate.bits.dataWrite
     inflight(matchId).decrement := inflight(matchId).decrement + 1.U
   }
   when(m_axi.ar.fire) {
     inflightValid(emptyId) := true.B
     inflight(emptyId).address := candidate.bits.address
     inflight(emptyId).stage := InflightStage.readPending
-    inflight(emptyId).dataWrite :=
-      candidate.bits.dataWrite & candidate.bits.dataWriteStrobe
-    inflight(emptyId).dataWriteStrobe := candidate.bits.dataWriteStrobe
+    inflight(emptyId).dataWrite := candidate.bits.dataWrite
     inflight(emptyId).decrement := 1.U
   }
 
@@ -150,8 +145,8 @@ class SlowArgumentHandler(
     val address = UInt(lineAddressWidth.W)
     val data = UInt(continuationSize.W)
   }
-  private val writeQ = Module(new Queue(new CompletedUpdate, nInflight))
-  private val spawnQ = Module(new Queue(new CompletedUpdate, nInflight))
+  private val writeQ = Module(new BankedQueue(new CompletedUpdate, nInflight))
+  private val spawnQ = Module(new BankedQueue(new CompletedUpdate, nInflight))
 
   private val returned = inflight(m_axi.r.bits.id)
   private val base = m_axi.r.bits.data.asTypeOf(lineType)

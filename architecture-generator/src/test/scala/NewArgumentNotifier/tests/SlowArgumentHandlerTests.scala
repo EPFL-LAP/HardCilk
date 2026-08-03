@@ -48,8 +48,7 @@ class SlowArgumentHandlerTests extends AnyFlatSpec with ChiselScalatestTester {
     dut.io.slowUpdateIn.bits.address.poke((addr >> lineShift).U)
     // `data` and `strobe` describe the logical remainder; physically it begins
     // immediately above the low counter field.
-    dut.io.slowUpdateIn.bits.dataWrite.poke((data << counterWidth).U)
-    dut.io.slowUpdateIn.bits.dataWriteStrobe.poke((strobe << counterWidth).U)
+    dut.io.slowUpdateIn.bits.dataWrite.poke(((data & strobe) << counterWidth).U)
     dut.io.slowUpdateIn.valid.poke(true.B)
     var guard = 0
     while (!dut.io.slowUpdateIn.ready.peek().litToBoolean) {
@@ -149,11 +148,12 @@ class SlowArgumentHandlerTests extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "apply the bit strobe when merging" in {
+  it should "OR only the payload bits supplied by the upstream expander" in {
     test(dutGen) { dut =>
       init(dut)
       val addr = BigInt(0x9000)
-      // Data has bits outside the strobe window; they must be masked away.
+      // The test helper mirrors the compact expander by zeroing bits outside
+      // the selected payload before the slow handler receives the update.
       push(dut, addr, data = BigInt("ffff", 16), strobe = BigInt("0f00", 16))
 
       expectAr(dut, addr, max = 50)
@@ -183,7 +183,6 @@ class SlowArgumentHandlerTests extends AnyFlatSpec with ChiselScalatestTester {
           dut.io.slowUpdateIn.valid.poke(true.B)
           dut.io.slowUpdateIn.bits.address.poke((0x100 + cycle).U)
           dut.io.slowUpdateIn.bits.dataWrite.poke((cycle + 1).U)
-          dut.io.slowUpdateIn.bits.dataWriteStrobe.poke(0xf.U)
           assert(
             dut.io.slowUpdateIn.ready.peek().litToBoolean,
             s"input pipeline rejected update $cycle"

@@ -506,19 +506,23 @@ class HardCilk(
       require(updateSources.size == network.cfg.nUpdatePEs)
       updateSources.zipWithIndex.foreach { case (pe, index) =>
         val packet = pe.getPort("argOut").asInstanceOf[chext.amba.axi4s.Interface]
-        val lineWidth = network.cfg.continuationSize
-        val dataLo = 96
-        val strobeLo = dataLo + lineWidth
-        require(packet.cfg.wData == strobeLo + lineWidth,
-          s"$targetName argOut must be {address[64], metadata[32], data[$lineWidth], strobe[$lineWidth]}")
+        val payloadLo = 96
+        val offsetLo = payloadLo + network.cfg.updatePayloadWidth
+        val expectedWidth = offsetLo + network.cfg.updateOffsetWidth
+        require(packet.cfg.wData == expectedWidth,
+          s"$targetName argOut must be {address[64], metadata[32], " +
+            s"payload[${network.cfg.updatePayloadWidth}], " +
+            s"offset[${network.cfg.updateOffsetWidth}]}; got ${packet.cfg.wData} bits")
         val sink = network.s_update(index)
         sink.valid := packet.TVALID
         sink.bits.address := network.cfg.lineAddressOf(packet.TDATA(63, 0))
         val metaWidth = sink.bits.metadata.getWidth
         sink.bits.metadata := packet.TDATA(64 + metaWidth - 1, 64)
           .asTypeOf(network.cfg.metadataType)
-        sink.bits.dataWrite := packet.TDATA(strobeLo - 1, dataLo)
-        sink.bits.dataWriteStrobe := packet.TDATA(strobeLo + lineWidth - 1, strobeLo)
+        sink.bits.payload := packet.TDATA(offsetLo - 1, payloadLo)
+        sink.bits.offset.foreach { offset =>
+          offset := packet.TDATA(expectedWidth - 1, offsetLo)
+        }
         packet.TREADY := sink.ready
       }
     }

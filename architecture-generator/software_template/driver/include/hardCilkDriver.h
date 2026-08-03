@@ -15,14 +15,27 @@
 #include <csignal>
 #include <cstring>
 #include <cmath>
+#include <type_traits>
+#include <utility>
 
+template <typename T, typename = void>
+struct HardCilkTaskHasContinuation : std::false_type {};
 
-// This is used to track memory freed by the processor to extend one of the FPGA queues to another location
+template <typename T>
+struct HardCilkTaskHasContinuation<
+    T,
+    std::void_t<decltype(std::declval<T>().cont)>> : std::true_type {};
+
+// This is used to track memory freed by the processor to extend one of the FPGA queues to another location.
+// Guarded because memIO_questa.h defines the same struct; the QuestaSim host includes both.
+#ifndef HARDCILK_FREEDMEMBLOCK_DEFINED
+#define HARDCILK_FREEDMEMBLOCK_DEFINED
 struct freedMemBlock
 {
     uint64_t addr;
     uint64_t size;
 };
+#endif
 
 class hardCilkDriver
 {
@@ -64,11 +77,13 @@ public:
     static void clearStopRequested();
     static void requestStop(int signal);
 
-    // Kill the hw_emu simulator (xsim/xsimk) processes that are descendants of
-    // this host, so a forced exit never leaves an orphaned simulator running and
-    // pinning gigabytes of deleted /tmp .vcd files. No-op on real hardware (no
-    // such descendants exist). Safe to call from any thread; scoped strictly to
-    // our own descendants so a co-user's or unrelated simulation is untouched.
+    // Kill the hw_emu emulator's ENTIRE descendant process tree (launcher, bash
+    // wrappers, loader, xsim, xsimk -- everything below this host), so a forced
+    // exit never leaves survivors that pin deleted /tmp .vcd files or hold our
+    // inherited stdout/stderr pipe open (which hangs `exec > >(tee ...)` runner
+    // scripts). No-op on real hardware (no descendants exist). Safe to call from
+    // any thread; scoped strictly to our own descendants so a co-user's or
+    // unrelated simulation is untouched.
     static void terminateSimulator(int sig = SIGKILL);
 
     // Save/restore the controlling terminal. The hw_emu simulator can leave the

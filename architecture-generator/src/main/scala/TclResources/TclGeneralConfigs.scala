@@ -158,6 +158,8 @@ object TclGeneralConfigs {
             CONFIG.USER_HBM_DENSITY {16GB} \
             CONFIG.USER_MC0_ECC_BYPASS {true} \
             CONFIG.USER_XSDB_INTF_EN {FALSE} \
+            CONFIG.USER_SWITCH_ENABLE_00 {TRUE} \
+            CONFIG.USER_SWITCH_ENABLE_01 {TRUE} \
             ] [get_bd_cells hbm_0]
 
             # 2. Create a constant of width 32 bits and value 0x00000000 and connect to the parity input of the HBM
@@ -316,12 +318,16 @@ object TclGeneralConfigs {
 
 
 
-    sb.append(
-      "connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter*/*clk*]\n"
-    )
-    sb.append(
-      "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter*/*aresetn*]\n"
-    ) 
+    // The AXI-Lite width converter only exists in flows that need it (the XRT
+    // block design; the QuestaSim flow drives a 32-bit management slave directly
+    // from a 32-bit VIP, so it has no dwidth converter). Guard the wildcard so the
+    // connect does not fail on an empty object list.
+    sb.append("""
+        if {[llength [get_bd_cells -quiet axi_dwidth_converter*]] > 0} {
+          connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter*/*clk*]
+          connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter*/*aresetn*]
+        }
+    """)
 
     // Reset coming from AXI through the pcie
     sb.append("""

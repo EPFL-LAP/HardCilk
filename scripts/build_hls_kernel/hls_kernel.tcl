@@ -13,6 +13,7 @@
 #   @@FREQ_MHZ@@         — requested frequency in MHz
 #   @@CLOCK_PERIOD_NS@@  — derived clock period in nanoseconds
 #   @@SOURCES@@          — space-separated Tcl list of {/abs/path} source files
+#   @@FLOW_TARGET@@      — vitis, or vivado for discrete ap_none scalar ports
 # =============================================================================
 
 # ── Project setup ─────────────────────────────────────────────────────────────
@@ -36,17 +37,23 @@ foreach src_file { @@SOURCES@@ } {
 }
 
 # ── Solution configuration ────────────────────────────────────────────────────
-# Most kernels are standalone Vitis kernels (vitis flow). The free-running
-# telemetry "watcher" is an internal block of the HardCilk top: it needs the
-# Vivado IP flow so that ap_ctrl_none + the discrete ap_none status pins survive
-# (the vitis flow forces every scalar through an s_axilite control block).
-set flow_target "vitis"
-if { {@@KERNEL@@} eq "watcher" } {
-    set flow_target "vivado"
-}
+# Most kernels use the Vitis flow. Internal HardCilk blocks with discrete
+# ap_none scalar pins use the Vivado IP flow; build_kernels.sh selects it from
+# the source marker HARDCILK_HLS_FLOW_TARGET_VIVADO: <kernel>.
+set flow_target "@@FLOW_TARGET@@"
 open_solution -reset "solution1" -flow_target $flow_target
 set_part {@@PART@@}
 create_clock -period @@CLOCK_PERIOD_NS@@ -name default
+
+# ── Interface configuration ───────────────────────────────────────────────────
+# Assumed m_axi read latency. This drives how many pipeline stages HLS inserts
+# between issuing a read and consuming its data, i.e. how much memory round-trip
+# it can hide. The vitis flow defaults to 64; the vivado flow defaults to ~0,
+# which collapses the pipeline and exposes the round trip as a per-read stall
+# (VCD-measured on memReader: read consumed at iter9 with only 8 cycles of cover
+# against a 7-cycle m_axi adapter + 3-cycle HBM round trip -> ~1 stall cycle per
+# read, II 1 -> 2). Set it explicitly so both flow targets schedule alike.
+config_interface -m_axi_latency 64
 
 # ── Optional: HLS directives ──────────────────────────────────────────────────
 # Add your kernel-specific pragmas / config directives here, for example:

@@ -124,6 +124,12 @@ for KERNEL in "${KERNELS[@]}"; do
     PROJ_DIR="${PROJECTS_ROOT}/${KERNEL}"
     TCL_OUT="${PROJ_DIR}/run_hls.tcl"
     LOG_FILE="${PROJ_DIR}/vitis_hls.log"
+    FLOW_TARGET="vitis"
+    if [[ "$KERNEL" == "watcher" ]] ||
+       grep -Fq "HARDCILK_HLS_FLOW_TARGET_VIVADO: ${KERNEL}" \
+         "${CPP_FILES[@]}" "${H_FILES[@]}"; then
+        FLOW_TARGET="vivado"
+    fi
 
     mkdir -p "$PROJ_DIR"
 
@@ -133,6 +139,7 @@ for KERNEL in "${KERNELS[@]}"; do
         -e "s|@@PART@@|${PART}|g"                        \
         -e "s|@@CLOCK_PERIOD_NS@@|${CLOCK_PERIOD_NS}|g"  \
         -e "s|@@FREQ_MHZ@@|${FREQ_MHZ}|g"                \
+        -e "s|@@FLOW_TARGET@@|${FLOW_TARGET}|g"            \
         -e "s|@@SOURCES@@|${TCL_SOURCES}|g"              \
         "$TCL_TEMPLATE" > "$TCL_OUT"
 

@@ -72,6 +72,11 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         debug = debug,
         spawnerServerNumber = task.spawnServersCount,
         spawnerQueueDepth = task.spawnerQueueDepth,
+        useAffinity = task.getSideConfig("scheduler").exists(_.useAffinity),
+        affinityQueueDepth =
+          task.getSideConfig("scheduler").map(_.affinityQueueDepth).getOrElse(0),
+        affinityTagBits =
+          task.getSideConfig("scheduler").map(_.affinityTagBits).getOrElse(0),
         // A continuation (isCont) re-injects its own task via the argument
         // notifier when the join counter hits 0. With mFPGA on, that loops back
         // through the network; single-FPGA needs the *local* outsideSpawn path,
@@ -136,6 +141,15 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       .filter(t => desc.getPortCount("sendArgument", t.name) > 0 && t.usesNewArgumentNotifier)
       .map { task =>
         val c = task.getSideConfig("argumentNotifier").get
+        val updateSources = desc.taskDescriptors.filter(source =>
+          desc.sendArgumentList.getOrElse(source.name, Nil).contains(task.name)
+        )
+        val updatePayloadWidth = updateSources.map(_.argumentSizeList.max).distinct
+        val updateOffsetWidth = updateSources.map(_.argumentOffsetWidth.get).distinct
+        require(
+          updatePayloadWidth.size == 1 && updateOffsetWidth.size == 1,
+          s"${task.name}: all NewArgumentNotifier update sources must share one payload/offset shape"
+        )
         val expectedNew = desc.getPortCount("spawnNext", task.name)
         val expectedUpdates = desc.getPortCount("sendArgument", task.name)
         require(
@@ -160,10 +174,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
             cacheDelayCycles = c.cacheDelayCycles,
             missedUpdateExtra = c.missedUpdateExtra,
             continuationSize = task.widthTask,
-            updateDataWidth = desc.taskDescriptors
-              .filter(source => desc.sendArgumentList.getOrElse(source.name, Nil).contains(task.name))
-              .flatMap(_.argumentSizeList)
-              .max,
+            updatePayloadWidth = updatePayloadWidth.head,
+            updateOffsetWidth = updateOffsetWidth.head,
             slowCutCount = c.argumentNotifierCutCount,
             evictCutCount = c.evictionCutCount,
             slowRequestQueueDepth = c.slowRequestQueueDepth

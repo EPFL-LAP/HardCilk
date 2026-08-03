@@ -1,6 +1,6 @@
 package Descriptors
 
-import chisel3.util.isPow2
+import chisel3.util.{isPow2, log2Ceil}
 import scala.collection.mutable
 import org.slf4j.{LoggerFactory, Logger} // For logging warnings
 import scala.collection.mutable.ListBuffer
@@ -138,6 +138,9 @@ case class SideConfig(
     numVirtualServers: Int = 0,
     capacityVirtualQueue: Int = 0,
     capacityPhysicalQueue: Int = 0,
+    useAffinity: Boolean = false,
+    affinityQueueDepth: Int = 0,
+    affinityTagBits: Int = 0,
     portWidth: Int = 32,
     virtualEntrtyWidth: Int = 0,
     numSpawnerServer: Int = 0,
@@ -182,6 +185,21 @@ case class SideConfig(
           "Ensure this is intended or specify 'portWidth' in the JSON."
       )
     }
+    require(affinityQueueDepth >= 0)
+    require(affinityTagBits >= 0)
+    if (useAffinity) {
+      require(sideType == "scheduler", "Affinity is only valid on scheduler sides")
+      require(affinityQueueDepth > 0)
+      require(affinityTagBits > 0)
+    } else if (affinityQueueDepth != 0 || affinityTagBits != 0) {
+      // Tolerate affinity fields left in the JSON with useAffinity=false so the
+      // knobs can be toggled by flipping a single flag. They carry no meaning
+      // here -- `normalized` strips them from the version passed forward.
+      DescriptorLogger.logger.warn(
+        s"Task side '$sideType' has affinityQueueDepth/affinityTagBits set but " +
+          "useAffinity=false; these fields are ignored and stripped."
+      )
+    }
     if (sideType == "argumentNotifier" && useNewArgumentNotifier) {
       require(slowArgumentHandlerCount > 0)
       require(cacheEvictionSaverCount > 0)
@@ -195,6 +213,13 @@ case class SideConfig(
       require(slowRequestQueueDepth > 0)
     }
   }
+
+  // Strip affinity sizing knobs when the feature is disabled so downstream
+  // consumers never see stale queue-depth/tag-bit values. Lets the JSON keep
+  // those fields around for easy toggling via a single `useAffinity` flag.
+  def normalized: SideConfig =
+    if (useAffinity) this
+    else copy(affinityQueueDepth = 0, affinityTagBits = 0)
 }
 
 // --- TaskDescriptor with validation ---
@@ -206,6 +231,9 @@ case class TaskDescriptor(
     isCont: Boolean,
     dynamicMemAlloc: Boolean,
     numProcessingElements: Int,
+    // Drive the HLS PE's ap_none `peIndex` input with its physical PE-array index.
+    injectPeIndex: Boolean = false,
+    peIndexBits: Int = 0,
     widthTask: Int,
     widthMalloc: Int = 0, // Defaulted
     variableSpawn: Boolean = false, // Defaulted
@@ -245,6 +273,12 @@ case class TaskDescriptor(
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
     argumentSizeList: List[Int] = List(),
+    // Width of the aligned payload-slot selector carried by argOut when its
+    // target uses NewArgumentNotifier.  It is intentionally explicit in JSON,
+    // but FullSysGenDescriptor.validate derives the required value and rejects
+    // any mismatch.  A full-continuation payload has zero offset bits and omits
+    // the field from the physical packet.
+    argumentOffsetWidth: Option[Int] = None,
     taskId: Int = 0 // Defaulted
 ) {
   // Helper methods are fine to keep here
@@ -256,6 +290,9 @@ case class TaskDescriptor(
   }
   def getSideConfig(sideType: String): Option[SideConfig] =
     sidesConfigs.find(_.sideType == sideType)
+
+  def normalized: TaskDescriptor =
+    copy(sidesConfigs = sidesConfigs.map(_.normalized))
 
   def usesNewArgumentNotifier: Boolean =
     getSideConfig("argumentNotifier").exists(_.useNewArgumentNotifier)
@@ -276,10 +313,39 @@ case class TaskDescriptor(
   def validate(): Unit = {
     sidesConfigs.foreach(_.validate())
 
+    getSideConfig("scheduler").foreach { scheduler =>
+      require(
+        scheduler.portWidth == widthTask,
+        s"Task '$name': scheduler portWidth=${scheduler.portWidth} must equal " +
+          s"widthTask=$widthTask; differing scheduler port widths are unsupported"
+      )
+    }
+
     require(
       numProcessingElements > 0,
       s"Task '$name': numProcessingElements must be > 0"
     )
+    require(peIndexBits >= 0, s"Task '$name': peIndexBits must be >= 0")
+    require(
+      argumentOffsetWidth.forall(_ >= 0),
+      s"Task '$name': argumentOffsetWidth must be >= 0"
+    )
+    if (injectPeIndex) {
+      require(
+        peIndexBits > 0,
+        s"Task '$name': injectPeIndex requires peIndexBits > 0"
+      )
+      require(
+        BigInt(numProcessingElements - 1) < (BigInt(1) << peIndexBits),
+        s"Task '$name': peIndexBits=$peIndexBits cannot represent " +
+          s"$numProcessingElements PE indices"
+      )
+    } else {
+      require(
+        peIndexBits == 0,
+        s"Task '$name': peIndexBits requires injectPeIndex=true"
+      )
+    }
     require(
       isPow2(widthTask) && widthTask <= 1024,
       s"Task '$name': widthTask must be power of 2 and <= 1024"
@@ -651,6 +717,9 @@ case class FullSysGenDescriptor(
     MemStats(totalAXIPorts, interconnectDescriptorsAggregated)
   }
 
+  def normalized: FullSysGenDescriptor =
+    copy(taskDescriptors = taskDescriptors.map(_.normalized))
+
   def validate(): Unit = {
     taskDescriptors.foreach(_.validate()) // Validate all sub-tasks
 
@@ -684,6 +753,58 @@ case class FullSysGenDescriptor(
     )
 
     require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
+
+    // A NewArgumentNotifier update is a compact OR payload plus an aligned
+    // payload-slot selector.  Every source feeding one target shares the same
+    // physical packet type, so both widths must agree.  Keeping the selector
+    // width explicit in JSON makes the ABI visible while these checks prevent
+    // it from drifting away from the continuation/payload geometry.
+    taskDescriptors.filter(_.usesNewArgumentNotifier).foreach { target =>
+      val sources = taskDescriptors.filter(source =>
+        sendArgumentList.getOrElse(source.name, Nil).contains(target.name)
+      )
+      require(
+        sources.nonEmpty,
+        s"Task '${target.name}' uses NewArgumentNotifier but has no argument-update sources"
+      )
+
+      val packetShapes = sources.map { source =>
+        require(
+          source.argumentSizeList.nonEmpty,
+          s"Task '${source.name}' must specify argumentSizeList when updating NewArgumentNotifier target '${target.name}'"
+        )
+        val payloadWidth = source.argumentSizeList.max
+        require(
+          isPow2(payloadWidth),
+          s"Task '${source.name}': NewArgumentNotifier payload width $payloadWidth must be a power of two"
+        )
+        require(
+          payloadWidth <= target.widthTask && target.widthTask % payloadWidth == 0,
+          s"Task '${source.name}': payload width $payloadWidth must divide continuation width ${target.widthTask} for '${target.name}'"
+        )
+        val slotCount = target.widthTask / payloadWidth
+        require(
+          isPow2(slotCount),
+          s"Task '${source.name}': continuation/payload slot count $slotCount must be a power of two"
+        )
+        val requiredOffsetWidth = log2Ceil(slotCount)
+        require(
+          source.argumentOffsetWidth.nonEmpty,
+          s"Task '${source.name}' must explicitly specify argumentOffsetWidth for NewArgumentNotifier target '${target.name}'"
+        )
+        val offsetWidth = source.argumentOffsetWidth.get
+        require(
+          offsetWidth == requiredOffsetWidth,
+          s"Task '${source.name}': argumentOffsetWidth=$offsetWidth, expected $requiredOffsetWidth for ${target.widthTask}-bit continuation / $payloadWidth-bit payload"
+        )
+        (payloadWidth, offsetWidth)
+      }.distinct
+
+      require(
+        packetShapes.size == 1,
+        s"All argument-update sources for '${target.name}' must use one payload/offset shape; found ${packetShapes.mkString(", ")}"
+      )
+    }
 
     // Check if the system is supposed to support MFPGA, and has argument notification is that
     // tasks with argument notifiers must have contigous ids startting from ID zero

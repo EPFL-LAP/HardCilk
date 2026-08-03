@@ -52,6 +52,19 @@ case class Axis_VitisInterface(
       chext.amba.axi4s.Slave(config).suggestName(name)
 }
 
+case class Scalar_VitisInterface(
+    val name: String,
+    val role: hdlinfo.InterfaceRole,
+    val width: Int
+) extends VitisInterface {
+  assert(role == InterfaceRole.master || role == InterfaceRole.slave)
+  assert(width > 0)
+
+  def chiselType: Data =
+    if (role == InterfaceRole.master) Output(UInt(width.W))
+    else Input(UInt(width.W))
+}
+
 case class VitisModuleConfig(
     val desiredName: String = "vitisModule",
     val interfaces: Seq[VitisInterface] = Seq.empty,
@@ -129,7 +142,10 @@ class VitisWriteBufferModule(
     cfg: VitisModuleConfig,
     fullSysGenDescriptor: FullSysGenDescriptor,
     taskName: String,
-    variableSpawn: Boolean = false
+    variableSpawn: Boolean = false,
+    peIndex: Int = 0,
+    injectPeIndex: Boolean = false,
+    peIndexBits: Int = 0
 ) extends Module {
   // Task ABI: the child continuation address is bits [63:0], and its explicit
   // metadata word is the adjacent fixed field at bits [95:64]. This mirrors the
@@ -149,6 +165,8 @@ class VitisWriteBufferModule(
     .map(_.max)
 
   private val pe = Module(new VitisModule(cfg))
+  private val injectedPeIndexPort =
+    if (injectPeIndex) Some("peIndex") else None
 
   private val newSpawnTarget = fullSysGenDescriptor.spawnNextList
     .getOrElse(taskName, Nil)
@@ -211,7 +229,11 @@ class VitisWriteBufferModule(
     val elements: SeqMap[String, Data] =
       SeqMap.from(
         cfg.interfaces
-          .withFilter(x => x.name != "spawnNext" && x.name != "argDataOut")
+          .withFilter(x =>
+            x.name != "spawnNext" &&
+              x.name != "argDataOut" &&
+              !injectedPeIndexPort.contains(x.name)
+          )
           .map { interface =>
             {
               interface.name -> interface.chiselType
@@ -402,11 +424,20 @@ class VitisWriteBufferModule(
 
   // Connect buffer to outside //
 
+  injectedPeIndexPort.foreach { portName =>
+    require(
+      peIndex >= 0 && BigInt(peIndex) < (BigInt(1) << peIndexBits),
+      s"$taskName PE index $peIndex does not fit in $peIndexBits bits"
+    )
+    pe.getPort(portName).asInstanceOf[UInt] := peIndex.U(peIndexBits.W)
+  }
+
   // Connect rest of the ports
   pe.io.elements
     .withFilter(x =>
       !((Seq("spawnNext", "argDataOut", "argOut") ++ taskOuts.map(_._1))
-        .contains(x._1))
+        .contains(x._1)) &&
+        !injectedPeIndexPort.contains(x._1)
     )
     .foreach {
       case (name, port) => {
@@ -439,14 +470,17 @@ object VitisModuleFactory {
     // Log blackBoxCount
     println(s"[HLS:HELPERS:323] Generating $blackBoxCount VitisWriteBufferModules for task: $moduleName")
 
-    Seq.fill(blackBoxCount){
+    Seq.tabulate(blackBoxCount) { peIndex =>
       // Remove the Module call if used with the local emitter
       Module( 
         new VitisWriteBufferModule(
           vitisModuleConfig,
           fullSysGenDescriptor,
           taskDescriptor.name,
-          taskDescriptor.variableSpawn
+          taskDescriptor.variableSpawn,
+          peIndex,
+          taskDescriptor.injectPeIndex,
+          taskDescriptor.peIndexBits
         )
       )
     }
@@ -519,6 +553,11 @@ object VitisModuleFactory {
 
   def lineContainsOutput(signalName: String, moduleContent: String): Boolean = {
     val pattern = s"""(?i)(output).*\\b$signalName\\b""".r
+    pattern.findFirstIn(moduleContent).isDefined
+  }
+
+  def lineContainsInput(signalName: String, moduleContent: String): Boolean = {
+    val pattern = s"""(?i)(input).*\\b$signalName\\b""".r
     pattern.findFirstIn(moduleContent).isDefined
   }
 
@@ -635,6 +674,27 @@ object VitisModuleFactory {
         )
     }
 
+    val peIndexInterface =
+      if (taskDescriptor.injectPeIndex) {
+        require(
+          lineContainsInput("peIndex", moduleContent),
+          s"Task '$moduleName' enables injectPeIndex, but its HLS module has no peIndex input"
+        )
+        val actualWidth = extractSignalWidth("peIndex", moduleContent)
+        require(
+          actualWidth == taskDescriptor.peIndexBits,
+          s"Task '$moduleName' peIndex width is $actualWidth in HLS RTL, " +
+            s"expected ${taskDescriptor.peIndexBits}"
+        )
+        Some(
+          Scalar_VitisInterface(
+            "peIndex",
+            InterfaceRole.slave,
+            taskDescriptor.peIndexBits
+          )
+        )
+      } else None
+
     // Search for the regex module <moduleName> (.*); and check ap_start, ap_done, ap_idle, ap_ready
     var is_ap_start = false
     var is_ap_done = false
@@ -676,7 +736,8 @@ object VitisModuleFactory {
     val config_seq =
       (Seq(
         M_AXI_GMEM_INTERFACE,
-        aximmInterface_s_axi_control
+        aximmInterface_s_axi_control,
+        peIndexInterface
       ).flatten ++ tdataInterfaces).asInstanceOf[Seq[VitisInterface]]
 
     // Create the config with the interfaces
@@ -702,7 +763,8 @@ object VitisModuleFactory_Emitter extends App {
   import Descriptors.DescriptorJSON._
 
   val descriptor_path = "/beta/shahawy/mfpga_ws/benchmarks/heat/heatSystem.json"
-  val fullSysGenDescriptor = parseJsonFile[FullSysGenDescriptor](descriptor_path)
+  val fullSysGenDescriptor =
+    parseJsonFile[FullSysGenDescriptor](descriptor_path).normalized
   // get the heat task descriptor
   val descriptor = fullSysGenDescriptor.taskDescriptors.find(_.name == "heat").get
 

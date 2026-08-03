@@ -8,11 +8,14 @@
 #include<cmath>
 
 
+#ifndef HARDCILK_FREEDMEMBLOCK_DEFINED
+#define HARDCILK_FREEDMEMBLOCK_DEFINED
 struct freedMemBlock
 {
     uint64_t addr;
     uint64_t size;
 };
+#endif
 
 
 struct questaMemory : Memory

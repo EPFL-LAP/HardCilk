@@ -83,22 +83,24 @@ class NewContinuationPort(
   val assignedLane = Output(UInt(laneWidth.W))
 }
 
-/** A continuation update: one child finished, ORs its argument payload into
-  * the line (bit-granular strobe) and implicitly decrements the join counter
-  * by one. Assumes exactly ONE update write per child.
+/** A compact continuation update: one child finished, ORs its payload into one
+  * aligned payload-sized slot, and implicitly decrements the join counter by
+  * one.  Full-line payloads omit `offset` and may contain sparse set bits.
+  * Assumes exactly ONE update write per child.
   */
 class ContinuationUpdate(
     val lineAddressWidth: Int,
     val serverTagWidth: Int,
     val serverIDWidth: Int,
     val laneWidth: Int,
-    val continuationSize: Int
+    val payloadWidth: Int,
+    val offsetWidth: Int
 ) extends Bundle {
   val address = UInt(lineAddressWidth.W)
   val metadata =
     new ContinuationMetadata(serverTagWidth, serverIDWidth, laneWidth)
-  val dataWriteStrobe = UInt(continuationSize.W)
-  val dataWrite = UInt(continuationSize.W)
+  val payload = UInt(payloadWidth.W)
+  val offset = if (offsetWidth > 0) Some(UInt(offsetWidth.W)) else None
 }
 
 /** A completed continuation, spawned as a task (the merged line IS the task
@@ -123,7 +125,6 @@ class EvictedContinuation(val lineAddressWidth: Int, val continuationSize: Int)
 class SlowUpdate(val lineAddressWidth: Int, val continuationSize: Int)
     extends Bundle {
   val address = UInt(lineAddressWidth.W)
-  val dataWriteStrobe = UInt(continuationSize.W)
   val dataWrite = UInt(continuationSize.W)
 }
 
@@ -205,7 +206,9 @@ class ArgumentServerIO(
     serverIDWidth: Int,
     continuationSize: Int,
     NParallelNew: Int,
-    NParallelUpdate: Int
+    NParallelUpdate: Int,
+    updatePayloadWidth: Int,
+    updateOffsetWidth: Int
 ) extends Bundle {
   private val laneW = ArgumentNotifierHelpers.laneWidth(NParallelNew)
 
@@ -227,7 +230,8 @@ class ArgumentServerIO(
           serverTagWidth,
           serverIDWidth,
           laneW,
-          continuationSize
+          updatePayloadWidth,
+          updateOffsetWidth
         )
       )
     )
@@ -264,11 +268,26 @@ class ArgumentServer(
     // eviction (an update for a line evicted earlier). Sized so the slow-path
     // backlog never has to backpressure into the eviction pool. Throughput knob:
     // too small only throttles (memReader stalls, self-limiting), never wrong.
-    missedUpdateExtra: Int = 64
+    missedUpdateExtra: Int = 64,
+    // Zero is an internal convenience default for direct ArgumentServer users:
+    // it resolves to a full-continuation payload.  Descriptor/config paths pass
+    // the validated physical width explicitly.
+    updatePayloadWidth: Int = 0,
+    updateOffsetWidth: Int = 0
 ) extends Module {
 
   require(cacheDelayCycles >= 0)
   require(missedUpdateExtra >= 1)
+  private val effectiveUpdatePayloadWidth =
+    if (updatePayloadWidth == 0) continuationSize else updatePayloadWidth
+  require(
+    isPow2(effectiveUpdatePayloadWidth) &&
+      effectiveUpdatePayloadWidth <= continuationSize
+  )
+  require(continuationSize % effectiveUpdatePayloadWidth == 0)
+  private val updateSlotCount = continuationSize / effectiveUpdatePayloadWidth
+  require(isPow2(updateSlotCount))
+  require(updateOffsetWidth == log2Ceil(updateSlotCount))
 
   val io = IO(
     new ArgumentServerIO(
@@ -278,11 +297,24 @@ class ArgumentServer(
       serverIDWidth,
       continuationSize,
       NParallelNew,
-      NParallelUpdate
+      NParallelUpdate,
+      effectiveUpdatePayloadWidth,
+      updateOffsetWidth
     )
   )
 
   private def lineType = new ContinuationLine(counterWidth, continuationSize)
+  private def expandPayload(update: ContinuationUpdate): UInt = {
+    if (effectiveUpdatePayloadWidth == continuationSize) {
+      update.payload
+    } else {
+      val bitShift = update.offset.get << log2Ceil(effectiveUpdatePayloadWidth)
+      (update.payload.pad(continuationSize) << bitShift)(
+        continuationSize - 1,
+        0
+      )
+    }
+  }
   private val cacheDepth = 1 << serverIDWidth
   private val idleFlushCycles = 10
   private val idleCountWidth = log2Ceil(idleFlushCycles + 1)
@@ -375,6 +407,25 @@ class ArgumentServer(
   // the resolutionQueueDepth sizing argument.
   val flushHoles =
     Seq.fill(NParallelNew)(RegInit(0.U(log2Ceil(cacheDepth + 1).W)))
+  // The TRUE cache deficit: residentCapacity minus the number of valid slots.
+  //
+  // flushHoles above tries to reconstruct this from events ("a flush made a hole",
+  // "an insert filled one"). Event reconstruction can drift: any cycle whose valid
+  // -bit writes are not mirrored exactly by an inc/dec biases the count forever,
+  // and a count that is too LOW over-admits, which breaks the
+  //   resolutionInCq <= admitCap - residentCapacity
+  // sizing argument and silently drops a resolution (a lost release) when the
+  // coupledQ is exactly full. So derive it from the same events that actually
+  // write cacheValid instead, and gate admission on THIS.
+  //
+  // Maintained as a deficit (not a resident count) so the admission gate keeps the
+  // exact shape it had with flushHoles -- `inFlight + <register>` -- and no new
+  // arithmetic lands on that path.
+  //
+  // Reset: the cache starts empty, so every one of the residentCapacity usable
+  // slots is missing.
+  val cacheDeficit =
+    Seq.fill(NParallelNew)(RegInit(residentCapacity.U(log2Ceil(cacheDepth + 1).W)))
 
   private def coupledType = new CoupledSlowPathEntry(
     lineAddressWidth,
@@ -392,8 +443,27 @@ class ArgumentServer(
     Seq.fill(NParallelNew)(Mem(cacheDepth, UInt(lineAddressWidth.W)))
   val updateLUTRAMs =
     Seq.fill(NParallelNew)(Mem(cacheDepth, UInt(continuationSize.W)))
-  val remainingCounterStores =
-    Seq.fill(NParallelNew)(Mem(cacheDepth, UInt(counterWidth.W)))
+
+  // updateLUTRAMs must infer as LUTRAM, which allows exactly ONE write port. An
+  // insert and an update are independently sourced (porch vs perLaneFIFO) and
+  // routinely land in the same cycle on DIFFERENT slots, so both cannot own that
+  // port. The insert's write was only ever a clear of the recycled slot's stale
+  // delta, so it is replaced by this per-slot bit: false means "the delta record
+  // for this slot is stale, read it as zero". Insert clears it, the first update
+  // to the slot sets it and simultaneously overwrites the stale contents. Both
+  // read sites substitute zero while it is false, so no stale OR-mask or update
+  // count can survive into the resolution merge. The RMW is now the memory's only
+  // writer, and the bit lives in registers, which have no write-port limit.
+  val deltaValid = Seq.fill(NParallelNew)(
+    RegInit(VecInit(Seq.fill(cacheDepth)(false.B)))
+  )
+  // Same reasoning: the remaining-argument countdown is seeded by the insert and
+  // decremented by the update. As a Mem those are two writers; as a register file
+  // they are independent writes to different indices. It is only cacheDepth x
+  // counterWidth bits, the same shape as the cacheValid/cacheDone vectors above.
+  val remainingCounterRegs = Seq.fill(NParallelNew)(
+    RegInit(VecInit(Seq.fill(cacheDepth)(0.U(counterWidth.W))))
+  )
   val cacheBaseStoresHead =
     Seq.fill(NParallelNew)(RegInit(0.U(serverIDWidth.W)))
   val cacheValid = Seq.fill(NParallelNew)(
@@ -433,15 +503,20 @@ class ArgumentServer(
     io.newContInput(i).assignedLane := i.U
 
     if (cacheDelayCycles == 0) {
-      cacheInsertValids(i) := io.newContInput(i).req.valid
+      // Admission gate: keep accepting while total in-flight work is below cache
+      // size + the resolution reservation. This is the only porch backpressure.
+      // The gate must qualify the INSERT as well as the handshake -- gating only
+      // req.ready would let cacheInsertFires (= valid && cacheInsertReadies, and
+      // cacheInsertReadies is unconditionally true) insert an uncharged
+      // continuation while admission is refusing it. See the porch branch below
+      // for the same hazard and why it breaks the resolution reservation.
+      val admitOk = (inFlight(i) +& cacheDeficit(i)) < admitCap.U
+      cacheInsertValids(i) := io.newContInput(i).req.valid && admitOk
       cacheInsertBits(i).id := cacheBaseStoresHead(i)
       cacheInsertBits(i).address := io.newContInput(i).req.bits.address
       cacheInsertBits(i).taskBaseData :=
         io.newContInput(i).req.bits.taskBaseData
-      // Admission gate: keep accepting while total in-flight work is below cache
-      // size + the resolution reservation. This is the only porch backpressure.
-      io.newContInput(i).req.ready := cacheInsertReadies(i) &&
-        ((inFlight(i) +& flushHoles(i)) < admitCap.U)
+      io.newContInput(i).req.ready := cacheInsertReadies(i) && admitOk
     } else {
       val porchValid = RegInit(
         VecInit(Seq.fill(cacheDelayCycles)(false.B))
@@ -457,14 +532,25 @@ class ArgumentServer(
       // time-aligned with its memReader update. porchCanAdvance must stay ~always
       // true (cacheInsertReadies no longer depends on coupledQ occupancy).
       io.newContInput(i).req.ready := porchCanAdvance &&
-        ((inFlight(i) +& flushHoles(i)) < admitCap.U)
+        ((inFlight(i) +& cacheDeficit(i)) < admitCap.U)
       when(porchCanAdvance) {
         for (stage <- (1 until cacheDelayCycles).reverse) {
           porchValid(stage) := porchValid(stage - 1)
           porchData(stage) := porchData(stage - 1)
         }
-        porchValid(0) := io.newContInput(i).req.valid
-        when(io.newContInput(i).req.valid) {
+        // MUST be req.fire, not req.valid. req.ready adds the admission gate on
+        // top of porchCanAdvance, so shifting in on `valid` alone lets a
+        // continuation enter the porch while admission is REFUSING it: inFlight
+        // and cacheBaseStoresHead (both advanced on `fire`) never see it. The
+        // gate then throttles only the handshake, never the porch, so up to
+        // cacheDelayCycles uncharged continuations march into the cache and
+        // become resolutions -- breaking
+        //   resolutionInCq <= admitCap - residentCapacity
+        // and overflowing the coupledQ, which silently drops a resolution (a lost
+        // release). It also re-used the same assignedId, since the source retries
+        // the request it never saw accepted.
+        porchValid(0) := io.newContInput(i).req.fire
+        when(io.newContInput(i).req.fire) {
           porchData(0).id := cacheBaseStoresHead(i)
           porchData(0).address := io.newContInput(i).req.bits.address
           porchData(0).taskBaseData :=
@@ -489,7 +575,12 @@ class ArgumentServer(
   val resolutionRemovesDone = Wire(Vec(NParallelNew, Bool()))
   val updateMakesDone = Wire(Vec(NParallelNew, Bool()))
   val updateTargetIds = Wire(Vec(NParallelNew, UInt(serverIDWidth.W)))
+  // High on the cycle a hitting update commits its RMW. Named so that the
+  // insert/update coincidence -- the case that used to contend for a single
+  // store write port -- is observable from a testbench.
+  val updateApplied = Wire(Vec(NParallelNew, Bool()))
   for (i <- 0 until NParallelNew) {
+    updateApplied(i) := false.B
     resolutionIssued(i) := false.B
     resolutionAddresses(i) := 0.U
     resolutionRemovesDone(i) := false.B
@@ -509,11 +600,14 @@ class ArgumentServer(
         cacheInsertBits(i).id,
         cacheInsertBits(i).address
       )
-      updateLUTRAMs(i).write(cacheInsertBits(i).id, 0.U)
-      remainingCounterStores(i).write(
-        cacheInsertBits(i).id,
-        insertedLine.counter
-      )
+      // Retire the recycled slot's delta instead of zeroing updateLUTRAMs, and
+      // seed the countdown. Both are registers, so neither contends with an
+      // update landing on another slot this cycle. cacheValid for this slot is
+      // set in the same cycle (see the done-count block), so the slot becomes
+      // matchable exactly when its delta is declared stale -- an update can
+      // never observe the previous tenant's accumulation.
+      deltaValid(i)(cacheInsertBits(i).id) := false.B
+      remainingCounterRegs(i)(cacheInsertBits(i).id) := insertedLine.counter
     }
   }
 
@@ -523,11 +617,11 @@ class ArgumentServer(
   // the following cycle. Staging aligns the two so the resolution and update can
   // occupy one atomic coupled entry.
   val coupledQs = Seq.fill(NParallelNew)(
-    Module(new Queue(coupledType, coupledQueueDepth))
+    Module(new BankedQueue(coupledType, coupledQueueDepth))
   )
   val delayedMissQs = Seq.fill(NParallelNew)(
     Module(
-      new Queue(
+      new BankedQueue(
         new TaggedSlowUpdate(
           lineAddressWidth,
           continuationSize,
@@ -589,7 +683,7 @@ class ArgumentServer(
   // busy consumer can never drop (or double-count) a resolution; instead,
   // inserts stall via req.ready while a queue could overflow.
   for (i <- 0 until NParallelNew) {
-    val spawnQ = Module(new Queue(new SpawnedTask(continuationSize), 4))
+    val spawnQ = Module(new BankedQueue(new SpawnedTask(continuationSize), 4))
     // Reserve room for the one-cycle resolution pipeline as well as entries already
     // in coupledQ. At count <= depth-2, this cycle and the already-issued prior cycle
     // can both resolve without overflow. Pure missed updates use their own share and
@@ -653,8 +747,12 @@ class ArgumentServer(
     // If it is new AND valid, we read the continuation
     val completedBase =
       cacheBaseStores(i).read(readAddr).asTypeOf(lineType)
+    // A slot whose delta is stale (inserted, never updated) contributes nothing
+    // to the merge below. deltaValid is sampled with readAddr inside the RegNext
+    // so it stays aligned with the SyncReadMem base read.
     val completedOthers = RegNext(
-      updateLUTRAMs(i).read(readAddr).asTypeOf(lineType)
+      Mux(deltaValid(i)(readAddr), updateLUTRAMs(i).read(readAddr), 0.U)
+        .asTypeOf(lineType)
     )
 
     // Need to OR all the arguments, and ADD the counter decremenets
@@ -727,7 +825,13 @@ class ArgumentServer(
   // Finally, we need to process updates as they come in. Since we know where their element should live (lane and ID), we just need to check there
   // Buffer incoming updates to help the router before we hit the crossbar
   val updatePipes = Seq.fill(NParallelUpdate)(
-    Module(new Queue(chiselTypeOf(io.contUpdateInput(0).bits), 1, pipe = true))
+    Module(
+      new BankedQueue(
+        chiselTypeOf(io.contUpdateInput(0).bits),
+        1,
+        pipe = true
+      )
+    )
   )
   for (i <- 0 until NParallelUpdate) {
     updatePipes(i).io.enq <> io.contUpdateInput(i)
@@ -736,7 +840,7 @@ class ArgumentServer(
 
   // First, we turn into per-lane FIFOs
   val perLaneFIFOs = Seq.fill(NParallelNew)(
-    Module(new Queue(chiselTypeOf(io.contUpdateInput(0).bits), 3))
+    Module(new BankedQueue(chiselTypeOf(io.contUpdateInput(0).bits), 3))
   )
 
   // Each destination lane alternates between its local update input and the
@@ -813,43 +917,70 @@ class ArgumentServer(
 
     perLaneFIFOs(j).io.enq.valid := isValid
 
-    // Slice the crossbar into 32-bit chunks so Vivado doesn't clump everything together
-    val sliceWidth = 32
-    val numSlices = (continuationSize + sliceWidth - 1) / sliceWidth
-
-    val dataSlicesOut = for (c <- 0 until numSlices) yield {
-      val sliceSelect = dontTouch(WireInit(selectedInput))
-      val low = c * sliceWidth
-      val high = math.min((c + 1) * sliceWidth - 1, continuationSize - 1)
-      val dataSlicesIn = VecInit(
-        updatePipes.map(p => p.io.deq.bits.dataWrite(high, low))
-      )
-      dataSlicesIn(sliceSelect)
+    // Convert the binary arbitration result into static one-hot grants before
+    // touching payload data. Dynamic Vec indexing pads non-power-of-two input
+    // counts and creates needless mux legs.
+    val grants = Wire(Vec(NParallelUpdate, Bool()))
+    for (i <- 0 until NParallelUpdate) {
+      grants(i) := isValid && selectedInput === i.U
     }
 
-    val strobeSlicesOut = for (c <- 0 until numSlices) yield {
-      val sliceSelect = dontTouch(WireInit(selectedInput))
-      val low = c * sliceWidth
-      val high = math.min((c + 1) * sliceWidth - 1, continuationSize - 1)
-      val strobeSlicesIn = VecInit(
-        updatePipes.map(p => p.io.deq.bits.dataWriteStrobe(high, low))
+    perLaneFIFOs(j).io.enq.bits.payload := Mux1H(
+      (0 until NParallelUpdate).map(i =>
+        grants(i) -> updatePipes(i).io.deq.bits.payload
       )
-      strobeSlicesIn(sliceSelect)
+    )
+    perLaneFIFOs(j).io.enq.bits.offset.foreach { offset =>
+      offset := Mux1H(
+        (0 until NParallelUpdate).map(i =>
+          grants(i) -> updatePipes(i).io.deq.bits.offset.get
+        )
+      )
     }
-
-    val metadataArray = VecInit(updatePipes.map(_.io.deq.bits.metadata))
-    val addrArray = VecInit(updatePipes.map(_.io.deq.bits.address))
-
-    perLaneFIFOs(j).io.enq.bits.dataWrite := Cat(dataSlicesOut.reverse)
-    perLaneFIFOs(j).io.enq.bits.dataWriteStrobe := Cat(strobeSlicesOut.reverse)
-    perLaneFIFOs(j).io.enq.bits.metadata := metadataArray(selectedInput)
-    perLaneFIFOs(j).io.enq.bits.address := addrArray(selectedInput)
+    perLaneFIFOs(j).io.enq.bits.metadata := Mux1H(
+      (0 until NParallelUpdate).map(i =>
+        grants(i) -> updatePipes(i).io.deq.bits.metadata
+      )
+    )
+    perLaneFIFOs(j).io.enq.bits.address := Mux1H(
+      (0 until NParallelUpdate).map(i =>
+        grants(i) -> updatePipes(i).io.deq.bits.address
+      )
+    )
 
     for (i <- 0 until NParallelUpdate) {
-      when(isValid && selectedInput === i.U) {
+      when(grants(i)) {
         updatePipes(i).io.deq.ready := perLaneFIFOs(j).io.enq.ready
       }
     }
+  }
+
+  // Expand only after routing and arbitration.  A one-entry pipelined queue per
+  // cache lane registers the aligned shift, keeping it off the cache lookup and
+  // LUTRAM-write timing path.  Everything upstream remains compact.
+  val expandedUpdatePipes = Seq.fill(NParallelNew)(
+    Module(
+      new BankedQueue(
+        new TaggedSlowUpdate(
+          lineAddressWidth,
+          continuationSize,
+          serverTagWidth,
+          serverIDWidth,
+          ArgumentNotifierHelpers.laneWidth(NParallelNew)
+        ),
+        1,
+        pipe = true
+      )
+    )
+  )
+  for (i <- 0 until NParallelNew) {
+    val compact = perLaneFIFOs(i).io.deq
+    val expanded = expandedUpdatePipes(i).io.enq
+    expanded.valid := compact.valid
+    expanded.bits.update.address := compact.bits.address
+    expanded.bits.update.dataWrite := expandPayload(compact.bits)
+    expanded.bits.metadata := compact.bits.metadata
+    compact.ready := expanded.ready
   }
 
   val matches = Wire(Vec(NParallelNew, Bool()))
@@ -862,7 +993,8 @@ class ArgumentServer(
   // recently inserted line. That line must remain updateable when producers
   // go idle, otherwise it could never become eligible for the fallback flush.
   for (i <- 0 until NParallelNew) {
-    val targetId = perLaneFIFOs(i).io.deq.bits.metadata.id
+    val update = expandedUpdatePipes(i).io.deq
+    val targetId = update.bits.metadata.id
     updateTargetIds(i) := targetId
     // An update that lands on the exact cycle its own line is inserted must not
     // be treated as a genuine miss: the line is being written to the cache right
@@ -872,55 +1004,50 @@ class ArgumentServer(
     val insertCollision =
       cacheInsertFires(i) && targetId === cacheInsertBits(i).id
     matches(i) := cacheValid(i)(targetId) &&
-      cacheIDStores(i).read(targetId) === perLaneFIFOs(
-      i
-    ).io.deq.bits.address &&
+      cacheIDStores(i).read(targetId) === update.bits.update.address &&
       !insertCollision &&
       !(resolutionIssued(i) && targetId === resolutionAddresses(i))
 
-    valids(i) := perLaneFIFOs(i).io.deq.valid
+    valids(i) := update.valid
 
     // Stage missed updates for one cycle before the coupled FIFO.  Besides
     // breaking the wide cache-lookup path, this aligns a same-cycle resolution
     // collision with the eviction produced by the synchronous base store.
     // An insert collision is deliberately NOT routed here (it is not a real
-    // miss); the update stays at the head of perLaneFIFO and hits next cycle.
+    // miss); the update stays at the head of the expansion pipe and hits next cycle.
     // A resolution collision IS routed here: that line is genuinely leaving the
     // cache, and the one-cycle staging couples the update to its own eviction so
     // the gater fences it behind that eviction's HBM write.
     delayedMissQs(i).io.enq.valid := valids(i) && !matches(i) && !insertCollision
-    delayedMissQs(i).io.enq.bits.update.address := perLaneFIFOs(
-      i
-    ).io.deq.bits.address
-    delayedMissQs(i).io.enq.bits.update.dataWriteStrobe := perLaneFIFOs(
-      i
-    ).io.deq.bits.dataWriteStrobe
-    delayedMissQs(i).io.enq.bits.update.dataWrite := perLaneFIFOs(
-      i
-    ).io.deq.bits.dataWrite
-    delayedMissQs(i).io.enq.bits.metadata := perLaneFIFOs(i).io.deq.bits.metadata
+    delayedMissQs(i).io.enq.bits.update := update.bits.update
+    delayedMissQs(i).io.enq.bits.metadata := update.bits.metadata
 
-    perLaneFIFOs(i).io.deq.ready :=
+    update.ready :=
       matches(i) || (delayedMissQs(i).io.enq.ready && !insertCollision)
 
     val fireUpdate = matches(i) && valids(i)
 
     // If it matches, we apply the update
     when(fireUpdate) {
+      // A stale delta reads as zero, so the first update to a recycled slot
+      // starts the OR from a clean line and writes the slot's fresh contents in
+      // the same access -- this write IS the deferred clear the insert skipped.
       val currentVal =
-        updateLUTRAMs(i).read(targetId).asTypeOf(lineType)
-      val currentRemaining = remainingCounterStores(i).read(targetId)
-      val incomingVal = (perLaneFIFOs(i).io.deq.bits.dataWrite & perLaneFIFOs(
-        i
-      ).io.deq.bits.dataWriteStrobe).asTypeOf(lineType)
+        Mux(deltaValid(i)(targetId), updateLUTRAMs(i).read(targetId), 0.U)
+          .asTypeOf(lineType)
+      val currentRemaining = remainingCounterRegs(i)(targetId)
+      val incomingVal = update.bits.update.dataWrite.asTypeOf(lineType)
 
       val newVal = Wire(lineType)
       // OR the payload, but ADD to the counter so it subtracts out later
       newVal.remainder := currentVal.remainder | incomingVal.remainder
       newVal.counter := currentVal.counter + 1.U
 
+      // Sole writer of updateLUTRAMs: one write port, LUTRAM inference intact.
+      updateApplied(i) := true.B
       updateLUTRAMs(i).write(targetId, newVal.asUInt)
-      remainingCounterStores(i).write(targetId, currentRemaining - 1.U)
+      deltaValid(i)(targetId) := true.B
+      remainingCounterRegs(i)(targetId) := currentRemaining - 1.U
       updateMakesDone(i) := currentRemaining === 1.U
     }
   }
@@ -936,7 +1063,18 @@ class ArgumentServer(
     val insertDone = insertFire &&
       cacheInsertBits(i).taskBaseData.asTypeOf(lineType).counter === 0.U
 
-    when(resolutionIssued(i) && cacheValid(i)(resolutionAddresses(i))) {
+    // Derived DIRECTLY from the two conditions that actually change the number of
+    // valid slots, in the same block that performs those writes, so the deficit
+    // cannot drift away from the cache no matter which path (normal resolution,
+    // idle flush, initial fill) caused the change.
+    //   clearsSlot : a valid slot is invalidated  -> one more slot missing
+    //   fillsHole  : an INVALID slot becomes valid -> one fewer slot missing
+    // An insert onto an already-valid slot would not change the count, so guard
+    // on the current valid bit rather than assuming ring order holds.
+    val clearsSlot = resolutionIssued(i) && cacheValid(i)(resolutionAddresses(i))
+    val fillsHole = insertFire && !cacheValid(i)(insertId)
+
+    when(clearsSlot) {
       cacheValid(i)(resolutionAddresses(i)) := false.B
       cacheDone(i)(resolutionAddresses(i)) := false.B
     }
@@ -946,6 +1084,22 @@ class ArgumentServer(
     }
     when(updateMakesDone(i)) {
       cacheDone(i)(updateTargetIds(i)) := true.B
+    }
+
+    cacheDeficit(i) :=
+      (cacheDeficit(i) +& clearsSlot.asUInt) - fillsHole.asUInt
+
+    // Diagnostic only (simulation): report the first cycle on which the
+    // event-reconstructed flushHoles disagrees with the true deficit, which is
+    // the accounting miss that let admission over-subscribe. Non-fatal and
+    // one-shot so a run still completes and stays readable.
+    val deficitDivergenceSeen = RegInit(false.B)
+    when(flushHoles(i) =/= cacheDeficit(i) && !deficitDivergenceSeen) {
+      deficitDivergenceSeen := true.B
+      printf(
+        p"[ArgumentServer] lane $i: flushHoles=${flushHoles(i)} " +
+          p"!= cacheDeficit=${cacheDeficit(i)} (event accounting drifted)\n"
+      )
     }
 
     val increments = PopCount(Seq(insertDone, updateMakesDone(i)))

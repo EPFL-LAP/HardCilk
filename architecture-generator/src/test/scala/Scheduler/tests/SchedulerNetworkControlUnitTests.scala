@@ -27,13 +27,21 @@ class SchedulerControlRingHarness(n: Int) extends Module {
   }
 }
 
+/** The hop keeps its backpressure and skid, which exist for GUARANTEED LOCAL INJECTION -- a node
+  * whose hop is busy with passing requests must still be able to get its own request onto the ring,
+  * or the nodes furthest from the supply starve systematically (measured: last lane of the feedback
+  * ring at 616 of 1000 cycles without it, II=1 with it).
+  *
+  * What went is the bubble sideband. Its only job was to replay a request-free cycle at the next
+  * hop so a consumed request kept a matching hole on the DATA ring; the data ring is elastic now
+  * and makes its own holes, so there is nothing left for it to preserve.
+  */
 class SchedulerNetworkControlUnitTests extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "SchedulerNetworkControlUnit local-priority flow control"
 
   private def init(dut: SchedulerNetworkControlUnit): Unit = {
     dut.io.reqTaskIn.poke(false.B)
     dut.io.stopIn.poke(false.B)
-    dut.io.bubbleIn.poke(false.B)
     dut.io.connSS.stealReq.valid.poke(false.B)
     dut.io.connSS.serveStealReq.valid.poke(false.B)
   }
@@ -84,42 +92,6 @@ class SchedulerNetworkControlUnitTests extends AnyFlatSpec with ChiselScalatestT
       dut.clock.step()
       dut.io.connSS.stealReq.valid.poke(false.B)
       dut.io.connSS.serveStealReq.ready.expect(true.B)
-    }
-  }
-
-  it should "replay a consumed request as a bubble despite skid occupancy" in {
-    test(new SchedulerNetworkControlUnit) { dut =>
-      init(dut)
-
-      // Put one transit request in the registered slot, then consume it.
-      dut.io.reqTaskIn.poke(true.B)
-      dut.clock.step()
-      dut.io.reqTaskIn.poke(false.B)
-      dut.io.connSS.serveStealReq.valid.poke(true.B)
-      dut.io.connSS.serveStealReq.ready.expect(true.B)
-      dut.clock.step()
-      dut.io.connSS.serveStealReq.valid.poke(false.B)
-
-      // The bubble sideband is registered: no combinational path crosses more
-      // than one hop.
-      dut.io.bubbleOut.expect(true.B)
-      dut.clock.step()
-      dut.io.bubbleOut.expect(false.B)
-    }
-  }
-
-  it should "hide a resident request from the local server while replaying a bubble" in {
-    test(new SchedulerNetworkControlUnit) { dut =>
-      init(dut)
-      dut.io.reqTaskIn.poke(true.B)
-      dut.clock.step()
-      dut.io.reqTaskIn.poke(false.B)
-
-      dut.io.connSS.serveStealReq.valid.poke(true.B)
-      dut.io.bubbleIn.poke(true.B)
-      dut.io.connSS.serveStealReq.ready.expect(false.B)
-      dut.io.reqTaskOut.expect(true.B)
-      dut.clock.step()
     }
   }
 

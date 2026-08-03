@@ -7,7 +7,6 @@
 #include <stdexcept>
 
 
-
 /**
  * @brief init_system is a template function that takes a vector of template type T and initializes the scheduler servers with the corresponding values.
  * The function also initializes the allocation servers and memory allocator servers based on the full system generation descriptor. If 
@@ -28,8 +27,10 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
 
     // Set the return addresses of the driver
     if(!no_base_task){
-        for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
-            setReturnAddr(taskData->cont);
+        if constexpr (HardCilkTaskHasContinuation<T>::value) {
+            for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
+                setReturnAddr(taskData->cont);
+            }
         }
     }
 
@@ -156,16 +157,33 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 {
                     uint64_t queueBytes = scheduler_capacity * taskDescriptor.widthTask/8;
                     uint64_t paddedQueueBytes = roundUpSchedulerWrite(queueBytes);
-                    static const uint64_t kZeroChunkBytes = 16ull * 1024 * 1024;
-                    static const std::vector<uint8_t> zeroChunk(kZeroChunkBytes, 0);
-                    uint64_t filled = 0;
-                    while (filled < paddedQueueBytes) {
-                        uint64_t chunk = std::min<uint64_t>(kZeroChunkBytes, paddedQueueBytes - filled);
-                        memory_->copyToDevice(addr + filled, zeroChunk.data(), chunk);
-                        filled += chunk;
+                    // HARDCILK_SKIP_SCHED_ZEROFILL=1 skips this when device memory is
+                    // already known-zero. A simulation memory model powers up zeroed,
+                    // so the stale-slot hazard above cannot occur there -- unlike a
+                    // real card, where xrt-smi reset leaves HBM untouched. Under RTL
+                    // co-simulation the fill is thousands of 4 KB DPI transactions and
+                    // dominates setup time, so it is worth skipping; on hardware leave
+                    // it on (the default).
+                    static const bool skipZeroFill = [] {
+                        const char *v = std::getenv("HARDCILK_SKIP_SCHED_ZEROFILL");
+                        return v && v[0] == '1';
+                    }();
+                    if (skipZeroFill) {
+                        printf("        SKIPPED zero-fill of %s scheduler backing queue (%lu bytes) "
+                               "-- HARDCILK_SKIP_SCHED_ZEROFILL=1, memory assumed zeroed\n",
+                               taskDescriptor.name.c_str(), queueBytes);
+                    } else {
+                        static const uint64_t kZeroChunkBytes = 16ull * 1024 * 1024;
+                        static const std::vector<uint8_t> zeroChunk(kZeroChunkBytes, 0);
+                        uint64_t filled = 0;
+                        while (filled < paddedQueueBytes) {
+                            uint64_t chunk = std::min<uint64_t>(kZeroChunkBytes, paddedQueueBytes - filled);
+                            memory_->copyToDevice(addr + filled, zeroChunk.data(), chunk);
+                            filled += chunk;
+                        }
+                        printf("        Zero-filled %s scheduler backing queue (%lu bytes, %lu bytes written)\n",
+                               taskDescriptor.name.c_str(), queueBytes, paddedQueueBytes);
                     }
-                    printf("        Zero-filled %s scheduler backing queue (%lu bytes, %lu bytes written)\n",
-                           taskDescriptor.name.c_str(), queueBytes, paddedQueueBytes);
                 }
 
                 // Hold the server paused while programming its queue metadata.

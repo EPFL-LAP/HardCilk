@@ -14,6 +14,23 @@
 #   HLS_CFLAGS=-DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=1 \
 #     bash scripts/rebuild_and_run.sh countDecoupled
 #
+# QuestaSim co-simulation instead of Vitis hw_emu:
+#   QUESTA=1 bash scripts/rebuild_and_run.sh countDecoupled
+#   QUESTA=1 SIZE=10 INSTANCES=2000 bash scripts/rebuild_and_run.sh countDecoupled
+#   QUESTA=1 START_STEP=6 bash scripts/rebuild_and_run.sh countDecoupled   # re-run sim only
+#
+#   Same 6 steps, but: step2 also emits the QuestaSim project (-q); step4 builds
+#   the Vivado block design (kernel + real Xilinx HBM IP + AXI-VIP host bridge)
+#   and its simulation sources instead of running v++; step5 is a no-op (the host
+#   is compiled by sccom inside the simulation); step6 runs `vsim` instead of the
+#   XRT driver. The SAME host code runs in both flows -- only the Memory backend
+#   differs (questaMemory DPI bridge vs XRTMemory).
+#   Sim-only knobs: COUNTDECOUPLED_SIZE / COUNTDECOUPLED_INSTANCES (problem size,
+#   taken from SIZE/INSTANCES), COUNTDECOUPLED_START_DELAY_US (HBM bring-up wait),
+#   HARDCILK_QUESTA_QUEUE_FLOOR (queue sizing), HARDCILK_QUESTA_TELEMETRY=1.
+#   Waveform: vsim.wlf in the sim dir; convert with
+#     wlf2vcd vsim.wlf -o x.vcd && vcd2fst x.vcd x.fst && rm x.vcd
+#
 # Watch progress from another shell with:  tail -f scripts/cycle.log
 # =============================================================================
 set -e
@@ -128,10 +145,15 @@ exec > >(tee "$LOG") 2>&1
 PLATFORM=xilinx_u55c_gen3x16_xdma_3_202210_1
 WORKSPACE_DIR=$ROOT/xclbin-workspace/$WORKSPACE_NAME
 BUILD_DIR=$WORKSPACE_DIR/build_dir.hw_emu.$PLATFORM
+# QuestaSim co-simulation mode (see the header). The generated block-design tcl,
+# simulate.do and the Vivado sim project all live next to the emitted RTL.
+QUESTA=${QUESTA:-0}
+QUESTA_TCL_DIR=$ROOT/HardCilk-output/${BENCHMARK}_hardcilk_output/tcl
 
 echo "===== BENCHMARK $BENCHMARK ====="
 echo "WORKSPACE=$WORKSPACE_NAME"
 echo "START_STEP=$START_STEP"
+echo "MODE=$( [[ "$QUESTA" == "1" ]] && echo 'QuestaSim co-simulation' || echo 'Vitis hw_emu' )"
 echo "RUN_ARGS=$RUN_ARGS"
 echo "HLS_CFLAGS=${HLS_CFLAGS:-<none>}"
 
@@ -174,7 +196,14 @@ if (( START_STEP <= 2 )); then
   if [[ "$GLOBAL_START" != "0" ]]; then
     GLOBAL_START_FLAG="--global-start"
   fi
-  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p ${GLOBAL_START_FLAG}"
+  # -q additionally emits the QuestaSim project (block-design tcl + simulate.do
+  # + simulate.sh) next to the RTL. Harmless for the hw_emu flow, so it is only
+  # added when asked for.
+  QUESTA_FLAG=""
+  if [[ "$QUESTA" == "1" ]]; then
+    QUESTA_FLAG="-q"
+  fi
+  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p ${GLOBAL_START_FLAG} ${QUESTA_FLAG}"
 fi
 
 if (( START_STEP <= 3 )); then
@@ -188,7 +217,19 @@ if (( START_STEP <= 3 )); then
   fi
 fi
 
-if (( START_STEP <= 4 )); then
+if (( START_STEP <= 4 )) && [[ "$QUESTA" == "1" ]]; then
+  echo "===== STEP4 QUESTA BLOCK DESIGN ====="
+  # Builds design_1 (kernel + Xilinx HBM IP + AXI-VIP host bridge) and generates
+  # + compiles its simulation sources. Replaces the v++/xclbin step.
+  source /alpha/tools/Xilinx/Vivado/2024.1/settings64.sh
+  cd "$QUESTA_TCL_DIR"
+  rm -rf "${BENCHMARK}_vivado_project" .Xil
+  vivado -mode batch -source "${BENCHMARK}_questa.tcl" \
+         -log vivado_questa.log -journal vivado_questa.jou
+  echo "block design + simulation sources built in $QUESTA_TCL_DIR"
+fi
+
+if (( START_STEP <= 4 )) && [[ "$QUESTA" != "1" ]]; then
   echo "===== STEP4 XCLBIN ====="
   source /alpha/tools/Xilinx/Vivado/2024.1/settings64.sh
   source /opt/xilinx/xrt/setup.sh
@@ -204,11 +245,47 @@ if (( START_STEP <= 4 )); then
 fi
 
 if (( START_STEP <= 5 )); then
-  echo "===== STEP5 HOST ====="
-  source /opt/xilinx/xrt/setup.sh
-  cd "$WORKSPACE_DIR/src/host"
-  cmake -B build -S .
-  cmake --build build -j --target "${HOST_TARGET[$BENCHMARK]}"
+  if [[ "$QUESTA" == "1" ]]; then
+    echo "===== STEP5 HOST (questa: compiled by sccom during step 6) ====="
+  else
+    echo "===== STEP5 HOST ====="
+    source /opt/xilinx/xrt/setup.sh
+    cd "$WORKSPACE_DIR/src/host"
+    cmake -B build -S .
+    cmake --build build -j --target "${HOST_TARGET[$BENCHMARK]}"
+  fi
+fi
+
+if [[ "$QUESTA" == "1" ]]; then
+  echo "===== STEP6 QUESTA RUN ====="
+  source /alpha/tools/Xilinx/Vivado/2024.1/settings64.sh
+  SIM_DIR="$QUESTA_TCL_DIR/${BENCHMARK}_vivado_project/project_1.sim/sim_1/behav/questa"
+  if [[ ! -d "$SIM_DIR" ]]; then
+    echo "No simulation directory at $SIM_DIR -- run step 4 first (drop START_STEP)." >&2
+    exit 1
+  fi
+  cp "$QUESTA_TCL_DIR/simulate.do" "$SIM_DIR/"
+  cd "$SIM_DIR"
+  # Stale optimised DB from an aborted run confuses vopt.
+  rm -rf main_sim_opt
+  # The simulation compiles the STAGED workspace host, so the code under test is
+  # the same one the XRT flow builds.
+  export HARDCILK_HOST_DIR="$WORKSPACE_DIR/src/host"
+  # Problem size comes from the same SIZE/INSTANCES knobs the hw_emu args use.
+  export COUNTDECOUPLED_SIZE=${SIZE:-10}
+  export COUNTDECOUPLED_INSTANCES=${INSTANCES:-10}
+  echo "host=$HARDCILK_HOST_DIR size=$COUNTDECOUPLED_SIZE instances=$COUNTDECOUPLED_INSTANCES"
+  # No `timeout`: an RTL co-simulation is far slower than hw_emu and simulate.do
+  # already bounds itself with `run <N> ms`. Override with QUESTA_TIMEOUT if wanted.
+  if [[ -n "${QUESTA_TIMEOUT:-}" ]]; then
+    timeout "$QUESTA_TIMEOUT" vsim -c -do simulate.do
+  else
+    vsim -c -do simulate.do
+  fi
+  echo "CYCLE_DONE_EXIT=$?"
+  echo "waveform: $SIM_DIR/vsim.wlf"
+  echo "  convert: wlf2vcd vsim.wlf -o x.vcd && vcd2fst x.vcd x.fst && rm x.vcd"
+  exit 0
 fi
 
 echo "===== STEP6 RUN ====="

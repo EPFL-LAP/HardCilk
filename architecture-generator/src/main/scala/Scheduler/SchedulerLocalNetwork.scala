@@ -80,7 +80,12 @@ class SchedulerLocalNetworkIO(
     new SchedulerNetworkClientIO(taskWidth)
   ) // Connection to virtual argument servers.
   val ntwDataUnitOccupancyVSS = Vec(vssCount, Output(Bool()))
+  val ntwReqArrivingVSS = Vec(vssCount, Output(Bool()))
   val lengths_of_hardware_queues = Vec(peCount, Output(UInt(8.W)))
+  // Per-spawner force: push a task through a downstream node's soft stop. Same condition the
+  // spawner has always forced on -- its queue is at capacity -- just applied against the ring
+  // instead of against a steal token.
+  val vasForceInject = Vec(vasCount, Input(Bool()))
 }
 
 class SchedulerLocalNetwork(
@@ -92,8 +97,14 @@ class SchedulerLocalNetwork(
     qRamReadLatency: Int,
     qRamWriteLatency: Int,
     spawnsItself: Boolean,
-    successiveNetworkConfig: Boolean
+    successiveNetworkConfig: Boolean,
+    useAffinity: Boolean = false,
+    affinityQueueDepth: Int = 0,
+    affinityTagBits: Int = 0
 ) extends Module {
+  require(!useAffinity || !successiveNetworkConfig)
+  require(!useAffinity || affinityQueueDepth > 0)
+  require(!useAffinity || affinityTagBits > 0)
   val io = IO(
     new SchedulerLocalNetworkIO(
       peCount,
@@ -117,7 +128,15 @@ class SchedulerLocalNetwork(
 
   // Instantiate the stealing network.
   val stealNet = Module(
-    new SchedulerNetwork(taskWidth, peCount + vasCount + vssCount, vssIndicies)
+    new SchedulerNetwork(
+      taskWidth,
+      peCount + vasCount + vssCount,
+      vssIndicies,
+      // Several injectors contend for this ring -- every spawner, every scheduler server, and every
+      // client offloading surplus. Without elasticity a flooding spawner starves everything
+      // downstream of it, because the only way in is a hole somebody else happened to leave.
+      elasticData = true
+    )
   )
 
   var minLengthThresh = min(max((0.2 * queueDepth).asInstanceOf[Int], 1), 8)
@@ -133,7 +152,7 @@ class SchedulerLocalNetwork(
   assert(maxLengthThresh <= queueDepth)
 
   // Instantiate the stealing servers.
-  val stealServers = Seq.fill(peCount)(
+  val stealServers = Seq.tabulate(peCount)(peIndex =>
     Module(
       new SchedulerClient(
         taskWidth,
@@ -141,7 +160,10 @@ class SchedulerLocalNetwork(
         minLengthThresh,
         maxLengthThresh,
         peCount + vasCount + vssCount,
-        successiveNetworkConfig
+        successiveNetworkConfig,
+        thisPeIndex = peIndex,
+        affinityQueueLength = if (useAffinity) affinityQueueDepth else 0,
+        affinityTagBits = if (useAffinity) affinityTagBits else 0
       )
     )
   )
@@ -176,6 +198,40 @@ class SchedulerLocalNetwork(
       ) // connVec(0) has priority in popping.
 
       io.lengths_of_hardware_queues(i) := stealServers(i).io.toPE.get.currLength
+    }
+  }
+
+  // Per-node "my producer wants to inject", taken from the producer directly. This is what the
+  // elastic hop turns into stopOut, so it must not pass through anything that derives valid from
+  // ready -- the SchedulerInjectionSwap below does exactly that, which is why this is wired
+  // separately rather than read off connSS.qOutTask.valid inside the network.
+  // Only spawners force; clients and scheduler servers never override a peer's claim.
+  stealNet.io.forceForward.get.foreach(_ := false.B)
+
+  if (!successiveNetworkConfig) {
+    val layoutForInject = interleavedLayout.get
+    for (i <- 0 until vasCount)
+      stealNet.io.forceForward.get(layoutForInject.vasNodes(i)) := io.vasForceInject(i)
+    for (i <- 0 until peCount)
+      stealNet.io.injectWanted.get(layoutForInject.peNodes(i)) :=
+        stealServers(i).io.connNetwork.data.qOutTask.valid
+    for (i <- 0 until vasCount)
+      stealNet.io.injectWanted.get(layoutForInject.vasNodes(i)) :=
+        io.connVAS(i).data.qOutTask.valid
+    for (j <- 0 until vssCount)
+      stealNet.io.injectWanted.get(layoutForInject.vssNodes(j)) :=
+        io.connVSS(j).data.qOutTask.valid
+  } else {
+    var idx = 0
+    for (j <- 0 until vssCount) { stealNet.io.injectWanted.get(idx) := io.connVSS(j).data.qOutTask.valid; idx += 1 }
+    for (i <- 0 until vasCount) {
+      stealNet.io.injectWanted.get(idx) := io.connVAS(i).data.qOutTask.valid
+      stealNet.io.forceForward.get(idx) := io.vasForceInject(i)
+      idx += 1
+    }
+    for (i <- 0 until peCount) {
+      stealNet.io.injectWanted.get(idx) := stealServers(i).io.connNetwork.data.qOutTask.valid
+      idx += 1
     }
   }
 
@@ -257,6 +313,7 @@ class SchedulerLocalNetwork(
 
   for (i <- 0 until vssCount) {
     stealNet.io.ntwDataUnitOccupancyVSS(i) <> io.ntwDataUnitOccupancyVSS(i)
+    stealNet.io.ntwReqArrivingVSS(i) <> io.ntwReqArrivingVSS(i)
   }
 
   if (!successiveNetworkConfig) {

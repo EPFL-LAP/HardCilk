@@ -550,7 +550,7 @@
           "directUpdateLanesPerServer": 4,
           "argumentNotifierCutCount": 1,
           "evictionCutCount": 1,
-          "argumentServerIdWidth": 7,
+          "argumentServerIdWidth": 2,
           "cacheDelayCycles": 65,
           "missedUpdateExtra": 64,
           "slowRequestQueueDepth": 64,

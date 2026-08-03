@@ -34,9 +34,9 @@ import Util._
 //    write becomes a cache insert at the statically attached server and the
 //    B response is the accept. m_continuation returns the compact line address
 //    and explicit (server #, id, lane) metadata captured at fire time.
-//  * s_update       - one internal continuation-width update packet per
-//    update-source PE: compact address, explicit metadata, full data and full
-//    bit strobe. It connects directly to PE argOut and may exceed 1024 bits.
+//  * s_update       - one compact OR-update packet per update-source PE:
+//    compact address, explicit metadata, a payload, and (for narrow payloads)
+//    an aligned payload-slot offset. It connects directly to PE argOut.
 //  * m_axi_slow / m_axi_evict - 1 AXI port per SlowArgumentHandler and 1 per
 //    CacheEvictionSaver; saver completions return metadata to the originating
 //    EvictionGater.
@@ -60,8 +60,12 @@ case class ArgumentNetworksConfig(
     realAddressWidth: Int,
     serverIDWidth: Int,
     continuationSize: Int,
-    /** Data width of the PE argOut write buffer (the update writes). */
-    updateDataWidth: Int,
+    /** Width of the compact OR payload carried by PE argOut. */
+    updatePayloadWidth: Int,
+    /** Width of the aligned payload-slot selector.  Must be exactly
+      * log2(continuationSize / updatePayloadWidth); zero omits the field.
+      */
+    updateOffsetWidth: Int,
     ringInjectQueueDepth: Int = 4,
     slowAxiIdWidth: Int = 6,
     slowCutCount: Int = 1,
@@ -84,6 +88,15 @@ case class ArgumentNetworksConfig(
   require(slowCutCount >= 1 && slowCutCount <= nServers)
   require(evictCutCount >= 1 && evictCutCount <= nServers)
   require(slowRequestQueueDepth >= 1)
+  require(isPow2(updatePayloadWidth) && updatePayloadWidth <= continuationSize)
+  require(continuationSize % updatePayloadWidth == 0)
+  val updateSlotCount = continuationSize / updatePayloadWidth
+  require(isPow2(updateSlotCount))
+  require(
+    updateOffsetWidth == log2Ceil(updateSlotCount),
+    s"updateOffsetWidth=$updateOffsetWidth, expected ${log2Ceil(updateSlotCount)} " +
+      s"for continuationSize=$continuationSize/updatePayloadWidth=$updatePayloadWidth"
+  )
 
   val serverTagWidth = math.max(1, log2Ceil(nServers))
   val laneWidth = ArgumentNotifierHelpers.laneWidth(newLanesPerServer)
@@ -123,12 +136,6 @@ case class ArgumentNetworksConfig(
     wId = 0,
     read = false
   )
-  val cfgAxiUpdate = axi4.Config(
-    wAddr = sysAddressWidth,
-    wData = updateDataWidth,
-    wId = 0,
-    read = false
-  )
 }
 
 /** An explicitly tagged update routed directly or through the redirect ring. */
@@ -138,7 +145,8 @@ class RoutedContinuationUpdate(cfg: ArgumentNetworksConfig) extends Bundle {
     cfg.serverTagWidth,
     cfg.serverIDWidth,
     cfg.laneWidth,
-    cfg.continuationSize
+    cfg.updatePayloadWidth,
+    cfg.updateOffsetWidth
   )
 }
 
@@ -206,7 +214,7 @@ class ArgumentCutLineUnit[T <: Data](gen: T, priority: Int) extends Module {
   when(selected.fire) {
     priorityReg := Mux(priorityReg === 0.U, priority.U, priorityReg - 1.U)
   }
-  io.lineOut <> Queue(selected, 2)
+  io.lineOut <> BankedQueue.sourceBuffer(selected, 2)
 }
 
 /** Cut collection network used for slow updates and eviction notifications.
@@ -232,7 +240,9 @@ class ArgumentCutDemuxNetwork[T <: Data](
   })
 
   private val sourceQs = Seq.fill(sourceCount)(
-    Module(new Queue(chiselTypeOf(io.sources(0).bits), sourceQueueDepth))
+    Module(
+      new BankedQueue(chiselTypeOf(io.sources(0).bits), sourceQueueDepth)
+    )
   )
   io.sources.zip(sourceQs).foreach { case (source, q) => q.io.enq <> source }
 
@@ -245,7 +255,12 @@ class ArgumentCutDemuxNetwork[T <: Data](
   }
 
   private val perCutSinkQs = Seq.fill(cutCount, sinkCount)(
-    Module(new Queue(chiselTypeOf(io.sources(0).bits), perCutSinkQueueDepth))
+    Module(
+      new BankedQueue(
+        chiselTypeOf(io.sources(0).bits),
+        perCutSinkQueueDepth
+      )
+    )
   )
 
   for ((indices, cut) <- groups.zipWithIndex) {
@@ -288,13 +303,11 @@ class ArgumentCutDemuxNetwork[T <: Data](
       perCutSinkQs(0)(sinkIndex).io.deq :=> io.sinks(sinkIndex)
     } else {
       val arb = Module(
-        new elastic.BasicArbiter(
+        new BankedRRArbiter(
           chiselTypeOf(io.sources(0).bits),
-          cutCount,
-          chooserFn = elastic.Chooser.rr
+          cutCount
         )
       )
-      arb.io.select.deq()
       for (cut <- 0 until cutCount) {
         perCutSinkQs(cut)(sinkIndex).io.deq :=> arb.io.sources(cut)
       }
@@ -365,61 +378,6 @@ class NewContinuationBridge(cfg: ArgumentNetworksConfig, serverIndex: Int)
   io.continuationOut <> continuationQ.io.deq
 }
 
-/** Replaces the WriteROB of an update-source PE's argOut WriteBuffer. The
-  * child's narrow argument write is widened into a full-line, bit-strobed
-  * continuation update: its ContinuationReference arrives on a separate,
-  * traceable channel; the AXI address contributes only the in-line byte offset
-  * used to shift data and strobe into position, and the B response is returned
-  * when the update is accepted downstream. Assumes each child issues exactly
-  * ONE such write per continuation (one write == one counter decrement).
-  */
-class ContinuationUpdateBridge(cfg: ArgumentNetworksConfig) extends Module {
-  import cfg._
-
-  val io = IO(new Bundle {
-    val from_master = axi4.Slave(cfgAxiUpdate)
-    val continuationIn = Flipped(Decoupled(referenceType))
-    val updateOut = Decoupled(new RoutedContinuationUpdate(cfg))
-  })
-
-  private val s = io.from_master.asFull
-
-  private val joined = Wire(Decoupled(new RoutedContinuationUpdate(cfg)))
-  new elastic.Join(joined) {
-    protected def onJoin: Unit = {
-      val aw = join(s.aw)
-      val w = join(s.w)
-      val continuation = join(io.continuationIn)
-
-      val byteOffset = aw.addr(lineShift - 1, 0)
-      val bitShift = byteOffset ## 0.U(3.W)
-
-      out.upd.metadata := continuation.metadata
-      out.upd.address := continuation.address
-      out.upd.dataWrite :=
-        (w.data.pad(continuationSize) << bitShift)(continuationSize - 1, 0)
-      out.upd.dataWriteStrobe :=
-        (FillInterleaved(8, w.strb).pad(continuationSize) << bitShift)(
-          continuationSize - 1,
-          0
-        )
-    }
-  }
-
-  private val bQ = Module(new Queue(Bool(), 4))
-
-  io.updateOut.valid := joined.valid && bQ.io.enq.ready
-  io.updateOut.bits := joined.bits
-  joined.ready := io.updateOut.ready && bQ.io.enq.ready
-  bQ.io.enq.valid := io.updateOut.fire
-  bQ.io.enq.bits := true.B
-
-  s.b.bits := DontCare
-  s.b.bits.resp := axi4.ResponseFlag.OKAY
-  s.b.valid := bQ.io.deq.valid
-  bQ.io.deq.ready := s.b.ready
-}
-
 /** Adapts one completed-continuation lane to one independent scheduler-ring
   * client. No arbitration belongs here: preserving one adapter per cache lane
   * is what lets separately configured lanes enter the ring at different points.
@@ -436,14 +394,15 @@ class SpawnLaneAdapter(taskWidth: Int) extends Module {
   rTaskCount.noInc()
   rTaskCount.noDec()
 
-  new elastic.Arrival(io.spawnIn, io.connStealNtw.data.qOutTask) {
-    protected def onArrival: Unit = {
-      when(rTaskCount.notFull) {
-        rTaskCount.inc()
-        out := in
-        accept()
-      }
-    }
+  private val spawnBuffer = Module(new BankedQueue(UInt(taskWidth.W), 2))
+  spawnBuffer.io.deq <> io.connStealNtw.data.qOutTask
+  spawnBuffer.io.enq.valid := false.B
+  spawnBuffer.io.enq.bits := io.spawnIn.bits
+  io.spawnIn.ready := false.B
+  when(io.spawnIn.valid && spawnBuffer.io.enq.ready && rTaskCount.notFull) {
+    spawnBuffer.io.enq.valid := true.B
+    io.spawnIn.ready := true.B
+    rTaskCount.inc()
   }
 
   io.connStealNtw.ctrl.stealReq.valid := false.B
@@ -470,9 +429,8 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     */
   val m_continuation = IO(Vec(nSourcePEs, Decoupled(referenceType)))
 
-  /** Per update-source PE: one internal, continuation-width update packet. This
-    * is intentionally not AXI; its complete data and bit-strobe fields make the
-    * packet wider than 1024 bits for a 512-bit continuation.
+  /** Per update-source PE: one compact OR-update packet. This is intentionally
+    * not AXI; narrow payloads stay narrow through routing and arbitration.
     */
   val s_update = IO(
     Vec(
@@ -484,7 +442,8 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
             serverTagWidth,
             serverIDWidth,
             laneWidth,
-            continuationSize
+            updatePayloadWidth,
+            updateOffsetWidth
           )
         )
       )
@@ -553,7 +512,9 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
         updateLanesPerServer + 1, // +1: lane fed from the redirect ring
         serverIndex = serverIndex,
         cacheDelayCycles = cacheDelayCycles,
-        missedUpdateExtra = missedUpdateExtra
+        missedUpdateExtra = missedUpdateExtra,
+        updatePayloadWidth = updatePayloadWidth,
+        updateOffsetWidth = updateOffsetWidth
       )
     )
   }
@@ -589,13 +550,11 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       wrongInputs(0) :=> wrongOut
     } else {
       val wrongArb = Module(
-        new elastic.BasicArbiter(
+        new BankedRRArbiter(
           new RoutedContinuationUpdate(cfg),
-          updateLanesPerServer,
-          chooserFn = elastic.Chooser.rr
+          updateLanesPerServer
         )
       )
-      wrongArb.io.select.deq()
       wrongInputs.zip(wrongArb.io.sources).foreach { case (in, source) =>
         in :=> source
       }
@@ -624,12 +583,12 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       out.ready := !out.valid || Mux(isLocal, direct.ready, wrong.ready)
     }
 
-    elastic.SourceBuffer(wrongOut, ringInjectQueueDepth) :=>
+    BankedQueue.sourceBuffer(wrongOut, ringInjectQueueDepth) :=>
       updateRingNodes(s).io.inject
 
     // Ring tap feeds the server's extra (last) update lane.
     new elastic.Transform(
-      elastic.SourceBuffer(updateRingNodes(s).io.tap, 2),
+      BankedQueue.sourceBuffer(updateRingNodes(s).io.tap, 2),
       servers(s).io.contUpdateInput(updateLanesPerServer)
     ) {
       protected def onTransform: Unit = {
@@ -689,13 +648,11 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       servers(s).io.coupledSlowPath(0) :=> selected
     } else {
       val arb = Module(
-        new elastic.BasicArbiter(
+        new BankedRRArbiter(
           coupledType,
-          newLanesPerServer,
-          chooserFn = elastic.Chooser.rr
+          newLanesPerServer
         )
       )
-      arb.io.select.deq()
       servers(s).io.coupledSlowPath.zip(arb.io.sources).foreach {
         case (output, input) => output :=> input
       }
@@ -873,7 +830,8 @@ object ArgumentNetworksEmitter extends App {
         realAddressWidth = 34,
         serverIDWidth = 6,
         continuationSize = 256,
-        updateDataWidth = 32
+        updatePayloadWidth = 32,
+        updateOffsetWidth = 3
       )
     ),
     Array(

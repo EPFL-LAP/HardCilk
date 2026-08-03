@@ -3,6 +3,10 @@
 #include <ap_int.h>
 #include <stdint.h>
 
+// HARDCILK_HLS_FLOW_TARGET_VIVADO: memReader
+// Vitis kernel flow folds scalar ap_none ports into AXI-Lite; the Vivado IP
+// flow preserves peIndex as the discrete constant input driven by HardCilk.
+
 // Optional emulation-only memReader congestion injection; default is functionally
 // identical to an unconditional blocking taskIn.read().
 #ifndef CONGESTION_INJECT
@@ -39,8 +43,8 @@ void taskAdder_cont0(
   (args.i++);
 
   taskInitiator_reentry0_task taskInitiator_reentry0_args0;
-  taskInitiator_reentry0_args0._cont = args._cont;
-  taskInitiator_reentry0_args0.continuation_meta = args.continuation_meta;
+  taskInitiator_reentry0_args0.affinity = args.index;
+  taskInitiator_reentry0_args0._affinity_pad = 0;
   taskInitiator_reentry0_args0.A = args.A;
   taskInitiator_reentry0_args0.count = count;
   taskInitiator_reentry0_args0.count_final = args.count_final;
@@ -50,6 +54,7 @@ void taskAdder_cont0(
 }
 void memReader(
     void *mem,
+    ap_uint<4> peIndex,
     hls::stream<memReader_task> &taskIn,
 #if COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER
     hls::stream<uint64_t> &argOut,
@@ -59,13 +64,16 @@ void memReader(
 #endif
 {
 
+#pragma HLS INTERFACE mode = ap_none port = peIndex
 #pragma HLS INTERFACE mode = axis port = taskIn
 #pragma HLS INTERFACE mode = axis port = argOut
 #if COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER
 #pragma HLS INTERFACE mode = axis register_mode = off port = argDataOut
 #endif
-#pragma HLS INTERFACE mode = m_axi port = mem max_widen_bitwidth=256
+#pragma HLS INTERFACE mode = m_axi port = mem offset = off max_widen_bitwidth=256 bundle=gmem
+#ifdef USE_CACHE
 #pragma HLS cache port=mem lines=2048 depth=32 // 64 KB. VCD-measured memReader working set ~529 instances / max reuse 519 -> 512 lines thrashed (capacity+direct-mapped conflicts from the idx spread). 2048 gives 4x headroom and doubles the conflict period. depth=32B = one 256-bit beat/line
+#endif
 #pragma HLS INTERFACE ap_ctrl_none port = return
 #pragma HLS PIPELINE II = 1 style = flp
 
@@ -84,24 +92,29 @@ void memReader(
 
   if (got)
   {
+    // Scheduler affinity is carried in the otherwise-zero low nibble of _cont.
+    // The continuation value field is 16-byte aligned, and keeping metadata at
+    // bits [95:64] preserves the fixed released-child ABI.
+    constexpr addr_t affinityMask = 0xf;
+    const addr_t continuationAddress = args._cont & ~affinityMask;
 #if COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER
     uint32_t_arg_out update;
-    update.addr = args._cont;
+    update.addr = continuationAddress;
     update.data = MEM_ARR_IN(mem, args.mem, args.idx, int);
     update.size = 2;
     update.allow = 1;
     argDataOut.write(update);
-    argOut.write(args._cont);
+    argOut.write(continuationAddress);
 #else
+    constexpr unsigned indexBit = offsetof(taskAdder_cont0_task, index) * 8;
     constexpr unsigned valueBit = offsetof(taskAdder_cont0_task, value) * 8;
     taskAdder_cont0_argument_update update;
-    update.address = args._cont;
+    update.address = continuationAddress;
     update.continuation_meta = args.continuation_meta;
-    update.dataWrite = 0;
-    update.dataWrite.range(valueBit + 31, valueBit) =
+    update.payload = 0;
+    update.payload.range(indexBit + 3, indexBit) = peIndex;
+    update.payload.range(valueBit + 31, valueBit) =
         MEM_ARR_IN(mem, args.mem, args.idx, int);
-    update.dataWriteStrobe = 0;
-    update.dataWriteStrobe.range(valueBit + 31, valueBit) = ap_uint<32>(-1);
     argOut.write(update);
 #endif
   }
@@ -129,8 +142,6 @@ void taskInitiator_reentry0(
   {
     uint32_t SN_taskAdder_cont0c_cnt = 1;
     taskAdder_cont0_task SN_taskAdder_cont0c;
-    SN_taskAdder_cont0c._cont = args._cont;
-    SN_taskAdder_cont0c.continuation_meta = args.continuation_meta;
     SN_taskAdder_cont0c._counter = SN_taskAdder_cont0c_cnt;
     addr_t SN_taskAdder_cont0c_k = closureIn.read();
 
@@ -139,6 +150,7 @@ void taskInitiator_reentry0(
     SN_taskAdder_cont0c.count = args.count;
     SN_taskAdder_cont0c.count_final = args.count_final;
     SN_taskAdder_cont0c.A = args.A;
+    SN_taskAdder_cont0c.index = 0;
     SN_taskAdder_cont0c._value_pad = 0;
     SN_taskAdder_cont0c.value = 0;
     taskAdder_cont0_spawn_next SN_taskAdder_cont0;
@@ -149,7 +161,11 @@ void taskInitiator_reentry0(
     spawnNext.write(SN_taskAdder_cont0);
 
     memReader_task memReader_args2;
-    memReader_args2._cont = SN_taskAdder_cont0c_k + offsetof(taskAdder_cont0_task, value);
+    constexpr addr_t affinityMask = 0xf;
+    const addr_t continuationAddress =
+        SN_taskAdder_cont0c_k + offsetof(taskAdder_cont0_task, value);
+    memReader_args2._cont =
+        continuationAddress | (addr_t(args.affinity) & affinityMask);
     // The spawnNext write buffer replaces this with the metadata assigned by
     // NewArgumentNotifier before releasing the child.
     memReader_args2.continuation_meta = 0;

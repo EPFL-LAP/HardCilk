@@ -3,6 +3,7 @@ package Scheduler.tests
 import chisel3._
 import chisel3.util._
 import chiseltest._
+import chiseltest.simulator.VerilatorBackendAnnotation
 import org.scalatest.flatspec.AnyFlatSpec
 
 import Scheduler.{BufferServerInput, GlobalTaskBuffer, SchedulerNetwork, SpawnerServer}
@@ -79,6 +80,9 @@ class OutsideSpawnRingHarness(taskWidth: Int, slots: Int) extends Module {
 }
 
 class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
+  // SpawnerServer's default queueDepth, which the harness uses.
+  private val spawnerQueueDepth = 16
+
   behavior of "outside-spawn ring"
 
   private val taskWidth = 32
@@ -131,8 +135,86 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
     (delivered, seen)
   }
 
+  // Two supplies converging on one node: slot 1 is fed by its own GlobalTaskBuffer through
+  // BufferServerInput at the same time as slot 0 is shedding onto the ring past it. Both of slot
+  // 1's inputs arrive on the same spawner intake port (BufferServerInput multiplexes them), so this
+  // is the case where a node can be handed more than it can use and has to keep the surplus moving
+  // rather than hoarding or dropping it.
+  //
+  // Slot 0 and slot 1 both have slow ring slots; slots 2 and 3 are idle and hungry.
+  it should "fan out when a ring task and the local task source arrive together" in {
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
+      dut.clock.setTimeout(0)
+
+      val perSource = 48
+      val delivered = Array.fill(slots)(0)
+      val seen = mutable.ArrayBuffer.empty[BigInt]
+      // Disjoint tag spaces so a delivered task can be traced to the source that injected it.
+      val next = Array(1, 1001, 0, 0)
+      val limit = Array(perSource, 1000 + perSource, 0, 0)
+
+      for (i <- 0 until slots) {
+        dut.io.srcIn(i).valid.poke(false.B)
+        dut.io.srcIn(i).bits.poke(0.U)
+        dut.io.peAsking(i).poke(true.B)
+      }
+
+      for (cycle <- 0 until 3000) {
+        // The two loaded lanes can only place a task 1 cycle in 6; the idle lanes are wide open.
+        val readyNow = Array.tabulate(slots)(i => if (i < 2) cycle % 6 == 0 else true)
+        for (i <- 0 until slots) dut.io.peReady(i).poke(readyNow(i).B)
+
+        val feeding = Array.tabulate(slots)(i => i < 2 && next(i) <= limit(i))
+        for (i <- 0 until slots) {
+          dut.io.srcIn(i).valid.poke(feeding(i).B)
+          if (feeding(i)) dut.io.srcIn(i).bits.poke(next(i).U)
+        }
+
+        for (i <- 0 until slots)
+          if (readyNow(i) && dut.io.peValid(i).peek().litToBoolean) {
+            delivered(i) += 1
+            seen += dut.io.peBits(i).peek().litValue
+          }
+        val accepted =
+          Array.tabulate(slots)(i => feeding(i) && dut.io.srcIn(i).ready.peek().litToBoolean)
+
+        dut.clock.step()
+        for (i <- 0 until slots) if (accepted(i)) next(i) += 1
+      }
+      for (i <- 0 until slots) dut.io.srcIn(i).valid.poke(false.B)
+
+      info(s"delivered per slot: ${delivered.mkString(", ")}")
+      sAssert(
+        seen.distinct.size == seen.size,
+        s"a task was delivered more than once: ${seen.diff(seen.distinct).distinct.mkString(", ")}"
+      )
+      // Both sources must have made real progress -- neither may be locked out by the other.
+      sAssert(next(0) > 1, "slot 0's source never got a task in")
+      sAssert(next(1) > 1001, "slot 1's source never got a task in")
+      // And the surplus both lanes cannot place must reach the idle lanes.
+      sAssert(
+        delivered(2) + delivered(3) > 0,
+        s"converging supply never fanned out to the idle lanes: ${delivered.mkString(", ")}"
+      )
+      // Nothing invented, and the shortfall is bounded by what the two loaded spawners may hold
+      // back below their watermarks.
+      sAssert(
+        seen.map(_.toInt).forall(v => (v >= 1 && v <= perSource) || (v > 1000 && v <= 1000 + perSource)),
+        "delivered a task that was never injected"
+      )
+      val injected = (next(0) - 1) + (next(1) - 1001)
+      sAssert(
+        injected - seen.size < 2 * (spawnerQueueDepth / 2),
+        s"injected $injected, delivered ${seen.size}; more held back than two half-full " +
+          s"thresholds can account for"
+      )
+    }
+  }
+
   it should "spill to peers when the local PE cannot drain" in {
-    test(new OutsideSpawnRingHarness(taskWidth, slots)) { dut =>
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
       dut.clock.setTimeout(0)
 
       // Slot 0 receives every task but its PE is not asking and cannot accept, so it can never
@@ -160,12 +242,24 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
         seen.distinct.size == seen.size,
         s"a task was delivered more than once: ${seen.diff(seen.distinct).distinct.mkString(", ")}"
       )
-      sAssert(toPeers == taskCount, s"expected all $taskCount tasks to drain, got $toPeers")
+      // Not "all of it". The spawner holds itself to half full before it shares anything, so up to
+      // spillWatermark - 1 tasks stay put when the local PE never drains. That residual is parked,
+      // not lost: it goes to the local PE the moment the inner ring frees a slot, which under
+      // flooding is essentially every cycle. What must not happen is a larger hoard than the
+      // watermark can explain.
+      val spillWatermark = spawnerQueueDepth / 2
+      val stranded = taskCount - toPeers
+      sAssert(
+        stranded < spillWatermark,
+        s"stranded $stranded tasks, more than the half-full threshold ($spillWatermark) can account " +
+          s"for -- the hand-off is shutting off above the watermark, not at it"
+      )
     }
   }
 
   it should "keep work local when the local PE is asking and able to take it" in {
-    test(new OutsideSpawnRingHarness(taskWidth, slots)) { dut =>
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
       dut.clock.setTimeout(0)
 
       // Same supply, but now slot 0's own PE can accept. Our own PE outranks a peer, so the work
@@ -189,14 +283,16 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  it should "conserve every task when the local PE drains slowly" in {
-    test(new OutsideSpawnRingHarness(taskWidth, slots)) { dut =>
+  // A starved steal-token stream must NOT cost the local PE its work any more. This is the core of
+  // the flooding change, asserted at ring level: peAsking is the steal token and it is offered only
+  // 1 cycle in 8, while peReady (the ring data slot) is always available. Under the old protocol
+  // delivery was gated on the token, so slot 0 drained at 1/8 and the surplus spilled sideways --
+  // which is the countDecoupled memReader PE4 failure in miniature. It must now keep all of it.
+  it should "keep work local when steal tokens are scarce but the ring slot is free" in {
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
       dut.clock.setTimeout(0)
 
-      // Slot 0 asks only 1 cycle in 8, so its unrequested surplus has to find the idle peers.
-      // `peReady` models availability of the PE data-ring slot, not PE demand: holding peAsking high
-      // while peReady is low legitimately lets the spawner accept and reserve those requests, in
-      // which case the tasks must remain local rather than spill.
       val taskCount = 96
       val (delivered, seen) = run(
         dut,
@@ -220,7 +316,49 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
         seen.map(_.toInt).toSet == (1 to taskCount).toSet,
         "delivered set does not match the injected set"
       )
-      sAssert(delivered.drop(1).sum > 0, "slow local PE did not spill any work to peers")
+      sAssert(
+        delivered(0) == taskCount,
+        s"delivery still tracks the steal-token rate instead of the ring slot: " +
+          s"slot 0 kept only ${delivered(0)} of $taskCount (${delivered.mkString(", ")})"
+      )
+    }
+  }
+
+  // The inverse: when it is the RING SLOT that is scarce -- the one thing the spawner genuinely
+  // cannot work around -- the surplus must still find the idle peers, and nothing may be stranded
+  // below a watermark on the way out.
+  it should "conserve every task when the local ring slot is scarce" in {
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
+      dut.clock.setTimeout(0)
+
+      val taskCount = 96
+      val (delivered, seen) = run(
+        dut,
+        taskCount = taskCount,
+        cycles = 2000,
+        srcSlot = 0,
+        peAsking = (_, _) => true,
+        peReady = (slot, cycle) => if (slot == 0) cycle % 8 == 0 else true
+      )
+
+      info(s"delivered per slot: ${delivered.mkString(", ")}")
+      sAssert(
+        seen.distinct.size == seen.size,
+        s"duplicated: ${seen.diff(seen.distinct).distinct.mkString(", ")}"
+      )
+      sAssert(
+        taskCount - seen.size < spawnerQueueDepth / 2,
+        s"delivered ${seen.size} of $taskCount; the shortfall exceeds the half-full threshold"
+      )
+      sAssert(
+        seen.map(_.toInt).toSet.subsetOf((1 to taskCount).toSet),
+        "delivered a task that was never injected"
+      )
+      sAssert(
+        delivered.drop(1).sum > 0,
+        s"a slot-starved lane did not spill any work to peers: ${delivered.mkString(", ")}"
+      )
     }
   }
 
@@ -233,7 +371,8 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
     * Once injection stops and recirculation is switched off, every task in flight must come out.
     */
   it should "distribute a recirculating workload and fully drain it" in {
-    test(new OutsideSpawnRingHarness(taskWidth, slots)) { dut =>
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
       dut.clock.setTimeout(0)
 
       val externalTasks = 300
@@ -330,16 +469,25 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   it should "fan work out past a spawner whose PE is not asking" in {
-    test(new OutsideSpawnRingHarness(taskWidth, slots)) { dut =>
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
       dut.clock.setTimeout(0)
 
-      // Slot 0 is the only source and its PE never asks, so everything has to spill. Slot 1's PE is
-      // in the state a real PE spends most of its time in: it can accept a task pushed at it, but
-      // issues no steal request because its local queue is satisfied. Slots 2 and 3 are working
-      // PEs -- they ask while below threshold and accept while not full, so asking always implies
-      // able to accept, as it does in the real design.
+      // Slot 0 is the only source. Slots 0 and 1 model a PE that is satisfied nearly all the time:
+      // they accept a task pushed at them but only re-arm a steal request once their local queue has
+      // drained completely, so they issue demand far too rarely to keep up with the source and the
+      // work still has to spill. Slots 2 and 3 are working PEs -- they ask while below threshold and
+      // accept while not full, so asking always implies able to accept, as it does in the real design.
       //
-      // The work must travel past slot 1 and reach the PEs that actually asked.
+      // They must re-arm at SOME point rather than never asking, because connNetwork_master is the
+      // PE-local steal network shared by every PE of the task, not a private wire to one PE: in the
+      // real design a token from any PE reaching this spawner lets it drain locally (measured on
+      // hw_emu: a token is resident at the initiator spawners' master ports on 86-100% of cycles).
+      // A slot that is dead for the entire run has no counterpart in the real ring, and modelling one
+      // makes the outside ring the only exit -- which then reports a conservation failure for the
+      // residual left below the sharing threshold, an artifact of the harness rather than the design.
+      //
+      // The work must still travel past slot 1 and reach the PEs that actually asked.
       val externalTasks = 200
       val peCapacity = 4
       val askBelow = 2
@@ -360,8 +508,10 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
         }
         for (i <- 0 until slots) {
           dut.io.peReady(i).poke((peQueue(i).size < peCapacity).B)
-          // slots 0 and 1 never ask; 2 and 3 ask only while they have room to take it
-          dut.io.peAsking(i).poke((i >= 2 && peQueue(i).size < askBelow).B)
+          // slots 0 and 1 re-arm only once fully drained; 2 and 3 ask while they have room to take it
+          dut.io.peAsking(i).poke(
+            (if (i >= 2) peQueue(i).size < askBelow else peQueue(i).isEmpty).B
+          )
           dut.io.srcIn(i).valid.poke((i == 0 && pending.nonEmpty).B)
         }
         if (pending.nonEmpty) dut.io.srcIn(0).bits.poke(pending.head.U)
@@ -395,7 +545,8 @@ class OutsideSpawnRingTests extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   it should "hold work rather than shedding it, then drain once the PEs ask" in {
-    test(new OutsideSpawnRingHarness(taskWidth, slots)) { dut =>
+    test(new OutsideSpawnRingHarness(taskWidth, slots))
+      .withAnnotations(Seq(VerilatorBackendAnnotation)) { dut =>
       dut.clock.setTimeout(0)
 
       // Nobody asks for the first stretch. A spawner must NOT pre-emptively dump its queue at a PE

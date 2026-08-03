@@ -108,9 +108,18 @@ void hardCilkDriver::saveTerminalState()
 
 void hardCilkDriver::restoreTerminalState()
 {
-    // Async-signal-safe enough for the force path: tcsetattr is a single syscall.
-    if (g_savedTermiosValid)
-        tcsetattr(STDIN_FILENO, TCSANOW, &g_savedTermios);
+    if (!g_savedTermiosValid)
+        return;
+    // tcsetattr from a BACKGROUND process group raises SIGTTOU, whose default
+    // action STOPS the process. That is not hypothetical: rebuild_and_run.sh runs
+    // the host under `timeout`, which puts its child in its own process group --
+    // so the un-ignored call froze the host (state T) one line before _exit, with
+    // the runner script waiting on it forever and Ctrl-C powerless (a stopped
+    // process runs no handlers). With SIGTTOU ignored, POSIX lets tcsetattr
+    // proceed from a background group. We only run on exit paths, so leaving it
+    // ignored afterwards is fine.
+    std::signal(SIGTTOU, SIG_IGN);
+    tcsetattr(STDIN_FILENO, TCSANOW, &g_savedTermios);
 }
 
 hardCilkDriver::hardCilkDriver(Memory *memory)
@@ -176,18 +185,24 @@ void hardCilkDriver::installSignalHandlers()
 
 void hardCilkDriver::terminateSimulator(int sig)
 {
-    // Under XCL_EMULATION_MODE=hw_emu the Xilinx simulator (xsim + xsimk) runs as
-    // a CHILD of this host process. Because the watcher CU is ap_ctrl_none it
-    // never halts, so `run all` never returns and a forced _exit() would ORPHAN
-    // the simulator -- it keeps running and pins gigabytes of deleted /tmp .vcd
-    // files. Walk /proc, collect (pid -> ppid, comm), then kill the descendants
-    // of OUR pid whose executable is xsim/xsimk. Scoped strictly to our own
-    // descendants so a co-user's or unrelated simulation is never touched.
+    // Under XCL_EMULATION_MODE=hw_emu the Xilinx simulator runs as a CHAIN of
+    // child processes of this host (launcher -> bash xsim wrapper -> loader ->
+    // xsim -> xsimk). Because the watcher CU is ap_ctrl_none it never halts, so
+    // `run all` never returns and a forced _exit() would ORPHAN that chain -- it
+    // keeps running and pins gigabytes of deleted /tmp .vcd files. Kill the
+    // ENTIRE descendant tree, not just the processes literally named xsim*: the
+    // wrapper links (comm = bash/loader) inherit our stdout/stderr, so when the
+    // host runs under `exec > >(tee log)` (rebuild_and_run.sh) any survivor holds
+    // the pipe open, tee never sees EOF, and the script hangs after our exit
+    // message -- un-Ctrl-C-able, since the chain also inherited SIG_IGN for
+    // SIGINT. Everything below this host IS emulator infrastructure, and on real
+    // hardware there are no descendants at all, so a full-tree kill is safe.
+    // Scoped strictly to our own descendants so a co-user's or unrelated
+    // simulation is never touched.
     DIR *dir = opendir("/proc");
     if (dir == nullptr)
         return;
     std::map<pid_t, pid_t> ppidOf;
-    std::map<pid_t, std::string> commOf;
     for (struct dirent *ent = readdir(dir); ent != nullptr; ent = readdir(dir))
     {
         char *endp = nullptr;
@@ -198,10 +213,7 @@ void hardCilkDriver::terminateSimulator(int sig)
         pid_t ppid = 0;
         std::string comm;
         if (readProcStat(pid, ppid, comm))
-        {
             ppidOf[pid] = ppid;
-            commOf[pid] = comm;
-        }
     }
     closedir(dir);
 
@@ -222,11 +234,7 @@ void hardCilkDriver::terminateSimulator(int sig)
     }
 
     for (pid_t p : descendants)
-    {
-        // "xsim" also matches "xsimk" (the kernel simulator worker).
-        if (commOf[p].find("xsim") != std::string::npos)
-            ::kill(p, sig);
-    }
+        ::kill(p, sig); // whole tree -- see comment above
 }
 
 void hardCilkDriver::startInterruptSupervisor()

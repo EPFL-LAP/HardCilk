@@ -94,7 +94,7 @@ class EvictionGater(
   private val doneCounts =
     RegInit(VecInit(Seq.fill(nEvictionSaverLanes)(0.U(counterWidth.W))))
   private val slowRequestQ = Module(
-    new Queue(sequencedUpdateType, slowRequestDepth)
+    new BankedQueue(sequencedUpdateType, slowRequestDepth)
   )
 
   private val needsEviction = io.coupledIn.bits.evictionValid

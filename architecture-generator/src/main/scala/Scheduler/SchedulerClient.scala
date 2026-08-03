@@ -27,7 +27,11 @@ class SchedulerClient(
     minLengthThresh: Int,
     maxLengthThresh: Int,
     networkLength: Int,
-    vssIgnoresRequests: Boolean
+    vssIgnoresRequests: Boolean,
+    thisPeIndex: Int = 0,
+    // 0 = does not use affinity, default
+    affinityQueueLength: Int = 0,
+    affinityTagBits: Int = 0
 ) extends Module {
   val io = IO(
     new SchedulerClientIO(taskWidth, queueMaxLength, vssIgnoresRequests)
@@ -35,6 +39,7 @@ class SchedulerClient(
 
   if (vssIgnoresRequests) {
     require(io.connQ.isDefined)
+    require(affinityQueueLength == 0)
 
     object state extends ChiselEnum {
       val init = Value(0.U)
@@ -185,7 +190,20 @@ class SchedulerClient(
     val taskQueue = Module(
       new Queue(UInt(taskWidth.W), queueMaxLength)
     )
-    val countWidth = log2Ceil(queueMaxLength * 2 + 1) + 1
+    require(affinityQueueLength >= 0)
+    val affinityQueue = affinityQueueLength match {
+      case 0 => None
+      case x => Some(Module(new Queue(UInt(taskWidth.W), x)))
+    }
+    // 32 bits, not log2Ceil(queueMaxLength * 2 + 1) + 1.
+    //
+    // The old width was sized as though desiredSteals were bounded by the queue, which held only
+    // while every arrival was one-for-one with a request we had sent. The spawner now floods the
+    // ring, so a task can land here that we never asked for: each one is a free +1 through peDidPop
+    // with no matching send to spend it. At the old 6 bits (signed, -32..+31) that walks off the
+    // top after ~31 net unrequested arrivals, wraps to -32, and the client stops asking for the
+    // rest of the run -- the exact silent death this whole change exists to remove.
+    val countWidth = 32
 
     // At the start, we want to fill up to the min steal threshold. We only pull
     // from the ring up to `min` and leave any surplus stealable; locally spawned
@@ -220,10 +238,60 @@ class SchedulerClient(
     val consumedTaskFromRing = Wire(Bool())
     io.connNetwork.data.availableTask.ready := false.B
     consumedTaskFromRing := io.connNetwork.data.availableTask.valid && io.connNetwork.data.availableTask.ready
-    when(taskQueue.io.count < minLengthThresh.U && !io.toPE.get.push.valid) {
-      io.connNetwork.data.availableTask.ready := taskQueue.io.enq.ready
-      taskQueue.io.enq.bits := io.connNetwork.data.availableTask.bits
-      taskQueue.io.enq.valid := io.connNetwork.data.availableTask.valid
+
+    val didAddToAffinityQueue = Wire(Bool())
+    didAddToAffinityQueue := false.B
+    val didRemoveFromAffinityQueue = Wire(Bool())
+    didRemoveFromAffinityQueue := false.B
+
+    if (!affinityQueue.isDefined) {
+      when(taskQueue.io.count < minLengthThresh.U && !io.toPE.get.push.valid) {
+        io.connNetwork.data.availableTask.ready := taskQueue.io.enq.ready
+        taskQueue.io.enq.bits := io.connNetwork.data.availableTask.bits
+        taskQueue.io.enq.valid := io.connNetwork.data.availableTask.valid
+      }
+    } else {
+      require(affinityTagBits > 0 && affinityTagBits < taskWidth)
+      require(
+        thisPeIndex >= 0 && BigInt(thisPeIndex) < (BigInt(1) << affinityTagBits)
+      )
+
+      affinityQueue.get.io.enq.valid := false.B
+      affinityQueue.get.io.enq.bits := 0.U
+      affinityQueue.get.io.deq.ready := false.B
+
+      class TaskWithAffinity extends Bundle {
+        val remainder = UInt((taskWidth - affinityTagBits).W)
+        val affinity = UInt(affinityTagBits.W)
+      }
+
+      val affinityCast =
+        io.connNetwork.data.availableTask.bits.asTypeOf(new TaskWithAffinity)
+
+      when(taskQueue.io.count < minLengthThresh.U && !io.toPE.get.push.valid) {
+        when(affinityQueue.get.io.deq.valid) {
+          // Drain affinity queue first
+          io.connNetwork.data.availableTask.ready := false.B
+          affinityQueue.get.io.deq.ready := taskQueue.io.enq.ready
+          taskQueue.io.enq.bits := affinityQueue.get.io.deq.bits
+          taskQueue.io.enq.valid := affinityQueue.get.io.deq.valid
+
+          didRemoveFromAffinityQueue := affinityQueue.get.io.deq.ready & affinityQueue.get.io.deq.valid
+        }.otherwise {
+          io.connNetwork.data.availableTask.ready := taskQueue.io.enq.ready
+          taskQueue.io.enq.bits := io.connNetwork.data.availableTask.bits
+          taskQueue.io.enq.valid := io.connNetwork.data.availableTask.valid
+        }
+
+      }.elsewhen(
+        affinityQueue.get.io.enq.ready && affinityCast.affinity === thisPeIndex.U
+      ) {
+        // Add to the affinity queue
+        affinityQueue.get.io.enq.bits := io.connNetwork.data.availableTask.bits
+        affinityQueue.get.io.enq.valid := io.connNetwork.data.availableTask.valid
+        io.connNetwork.data.availableTask.ready := affinityQueue.get.io.enq.ready
+        didAddToAffinityQueue := affinityQueue.get.io.enq.ready & affinityQueue.get.io.enq.valid
+      }
     }
 
     // When we have extra tasks, we should consume a steal request. The task can be output later.
@@ -285,6 +353,13 @@ class SchedulerClient(
       pushPopNet := -1.S
     }
 
-    desiredSteals := desiredSteals + ringNet + pushPopNet
+    // Affinity Bookkeeping. Technically we don't need to do anything, but we should treat placing into the affinity as an extra consumption (and send out a corresponding steal req)
+    val affinityNet = WireDefault(0.S(countWidth.W))
+    when(didAddToAffinityQueue && !didRemoveFromAffinityQueue) {
+      affinityNet := 1.S
+    }.elsewhen(!didAddToAffinityQueue && didRemoveFromAffinityQueue) {
+      affinityNet := -1.S
+    }
+    desiredSteals := desiredSteals + ringNet + pushPopNet + affinityNet
   }
 }

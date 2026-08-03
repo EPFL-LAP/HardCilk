@@ -24,7 +24,8 @@ object HardCilkEmitter extends App {
           else
             s"${jsonName}_hardcilk_output"
 
-      val systemDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
+      val systemDescriptor =
+        parseJsonFile[FullSysGenDescriptor](cfg.json_path).normalized
 
       // Read system descriptor from JSON
       try {
@@ -76,6 +77,30 @@ object HardCilkEmitter extends App {
             outputDir = xrtDir
           )
           println(s"Emitted kernel.xml + conn cfg to: $xrtDir")
+        }
+
+        if (cfg.questa_generation) {
+          // The QuestaSim project drives the full block design (kernel + Xilinx
+          // HBM IP + a memory VIP) through a SystemC/TLM co-simulated driver.
+          // `numHbmPortExports` is the authoritative count of exported top-level
+          // m_axi masters (compute + any lock/watcher ports, all inclusive), so
+          // the block design wires exactly those and reserves the next HBM slave
+          // port for the memory VIP.
+          val outputDirPathTcl = s"${cfg.output_dir}/$outputDirName/tcl"
+          Files.createDirectories(Paths.get(outputDirPathTcl))
+          require(
+            numHbmPortExports + 1 <= 32,
+            s"QuestaSim HBM port count is ${numHbmPortExports + 1} (design $numHbmPortExports + 1 VIP), " +
+              s"but U55C HBM exposes at most 32 AXI ports."
+          )
+
+          TclResources.TclQuestaSim.generate(
+            fullSysGenDescriptor = systemDescriptor,
+            tclFileDirectory = outputDirPathTcl,
+            reduce_axi = numHbmPortExports
+          )
+
+          println(s"Emitted QuestaSim project (run ./simulate.sh) to: $outputDirPathTcl")
         }
       }
 

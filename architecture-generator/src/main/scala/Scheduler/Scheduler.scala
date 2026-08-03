@@ -76,7 +76,10 @@ class Scheduler(
     override val taskId: Int = 0,
     override val axisCfgTaskAndReq: axi4s.Config =
       axi4s.Config(wData = 512, wDest = 4),
-    enableGlobalStart: Boolean = false
+    enableGlobalStart: Boolean = false,
+    useAffinity: Boolean = false,
+    affinityQueueDepth: Int = 0,
+    affinityTagBits: Int = 0
 ) extends Module
     with SchedulerHasMfpgaSupport {
 
@@ -201,7 +204,10 @@ class Scheduler(
       qRamWriteLatency = 1,
       spawnsItself = spawnsItself,
       successiveNetworkConfig =
-        false // HARDCODED, #TODO: if hardware generation fails with 1 PE, enable this when vsscount > peCount
+        false, // HARDCODED, #TODO: if hardware generation fails with 1 PE, enable this when vsscount > peCount
+      useAffinity = useAffinity,
+      affinityQueueDepth = affinityQueueDepth,
+      affinityTagBits = affinityTagBits
     )
   )
 
@@ -212,14 +218,40 @@ class Scheduler(
         .asInstanceOf[SpawnerServer]
         .io
         .connNetwork_master <> stealNW_TQ.io.connVAS(i)
+      stealNW_TQ.io.vasForceInject(i) :=
+        spawnerServer.get(i).asInstanceOf[SpawnerServer].io.forceInject
     }
   }
 
-  val contentionThreshold_ = (max(
-    (peCount + argRouteServersNumber + peCountGlobalTaskIn) / 1.2,
-    1
-  )).toInt
-  val contentionDelta_ = if (contentionThreshold_ > 4) 1 else 0
+  // Congestion thresholds, expressed against the rolling window (= the ring length), so they keep
+  // their meaning at any ring size. The window holds one -1/0/+1 sample per cycle per ring node.
+  //
+  //   assert when the sum reaches ~82% of the window
+  //   clear  when it falls back to ~59%
+  //
+  // The gap between them is deliberately wide. A narrow one lets the flag drop on the strength of
+  // relief the scheduler itself caused: it starts absorbing, the ring eases, the sum dips a little,
+  // and it flips back to injecting before anything has reached HBM. Since writeCanIssue is gated on
+  // networkCongested, every such flip aborts the spill. For the 17-node countDecoupled ring this is
+  // assert at 14, clear at 10 (it was 14 and 12).
+  //
+  // SchedulerServer takes a midpoint and a delta rather than the two points, so convert -- and clamp
+  // the assert point to peCount + vasCount, which its own require() bounds it by.
+  val contentionWindow_ = schedulerLocalNetworkLength
+  val contentionVasCount_ = argRouteServersNumber + peCountGlobalTaskIn
+  val contentionAssertAt_ =
+    max(min(math.ceil(contentionWindow_ * 0.82).toInt, peCount + contentionVasCount_), 1)
+  val contentionClearAt_ =
+    max(math.floor(contentionWindow_ * 0.59).toInt, 0)
+  // Floor the half-gap at 2 (so assert and clear are at least 4 apart). The proportional gap is
+  // 0.82 - 0.59 = 0.23 of the window, which integer-rounds to 2 on a 9-node ring and lets the flag
+  // drop after a couple of quiet cycles -- measured 22 toggles per run there against 2 on a 17-node
+  // ring. Clamped so the clear point stays non-negative, which SchedulerServer's require() needs.
+  // Half-gap: at least 2 (so assert and clear sit >= 4 apart), but never more than half the assert
+  // point, or the clear point would go negative -- SchedulerServer requires it non-negative.
+  val contentionDelta_ =
+    min(max((contentionAssertAt_ - contentionClearAt_) / 2, 2), contentionAssertAt_ / 2)
+  val contentionThreshold_ = contentionAssertAt_ - contentionDelta_
 
   val schedulerServers = Seq.fill(schedulerServersNumber)(
     Module(
@@ -301,6 +333,7 @@ class Scheduler(
 
   for (i <- 0 until schedulerServersNumber) {
     io_internal.axi_mgmt_vss(i) :=> schedulerServers(i).io.axi_mgmt
+    schedulerServers(i).io.ntwReqArriving := stealNW_TQ.io.ntwReqArrivingVSS(i)
     schedulerServers(i).io.ntwDataUnitOccupancy <> stealNW_TQ.io
       .ntwDataUnitOccupancyVSS(i)
     if (enableGlobalStart)

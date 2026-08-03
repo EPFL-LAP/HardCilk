@@ -25,7 +25,14 @@ class SchedulerServerIO(
   val write_burst_len = Output(UInt(4.W))
   val write_last = Output(UInt(1.W))
   val write_idle = Input(Bool())
+  // Both taps observe the rings as they ENTER this node, not what is resident in its own slots.
+  // ntwDataUnitOccupancy is the task arriving from the upstream data hop; ntwReqArriving is the
+  // request arriving from the upstream ctrl hop. Reading arrivals rather than residency is what
+  // keeps this server's own injections out of its own measurement: a task or request it puts on
+  // the ring is counted once, if and when it comes back around, rather than the instant it is
+  // produced.
   val ntwDataUnitOccupancy = Input(Bool())
+  val ntwReqArriving = Input(Bool())
   // Kernel-global start broadcast (opt-in via enableGlobalStart). Driven by a single
   // host-writable register that fans out to EVERY scheduler server, so all servers
   // leave their initial pause on the SAME cycle instead of one-at-a-time as the host
@@ -245,30 +252,45 @@ class SchedulerServer(
   io.paused := rPause
   io.congested := networkCongested
 
+  // Contention: over the last `contentionRingWindowSize` cycles, how often a task was waiting at
+  // our door with nobody asking for it.
+  //
+  //   +1  a task is waiting and no request is          -> the ring is bringing work nobody wants
+  //   -1  a request is waiting and no task is          -> somebody wants work and none is coming
+  //    0  both or neither                              -> no information
+  //
+  // Both taps watch the UPSTREAM hop of the respective ring, and watch what it is HOLDING rather
+  // than what it manages to hand over. Two consequences, both needed:
+  //
+  //   Our own injections are invisible to us. They land in our own slots, and the ctrl ring
+  //   counter-rotates so our request travels away from our ctrl tap. Either only becomes visible
+  //   after a full rotation -- at which point a request genuinely does mean somebody downstream
+  //   freed a slot, rather than meaning "I just freed one myself by absorbing". Reading our own hop
+  //   instead (serveStealReq.ready) made the detector self-defeating: relieving congestion
+  //   manufactured the evidence that there was none, and since writeCanIssue is gated on the flag,
+  //   it could never hold long enough to issue a spill (measured: 52 toggles in 1200 cycles, 128
+  //   tasks absorbed, zero written back).
+  //
+  //   Holding, not handing over. The forwarding signals are gated on being able to move, so they
+  //   read zero exactly when the ring is jammed -- maximum congestion would look identical to an
+  //   idle ring. Measured with a task waiting at the door on 250 of 250 cycles: the forwarding tap
+  //   saw zero advances and reported no congestion at all.
+  //
+  // Sampled every cycle, deliberately. A task stuck at our door for a hundred cycles is more
+  // congested than one that passes through in one, so dwell-weighting is the right measure here --
+  // and gating the sample on ring movement cannot work, because a jammed ring never moves.
   val contentionSample = WireDefault(0.S(2.W))
 
   if (ignoreRequestSignals) {
-    when(
-      io.ntwDataUnitOccupancy
-    ) {
+    when(io.ntwDataUnitOccupancy) {
       contentionSample := 1.S
-    }.elsewhen(
-      !io.ntwDataUnitOccupancy
-    ) {
+    }.otherwise {
       contentionSample := -1.S
     }
   } else {
-    val stealReqPressure =
-      io.connNetwork.ctrl.serveStealReq.ready || stealReqInjectedThisCycle
-    when(
-      !stealReqPressure &&
-        io.ntwDataUnitOccupancy
-    ) {
+    when(!io.ntwReqArriving && io.ntwDataUnitOccupancy) {
       contentionSample := 1.S
-    }.elsewhen(
-      stealReqPressure &&
-        !io.ntwDataUnitOccupancy
-    ) {
+    }.elsewhen(io.ntwReqArriving && !io.ntwDataUnitOccupancy) {
       contentionSample := -1.S
     }
   }
@@ -360,8 +382,21 @@ class SchedulerServer(
   // ---------------------------------------------------------------------------
   val canTrackReturnedBeat = returnBeatsLeft =/= 0.U || readBurstLens.io.deq.valid
   val readDataEnq = canTrackReturnedBeat && io.read_data.valid
+  // Absorbing may not eat the buffer space an in-flight read burst has already claimed.
+  //
+  // The read path reserves it (claimedReadBeats = count + inflightReadBeats gates readCanIssue) but
+  // the absorb path used to ignore the reservation, and the two run at different times: a burst is
+  // issued while UNcongested, congestion hits before it returns, and absorbed ring tasks then fill
+  // the buffer to the brim. The returning beats have nowhere to land, so outstandingReads never
+  // falls to zero -- and writeCanIssue waits on exactly that, so the spill that would drain the
+  // buffer can never start. Deadlock, with the ring stuck congested and the server holding 128
+  // tasks it cannot write back. Reproduced by SchedulerCongestionTests: one 16-beat prefetch in
+  // flight, 118 tasks absorbed, buffer at 128, zero HBM writes for the rest of the run.
+  val roomBeyondInflightReads =
+    taskQueueBuffer.io.count +& inflightReadBeats < localQueueCapacity
   val availableTaskEnq =
-    datapathEnabled && networkCongested && !readDataEnq && io.connNetwork.data.availableTask.valid
+    datapathEnabled && networkCongested && !readDataEnq && roomBeyondInflightReads &&
+      io.connNetwork.data.availableTask.valid
 
   taskQueueBuffer.io.enq.valid := readDataEnq || availableTaskEnq
   taskQueueBuffer.io.enq.bits := Mux(
@@ -371,7 +406,8 @@ class SchedulerServer(
   )
   io.read_data.ready := canTrackReturnedBeat && taskQueueBuffer.io.enq.ready
   io.connNetwork.data.availableTask.ready :=
-    datapathEnabled && networkCongested && !readDataEnq && taskQueueBuffer.io.enq.ready
+    datapathEnabled && networkCongested && !readDataEnq && roomBeyondInflightReads &&
+      taskQueueBuffer.io.enq.ready
   val availableTaskFire =
     io.connNetwork.data.availableTask.valid && io.connNetwork.data.availableTask.ready
 

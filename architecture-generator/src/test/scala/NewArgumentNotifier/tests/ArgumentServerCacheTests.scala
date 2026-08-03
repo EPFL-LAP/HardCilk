@@ -94,8 +94,7 @@ class ArgumentServerCacheTests extends AnyFlatSpec with ChiselScalatestTester {
     port.bits.metadata.lane.poke(lane.U)
     // Test payload offsets are relative to the bytes after the counter. The
     // physical continuation ABI places that payload above counterWidth.
-    port.bits.dataWrite.poke((data << counterWidth).U)
-    port.bits.dataWriteStrobe.poke((strobe << counterWidth).U)
+    port.bits.payload.poke(((data & strobe) << counterWidth).U)
     port.valid.poke(true.B)
     var guard = 0
     while (!port.ready.peek().litToBoolean) {
@@ -465,8 +464,7 @@ class ArgumentServerCacheTests extends AnyFlatSpec with ChiselScalatestTester {
         port.bits.metadata.server.poke(0.U)
         port.bits.metadata.id.poke(0.U)
         port.bits.metadata.lane.poke(targetLane.U)
-        port.bits.dataWrite.poke(0.U)
-        port.bits.dataWriteStrobe.poke(0.U)
+        port.bits.payload.poke(0.U)
         port.valid.poke(true.B)
       }
 
@@ -504,8 +502,7 @@ class ArgumentServerCacheTests extends AnyFlatSpec with ChiselScalatestTester {
         port.bits.metadata.server.poke(0.U)
         port.bits.metadata.id.poke(0.U)
         port.bits.metadata.lane.poke(targetLane.U)
-        port.bits.dataWrite.poke(0.U)
-        port.bits.dataWriteStrobe.poke(0.U)
+        port.bits.payload.poke(0.U)
         port.valid.poke(true.B)
       }
 
@@ -802,8 +799,7 @@ class ArgumentServerCacheTests extends AnyFlatSpec with ChiselScalatestTester {
         p.bits.metadata.server.poke(0.U)
         p.bits.metadata.id.poke((k % slots).U)
         p.bits.metadata.lane.poke(0.U)
-        p.bits.dataWrite.poke(0.U)
-        p.bits.dataWriteStrobe.poke(0.U)
+        p.bits.payload.poke(0.U)
         p.valid.poke(true.B)
         dut.clock.step()
       }
@@ -824,6 +820,145 @@ class ArgumentServerCacheTests extends AnyFlatSpec with ChiselScalatestTester {
       assert(
         accepted,
         "eviction production blocked by a missed-update backlog (pools not separated)"
+      )
+    }
+  }
+
+  // A cache insert and a hitting update are independently sourced (front porch
+  // vs perLaneFIFO) and both maintain the per-slot delta record. The insert's
+  // half retires the recycled slot's stale delta; the update's half is the RMW.
+  // They coincide on some alignments, and the delta payload lives in a
+  // single-write-port LUTRAM, so a design that lets one silently win corrupts
+  // the other's slot. Insert cadence and update delay are deliberately out of
+  // phase so the alignment drifts through every relative offset; the test
+  // asserts it actually observed coincidences rather than trusting that it did.
+  it should "keep insert and update effects separate when they coincide" in {
+    class ExposedCollisionArgumentServer
+        extends ArgumentServer(
+          counterWidth,
+          lineAddressWidth,
+          serverTagWidth,
+          serverIDWidth,
+          continuationSize,
+          NParallelNew = 1,
+          NParallelUpdate = 2,
+          cacheDelayCycles = 0,
+          missedUpdateExtra = 8
+        ) {
+      val exposedInsertFire = expose(cacheInsertFires(0))
+      val exposedUpdateApplied = expose(updateApplied(0))
+    }
+
+    test(new ExposedCollisionArgumentServer) { dut =>
+      init(dut, 1, 2)
+
+      val lines = 240
+      // One-hot payloads: a spawn or eviction carrying more than one bit proves
+      // a stale delta leaked across a slot's tenants.
+      val payloadBits = 12
+      var collisions = 0
+      var spawns = 0
+      var evictions = 0
+      var diverts = 0
+
+      def step(n: Int = 1): Unit = for (_ <- 0 until n) {
+        if (dut.exposedInsertFire.peek().litToBoolean &&
+          dut.exposedUpdateApplied.peek().litToBoolean) collisions += 1
+
+        val sp = dut.io.spawnTaskOutputs(0)
+        if (sp.valid.peek().litToBoolean) {
+          spawns += 1
+          val (counter, remainder) =
+            NanTestUtil.splitLine(counterWidth, continuationSize)(
+              sp.bits.taskData.peek().litValue
+            )
+          assert(counter == 0, s"spawned a line with counter $counter")
+          assert(
+            remainder.bitCount == 1,
+            s"spawn carried $remainder: a stale delta leaked into this slot"
+          )
+        }
+
+        val cp = dut.io.coupledSlowPath(0)
+        if (cp.valid.peek().litToBoolean) {
+          if (cp.bits.evictionValid.peek().litToBoolean) {
+            evictions += 1
+            val (_, remainder) =
+              NanTestUtil.splitLine(counterWidth, continuationSize)(
+                cp.bits.eviction.eviction.taskData.peek().litValue
+              )
+            assert(
+              remainder == 0,
+              s"eviction carried $remainder: a stale delta leaked into this slot"
+            )
+          }
+          if (cp.bits.updateValid.peek().litToBoolean) diverts += 1
+        }
+        dut.clock.step()
+      }
+
+      def doInsert(addr: BigInt, remainder: BigInt): BigInt = {
+        val port = dut.io.newContInput(0)
+        port.req.bits.address.poke(addr.U)
+        port.req.bits.taskBaseData.poke(mkLine(1, remainder).U)
+        port.req.valid.poke(true.B)
+        var guard = 0
+        while (!port.req.ready.peek().litToBoolean) {
+          step(); guard += 1; assert(guard < 50, "insert never accepted")
+        }
+        val id = port.assignedId.peek().litValue
+        step()
+        port.req.valid.poke(false.B)
+        id
+      }
+
+      def doUpdate(id: BigInt, addr: BigInt, data: BigInt): Unit = {
+        val port = dut.io.contUpdateInput(0)
+        port.bits.address.poke(addr.U)
+        port.bits.metadata.server.poke(0.U)
+        port.bits.metadata.id.poke(id.U)
+        port.bits.metadata.lane.poke(0.U)
+        port.bits.payload.poke(((data & BigInt(0xfff)) << counterWidth).U)
+        port.valid.poke(true.B)
+        var guard = 0
+        while (!port.ready.peek().litToBoolean) {
+          step(); guard += 1; assert(guard < 50, "update never accepted")
+        }
+        step()
+        port.valid.poke(false.B)
+      }
+
+      for (k <- 0 until lines) {
+        val addr = BigInt(0x1000 + 0x10 * k)
+        val payload = BigInt(1) << (k % payloadBits)
+        val id = doInsert(addr, 0x0)
+        step(k % 3)
+        doUpdate(id, addr, payload)
+        // The RMW trails the update handshake by a fixed pipeline latency, so
+        // THIS gap is the one that walks it across the next insert's commit
+        // cycle. Sweeping the gap above only moves both together.
+        step(k % 5)
+      }
+      step(40)
+
+      assert(
+        collisions > 0,
+        "stimulus never landed an insert and an update in the same cycle: " +
+          "the single-write-port hazard was not exercised"
+      )
+      // Each line joins on exactly one argument. A line whose update hit the
+      // cache completes and spawns; a line whose update missed is diverted to
+      // the slow path and its still-counting body is evicted. Nothing else may
+      // be evicted, so a lost insert-clear (which corrupts a tenant's counter
+      // and turns its spawn into an eviction) shows up as this imbalance.
+      assert(
+        evictions == diverts,
+        s"$evictions evictions vs $diverts slow-path diverts " +
+          s"(collisions observed: $collisions)"
+      )
+      assert(
+        spawns + evictions >= lines - slots,
+        s"only ${spawns + evictions} of $lines lines resolved"
       )
     }
   }
