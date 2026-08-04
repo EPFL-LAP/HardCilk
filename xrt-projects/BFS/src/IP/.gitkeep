@@ -1,3 +1,0 @@
-# Generated/staged in by the HardCilk emitter + generate_benchmark_xclbin_project.sh.
-# user_0.xml and conn_u55c.cfg come from the kernel.xml/cfg emitter (plan step 6);
-# IP/ and host/ are staged from HardCilk-output (plan steps 8/9). Do not hand-edit.
