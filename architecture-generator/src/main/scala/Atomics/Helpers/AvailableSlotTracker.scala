@@ -25,11 +25,6 @@ import Atomics.WriteIndexEntry
  * cluster into fewer than `p` buckets -- that is the accepted trade that keeps
  * every encoder tiny (tagStoreSize/p bits) and the design free of any wide
  * sequential reduction.
- *
- * Timing: the only logic between registers is reading `available`, a set of
- * independent (tagStoreSize/p)-bit priority encoders, and the bitmask update.
- * For tagStoreSize=128, p=8 the encoders are 16 bits wide, so this sits
- * comfortably at 500 MHz with no wide fan-in chain to route.
  */
 class AvailableSlotTracker(
     val p: Int = 32,
@@ -55,8 +50,6 @@ class AvailableSlotTracker(
   // Free-list: bit i set => slot i is free. Every slot starts free.
   val available = RegInit(((BigInt(1) << tagStoreSize) - 1).U(tagStoreSize.W))
 
-  // One independent priority encoder per bucket. localSel(b) is the one-hot of
-  // the chosen free slot within bucket b (all-zero if the bucket has none free).
   val localSel = Wire(Vec(p, UInt(bucketSize.W)))
   for (b <- 0 until p) {
     val base = b * bucketSize
@@ -66,21 +59,18 @@ class AvailableSlotTracker(
 
     localSel(b) := Mux(hasFree, localOneHot, 0.U(bucketSize.W))
     io.selected_slots(b).valid := hasFree
-    // .index is 32b; we drive the low entrySize bits and zero-extend the rest.
     io.selected_slots(b).index := base.U(entrySize.W) + OHToUInt(localOneHot)
   }
 
   io.outputCount := PopCount(io.selected_slots.map(_.valid))
 
-  // Bucket 0 occupies the low bits, so reverse before Cat (Cat takes MSB first).
   val selectedMask = Cat(
     (0 until p).reverse.map(b =>
       Mux(io.consumed(b), localSel(b), 0.U(bucketSize.W))
     )
   )
 
-  // OR every valid freed slot back into the free pool. .index is 32b but only its
-  // low entrySize bits address a real slot, so narrow before decoding.
+  // OR every valid freed slot back into the free pool
   val freedMask = io.freed_entries
     .map(e =>
       Mux(
@@ -91,8 +81,6 @@ class AvailableSlotTracker(
     )
     .reduce(_ | _)
 
-  // Take what was accepted this cycle; restore what was freed. A slot can't be
-  // both freshly consumed and freed in the same cycle (a freed slot was taken,
-  // hence not selectable), but `freedMask` is applied last so it always wins.
+  // Take what was accepted this cycle; restore what was freed.
   available := (available & ~selectedMask) | freedMask
 }

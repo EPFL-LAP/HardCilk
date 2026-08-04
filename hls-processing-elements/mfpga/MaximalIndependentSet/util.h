@@ -34,14 +34,10 @@
 using addr_t = uint64_t;
 using Addr = uint64_t;
 
-// 144-bit AXI-Stream lock request/response payloads, matching
-// LockServer.{Req,Resp}Width. The generated lock server wrapper uses
-// ready/valid/data only, so the packet type is the raw tdata payload.
 using lock_req = ap_uint<144>;
 using lock_resp = ap_uint<144>;
 
-// Opcodes accepted by the LockServer (lockchisel.Operation). The operation
-// field of a request lives at tdata[131:128].
+
 enum LockOperation : uint8_t
 {
   LOCK_OP_UNLOCK = 0b0000,
@@ -58,10 +54,7 @@ enum BfsVisitFlags : uint32_t
   BFS_VISIT_VERTEX_ALREADY_MARKED = 1
 };
 
-// Atomic granularity selector (lockchisel.AtomicMode), carried in
-// tdata[134:133] of a lock request. The AMU read-modify-writes only the
-// selected sub-field of the 64-bit beat (byte-strobed), so Visited can be a
-// plain byte array.
+
 enum AtomicMode : uint8_t
 {
   ATOMIC_MODE_DOUBLEWORD = 0b00, // 8 bytes (legacy 64-bit behaviour)
@@ -69,11 +62,9 @@ enum AtomicMode : uint8_t
   ATOMIC_MODE_WORD = 0b10,       // 4 bytes
 };
 
-// Byte-addressed atomic slots are one byte wide. Addresses stay 64-bit on the
-// wire (truncated to the HBM address width).
+
 static const addr_t VISITED_SLOT_BYTES = 1;
 
-// Number of vertices one chunked vertex-map helper handles.
 #ifndef VERTICES_PER_TASK
 #define VERTICES_PER_TASK 64
 #endif
@@ -138,16 +129,6 @@ struct mis_loop_helper_args
 static_assert(sizeof(mis_loop_helper_args) == 128,
               "mis_loop_helper_args must be 1024 bits (widthTask=1024)");
 
-// Build a lock request beat:
-//   tdata[63:0]    = byte address of the slot (tag)
-//   tdata[127:64]  = operand / store value (data)
-//   tdata[131:128] = opcode
-//   tdata[132]     = blocking
-//   tdata[134:133] = atomic mode (00 = double-word, 01 = byte, 10 = word)
-//   tdata[135]     = float-compare flag: when set, the conditional SET_IF_* ops
-//                    order operand vs memory as IEEE-754 floats instead of ints
-//   tdata[143:136] = sender metadata, echoed back in the response so a PE with
-//                    several requests in flight can correlate completions
 static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
                                      LockOperation op, bool blocking,
                                      AtomicMode atomic_mode, uint8_t metadata = 0,
@@ -166,27 +147,12 @@ static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
   return req;
 }
 
-// Decode a lock response beat. The LockServer packs
-// Cat(meta, prevValue, tag, writeOccurred, success), so:
-//   tdata[0]       = success (1 == request completed)
-//   tdata[1]       = for conditional AMU ops (SET_IF_GREATER / SET_IF_LESS),
-//                    whether the store actually happened; for every other op it
-//                    just mirrors the success bit
-//   tdata[7:2]     = reserved (0)
-//   tdata[71:8]    = echoed request tag (the lock address)
-//   tdata[135:72]  = previous memory contents, with the addressed sub-word
-//                    right-justified into the low bits (byte/word atomics return
-//                    just their lane in [7:0]/[31:0]; doubleword is the full beat)
-//   tdata[143:136] = sender metadata echoed from the request
 static inline bool lock_resp_success(const lock_resp &resp)
 {
 #pragma HLS INLINE
   return resp(0, 0) != 0;
 }
 
-// For a conditional AMU op (SET_IF_GREATER / SET_IF_LESS), true iff the store
-// actually happened (the predicate held). For all other ops this mirrors
-// lock_resp_success.
 static inline bool lock_resp_write_occurred(const lock_resp &resp)
 {
 #pragma HLS INLINE
@@ -211,9 +177,6 @@ static inline uint8_t lock_resp_metadata(const lock_resp &resp)
   return (uint8_t)resp(143, 136);
 }
 
-// The AMU right-justifies the addressed byte into the low bits of the returned
-// value, so the previous Visited byte is the low byte of lock_resp_current
-// (tdata[79:72]). No shift needed.
 static inline uint8_t lock_resp_current_byte(const lock_resp &resp)
 {
 #pragma HLS INLINE

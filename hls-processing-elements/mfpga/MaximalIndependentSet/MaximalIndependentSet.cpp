@@ -186,9 +186,6 @@ void write_counts(void *mem, hls::stream<count_item> &input_counts,
     }
 }
 
-// ---------------------------------------------------------
-// Top Level CountNGH / NGS Primitive
-// ---------------------------------------------------------
 
 void NGS(void *mem_0, void *mem_1, void *mem_2, void *mem_3,
          hls::stream<NGS_args> &taskIn,
@@ -384,8 +381,6 @@ void select_uncovered_zero_vertices(void *mem_covered, void *mem_count,
                                     hls::stream<uint32_t> &selected_vertices,
                                     mis_loop_helper_args &task)
 {
-    // Vertex stream is unique within the helper chunk, so per-vertex state has
-    // no loop-carried dependence here.
 #pragma HLS DEPENDENCE variable = mem_covered inter false
 #pragma HLS DEPENDENCE variable = mem_count inter false
     while (true)
@@ -628,9 +623,6 @@ void finish_mis_loop_helper(hls::stream<uint8_t> &buffer_done,
     }
 }
 
-// ---------------------------------------------------------
-// Top Level MIS Loop Helper
-// ---------------------------------------------------------
 
 void mis_loop_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3,
                      void *mem_4, void *mem_5, void *mem_6,

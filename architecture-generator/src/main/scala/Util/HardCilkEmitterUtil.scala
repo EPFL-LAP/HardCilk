@@ -16,23 +16,29 @@ object VerilogResetConverter {
     *   1. Replaces `input reset;` → `input reset_n;\n\twire reset = ~reset_n;`
     *   2. Replaces `input reset,` → `input reset_n,` in the port list header
     *
-    * All internal uses of `reset` are left untouched — the `wire reset = ~reset_n`
-    * handles them transparently.
+    * All internal uses of `reset` are left untouched — the
+    * `wire reset = ~reset_n` handles them transparently.
     *
-    * @param verilogPath  Path to the .sv / .v file to modify in-place
-    * @param moduleName   Name of the top-level module to patch (others untouched)
+    * @param verilogPath
+    *   Path to the .sv / .v file to modify in-place
+    * @param moduleName
+    *   Name of the top-level module to patch (others untouched)
     */
   def convertToActivelow(verilogPath: String, moduleName: String): Unit = {
-    val path    = Paths.get(verilogPath)
+    val path = Paths.get(verilogPath)
     val content = new String(Files.readAllBytes(path))
 
     val patched = patchModule(content, moduleName)
 
     if (patched != content) {
       Files.write(path, patched.getBytes)
-      println(s"[VerilogResetConverter] Patched active-low reset in: $verilogPath")
+      println(
+        s"[VerilogResetConverter] Patched active-low reset in: $verilogPath"
+      )
     } else {
-      println(s"[VerilogResetConverter] WARNING: No reset port found in module '$moduleName' in $verilogPath")
+      println(
+        s"[VerilogResetConverter] WARNING: No reset port found in module '$moduleName' in $verilogPath"
+      )
     }
   }
 
@@ -49,8 +55,8 @@ object VerilogResetConverter {
     if (moduleEnd < 0) return content
 
     val before = content.substring(0, moduleStart)
-    val body   = content.substring(moduleStart, moduleEnd)
-    val after  = content.substring(moduleEnd)
+    val body = content.substring(moduleStart, moduleEnd)
+    val after = content.substring(moduleEnd)
 
     // ── Two patterns to handle both port-list and declaration forms ───────────
 
@@ -77,7 +83,7 @@ object VerilogResetConverter {
   /** Returns the character index of `module <name>` in content, or -1. */
   private def findModuleStart(content: String, moduleName: String): Int = {
     val needle = s"module $moduleName ("
-    val idx    = content.indexOf(needle)
+    val idx = content.indexOf(needle)
     idx
   }
 }
@@ -86,12 +92,19 @@ object HardCilkEmitterUtil {
 
   def basename(path: String): String = path.split("/").last.split("\\.").head
 
-  private def deleteStagedModuleFiles(outputDirPath: String, moduleName: String): Unit = {
+  private def deleteStagedModuleFiles(
+      outputDirPath: String,
+      moduleName: String
+  ): Unit = {
     val dir = new java.io.File(outputDirPath)
     val files = Option(dir.listFiles()).getOrElse(Array.empty)
     files.foreach { file =>
       val fileName = file.getName
-      if (file.isFile && (fileName == s"$moduleName.v" || fileName.startsWith(s"${moduleName}_"))) {
+      if (
+        file.isFile && (fileName == s"$moduleName.v" || fileName.startsWith(
+          s"${moduleName}_"
+        ))
+      ) {
         Files.deleteIfExists(file.toPath)
       }
     }
@@ -109,9 +122,8 @@ object HardCilkEmitterUtil {
     Files.writeString(Path.of(path), data, StandardCharsets.UTF_8)
   }
 
-  /**
-  * A method to generate RTL called by HardCilk Emitter
-  */
+  /** A method to generate RTL called by HardCilk Emitter
+    */
   def generateRTL(
       systemDescriptor: FullSysGenDescriptor,
       pathInputJsonFile: String,
@@ -122,37 +134,13 @@ object HardCilkEmitterUtil {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
       val peHDLPath = task.peHDLPath
-      if(peHDLPath != ""){
+      if (peHDLPath != "") {
         val peHDLPathFiles = new java.io.File(peHDLPath).listFiles()
         peHDLPathFiles.foreach { file =>
           val fileName = file.getName()
           val fileContent = readFile(file.getAbsolutePath())
           writeFile(s"$outputDirPathRTL/$fileName", fileContent)
         }
-      }
-    }
-
-    // Stage the watcher's HLS Verilog the same way (it is not a task descriptor).
-    // Guarded so elaboration-only runs (before the watcher is synthesized) don't
-    // fail; the blackbox elaborates without the .v, the full build needs it staged.
-    systemDescriptor.watcherConfig.foreach { wc =>
-      val watcherDir = new java.io.File(wc.hdlPath)
-      val watcherFiles =
-        if (watcherDir.exists) watcherDir.listFiles() else null
-      if (watcherFiles != null) {
-        deleteStagedModuleFiles(outputDirPathRTL, "watcher")
-        watcherFiles.foreach { file =>
-          writeFile(
-            s"$outputDirPathRTL/${file.getName()}",
-            readFile(file.getAbsolutePath())
-          )
-        }
-      } else {
-        println(
-          s"[Watcher] hdlPath '${wc.hdlPath}' not found at RTL-gen time; " +
-            "watcher.v will NOT be staged (fine for elaboration-only runs, " +
-            "but the xclbin build needs it synthesized first)."
-        )
       }
     }
 
@@ -164,8 +152,9 @@ object HardCilkEmitterUtil {
     new java.io.File(questaDirectory).mkdirs()
 
     val resourcesFiles = new java.io.File(resourcesPath).listFiles()
-    
-    val listOfFilesForRTL = List("DualPortBRAM_sim.v", "DualPortBRAM_xpm.v", "top.v", "u55c.xdc")
+
+    val listOfFilesForRTL =
+      List("DualPortBRAM_sim.v", "DualPortBRAM_xpm.v", "top.v", "u55c.xdc")
     val listOfFilesForQuesta = List("top_sim.sv", "main_sim.sv")
 
     writeFile(s"$outputDirPathRTL/empty.vh", "")

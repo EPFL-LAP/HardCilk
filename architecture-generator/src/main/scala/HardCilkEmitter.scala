@@ -13,16 +13,16 @@ import TclResources.TclGeneratorMemPEs
 object HardCilkEmitter extends App {
   ArgParser.parseArgs(args) match {
     case None =>
-      // parser printed usage; exit quietly
+    // parser printed usage; exit quietly
     case Some(cfg) =>
       val jsonName = basename(cfg.json_path)
       val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
       val timeFmt = DateTimeFormatter.ofPattern("HH-mm-ss")
       val outputDirName =
-          if (cfg.timestamped)
-            s"${jsonName}_${LocalDate.now.format(dateFmt)}_${LocalTime.now.format(timeFmt)}"
-          else
-            s"${jsonName}_hardcilk_output"
+        if (cfg.timestamped)
+          s"${jsonName}_${LocalDate.now.format(dateFmt)}_${LocalTime.now.format(timeFmt)}"
+        else
+          s"${jsonName}_hardcilk_output"
 
       val systemDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
 
@@ -66,7 +66,10 @@ object HardCilkEmitter extends App {
         )
         if (emitGeneratedXrt.contains(jsonName)) {
           val rootTaskName =
-            systemDescriptor.taskDescriptors.find(_.isRoot).map(_.name).getOrElse(jsonName)
+            systemDescriptor.taskDescriptors
+              .find(_.isRoot)
+              .map(_.name)
+              .getOrElse(jsonName)
           val xrtDir = s"${cfg.output_dir}/$outputDirName/xrt"
           KernelXmlTemplate.generate(
             descriptor = systemDescriptor,
@@ -82,17 +85,14 @@ object HardCilkEmitter extends App {
       if (cfg.tcl_generation) {
         val outputDirPathTcl = s"${cfg.output_dir}/$outputDirName/tcl"
         Files.createDirectories(Paths.get(outputDirPathTcl))
-        val lockAxiPortCount = if (systemDescriptor.lockConfig.nonEmpty) 1 else 0
-        // The watcher (when present) exports one dedicated master appended after
-        // reduce_axi and the lock port, exactly like the lock server.
-        val watcherAxiPortCount =
-          if (systemDescriptor.watcherConfig.nonEmpty) 1 else 0
+        val lockAxiPortCount =
+          if (systemDescriptor.lockConfig.nonEmpty) 1 else 0
         val tclAxiPortCount =
-          cfg.reduce_axi + lockAxiPortCount + watcherAxiPortCount
+          cfg.reduce_axi + lockAxiPortCount
         require(
           tclAxiPortCount <= 32,
           s"Tcl HBM port count is $tclAxiPortCount, but U55C HBM exposes at most 32 AXI ports. " +
-            s"reduce_axi=${cfg.reduce_axi}, lock ports=$lockAxiPortCount, watcher ports=$watcherAxiPortCount"
+            s"reduce_axi=${cfg.reduce_axi}, lock ports=$lockAxiPortCount"
         )
 
         TclGeneratorMemPEs.generate(
@@ -135,8 +135,10 @@ object HardCilkEmitter extends App {
         // Unix (it maps directly to rename(2)), so we explicitly delete a
         // pre-existing non-empty destination from any previous run first,
         // walking the tree in reverse order so leaves are deleted before parents.
-        val projectTemplatePath    = Paths.get(s"$outputDirPathSC/projects/project_template")
-        val projectDestinationPath = Paths.get(s"$outputDirPathSC/projects/$jsonName")
+        val projectTemplatePath =
+          Paths.get(s"$outputDirPathSC/projects/project_template")
+        val projectDestinationPath =
+          Paths.get(s"$outputDirPathSC/projects/$jsonName")
         if (Files.exists(projectDestinationPath)) {
           java.nio.file.Files
             .walk(projectDestinationPath)
@@ -157,7 +159,8 @@ object HardCilkEmitter extends App {
         )
 
         // Generate the SystemC project headers
-        new java.io.File(s"$outputDirPathSC/projects/$jsonName/include").mkdirs()
+        new java.io.File(s"$outputDirPathSC/projects/$jsonName/include")
+          .mkdirs()
         CppHeaderTemplate.generateCppHeader(
           systemDescriptor,
           s"$outputDirPathSC/projects/$jsonName/include",
@@ -172,9 +175,11 @@ object HardCilkEmitter extends App {
         )
 
         // Patch CMakeLists.txt: replace ${project_template} with jsonName
-        val cmakeListsPath = s"$outputDirPathSC/projects/$jsonName/CMakeLists.txt"
+        val cmakeListsPath =
+          s"$outputDirPathSC/projects/$jsonName/CMakeLists.txt"
         val cmakeListsContent = readFile(cmakeListsPath)
-        val newCmakeListsContent = cmakeListsContent.replace("${project_template}", jsonName)
+        val newCmakeListsContent =
+          cmakeListsContent.replace("${project_template}", jsonName)
         writeFile(cmakeListsPath, newCmakeListsContent)
 
         // Copy the application software sources into the project

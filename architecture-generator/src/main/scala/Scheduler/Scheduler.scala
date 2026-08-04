@@ -12,7 +12,6 @@ import chext.amba.axi4s
 import axi4s.Casts._
 import axi4.Ops._
 
-
 import axi4.full.components._
 
 class SchedulerPEIO(
@@ -27,8 +26,12 @@ class SchedulerPEIO(
 
   val taskOut = Vec(peCount, axi4s.Master(axisCfgTask))
 
-  val taskIn = if (spawnsItself) Some(Vec(peCount, axi4s.Slave(axisCfgTask))) else None
-  val taskInGlobal = if (peCountGlobalTaskIn > 0) Some(Vec(peCountGlobalTaskIn, axi4s.Slave(axisCfgTask))) else None
+  val taskIn =
+    if (spawnsItself) Some(Vec(peCount, axi4s.Slave(axisCfgTask))) else None
+  val taskInGlobal =
+    if (peCountGlobalTaskIn > 0)
+      Some(Vec(peCountGlobalTaskIn, axi4s.Slave(axisCfgTask)))
+    else None
 
   // a getter function for the port with name and index
   def getPort(name: String, index: Int): axi4s.Interface = {
@@ -45,7 +48,7 @@ class SchedulerAxiIO(
     axiMgmtCfg: axi4.Config,
     addrWidth: Int,
     taskWidth: Int,
-    vssAxiFullCfg: axi4.Config,
+    vssAxiFullCfg: axi4.Config
 ) extends Bundle {
   val nAxiPorts = vssCount
 
@@ -66,12 +69,14 @@ class Scheduler(
     peType: String,
     debug: Boolean,
     override val spawnerServerNumber: Int = 1,
-    argRouteServersCreateTasks: Boolean =false,
+    argRouteServersCreateTasks: Boolean = false,
     override val mfpgaSupport: Boolean = false,
     maxNumnberToStealOrServe: Int = 256,
     override val taskId: Int = 0,
-    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
-) extends Module with SchedulerHasMfpgaSupport {
+    override val axisCfgTaskAndReq: axi4s.Config =
+      axi4s.Config(wData = 512, wDest = 4)
+) extends Module
+    with SchedulerHasMfpgaSupport {
 
   val vssAxiFullCfg = axi4.Config(
     wAddr = addrWidth,
@@ -80,69 +85,135 @@ class Scheduler(
     wId = 1
   )
 
-
-  val outsideSpawn = ((peCountGlobalTaskIn + argRouteServersNumber) > 0) && (argRouteServersCreateTasks || peCountGlobalTaskIn > 0)
+  val outsideSpawn =
+    ((peCountGlobalTaskIn + argRouteServersNumber) > 0) && (argRouteServersCreateTasks || peCountGlobalTaskIn > 0)
 
   println(f"Outside spawn ${outsideSpawn} of task ${peType}")
 
-  val spawnerServer = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(Module(new SpawnerServer(taskWidth)))) else None
-  
-  val spawnerServerMgmt = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(IO(axi4.lite.Slave(spawnerServer.get(0).asInstanceOf[SpawnerServer].regBlock.cfgAxi))) ) else None
-  val spawnerServerAXI = if(outsideSpawn) Some(Seq.fill(spawnerServerNumber)(IO(axi4.full.Master(spawnerServer.get(0).asInstanceOf[SpawnerServer].axiCfg))) ) else None  
-  val step = if(outsideSpawn) (peCountGlobalTaskIn + argRouteServersNumber) / spawnerServerNumber else 0
-  var spawnerIndicies = Array.tabulate(spawnerServerNumber)(n => (n + n * step))
-  var outTaskSpawnIndicies = Array.tabulate(peCountGlobalTaskIn + argRouteServersNumber + spawnerServerNumber)(n => (n))
-  outTaskSpawnIndicies = outTaskSpawnIndicies.filterNot(spawnerIndicies.contains(_))
-  val getOutsideSpawnNetwork = if(outsideSpawn) Some( Module(new SchedulerNetwork(taskWidth, (peCountGlobalTaskIn + argRouteServersNumber) + spawnerServerNumber, spawnerIndicies))) else None
+  val spawnerServer =
+    if (outsideSpawn)
+      Some(Seq.fill(spawnerServerNumber)(Module(new SpawnerServer(taskWidth))))
+    else None
 
+  val spawnerServerMgmt =
+    if (outsideSpawn)
+      Some(
+        Seq.fill(spawnerServerNumber)(
+          IO(
+            axi4.lite.Slave(
+              spawnerServer.get(0).asInstanceOf[SpawnerServer].regBlock.cfgAxi
+            )
+          )
+        )
+      )
+    else None
+  val spawnerServerAXI =
+    if (outsideSpawn)
+      Some(
+        Seq.fill(spawnerServerNumber)(
+          IO(
+            axi4.full
+              .Master(spawnerServer.get(0).asInstanceOf[SpawnerServer].axiCfg)
+          )
+        )
+      )
+    else None
+  val step =
+    if (outsideSpawn)
+      (peCountGlobalTaskIn + argRouteServersNumber) / spawnerServerNumber
+    else 0
+  var spawnerIndicies = Array.tabulate(spawnerServerNumber)(n => (n + n * step))
+  var outTaskSpawnIndicies = Array.tabulate(
+    peCountGlobalTaskIn + argRouteServersNumber + spawnerServerNumber
+  )(n => (n))
+  outTaskSpawnIndicies =
+    outTaskSpawnIndicies.filterNot(spawnerIndicies.contains(_))
+  val getOutsideSpawnNetwork =
+    if (outsideSpawn)
+      Some(
+        Module(
+          new SchedulerNetwork(
+            taskWidth,
+            (peCountGlobalTaskIn + argRouteServersNumber) + spawnerServerNumber,
+            spawnerIndicies
+          )
+        )
+      )
+    else None
 
   // Log the size of the outside spawn network
-  if(outsideSpawn) {
-    println(f"Outside spawn network size: ${getOutsideSpawnNetwork.get.io.connSS.size} connections")
+  if (outsideSpawn) {
+    println(
+      f"Outside spawn network size: ${getOutsideSpawnNetwork.get.io.connSS.size} connections"
+    )
     // log the indices of the spawner servers
     println(f"Spawner server indices: ${spawnerIndicies.mkString(", ")}")
     // log the indices of the outTaskSpawnIndicies
     println(f"Out task spawn indices: ${outTaskSpawnIndicies.mkString(", ")}")
   }
 
-  if(outsideSpawn){
-    for(i <- 0 until spawnerServerNumber){
-      spawnerServer.get(i).asInstanceOf[SpawnerServer].io.axi_mgmt <> spawnerServerMgmt.get(i)
-      spawnerServer.get(i).asInstanceOf[SpawnerServer].io.m_axi.asFull :=> spawnerServerAXI.get(i)
-      spawnerServer.get(i).asInstanceOf[SpawnerServer].io.connNetwork_slave <> getOutsideSpawnNetwork.get.io.connSS(spawnerIndicies(i))
+  if (outsideSpawn) {
+    for (i <- 0 until spawnerServerNumber) {
+      spawnerServer
+        .get(i)
+        .asInstanceOf[SpawnerServer]
+        .io
+        .axi_mgmt <> spawnerServerMgmt.get(i)
+      spawnerServer
+        .get(i)
+        .asInstanceOf[SpawnerServer]
+        .io
+        .m_axi
+        .asFull :=> spawnerServerAXI.get(i)
+      spawnerServer
+        .get(i)
+        .asInstanceOf[SpawnerServer]
+        .io
+        .connNetwork_slave <> getOutsideSpawnNetwork.get.io.connSS(
+        spawnerIndicies(i)
+      )
 
       // Log the connetion of these indicies in the outside spawn network
-      println(f"Spawner server ${i} connection to outside spawn network: ${getOutsideSpawnNetwork.get.io.connSS(spawnerIndicies(i)).toString()}")
+      println(
+        f"Spawner server ${i} connection to outside spawn network: ${getOutsideSpawnNetwork.get.io.connSS(spawnerIndicies(i)).toString()}"
+      )
 
     }
   }
 
-
   // Add two entries SchedulerLocalNetwork if mfpgaSupport is enabled, one for task reading and one for task writing from the network.
-  val schedulerServersInputToSchedulerLocalNetwork = if (mfpgaSupport) (schedulerServersNumber + 2) else schedulerServersNumber
-
+  val schedulerServersInputToSchedulerLocalNetwork =
+    if (mfpgaSupport) (schedulerServersNumber + 2) else schedulerServersNumber
 
   val stealNW_TQ = Module(
     new SchedulerLocalNetwork(
       peCount = peCount,
       vssCount = schedulerServersInputToSchedulerLocalNetwork,
-      vasCount = if(outsideSpawn) spawnerServerNumber else 0,
+      vasCount = if (outsideSpawn) spawnerServerNumber else 0,
       taskWidth = taskWidth,
       queueDepth = queueDepth,
       qRamReadLatency = 1,
       qRamWriteLatency = 1,
       spawnsItself = spawnsItself,
-      successiveNetworkConfig = false // HARDCODED, #TODO: if hardware generation fails with 1 PE, enable this when vsscount > peCount
+      successiveNetworkConfig =
+        false // HARDCODED, #TODO: if hardware generation fails with 1 PE, enable this when vsscount > peCount
     )
   )
 
-  if(outsideSpawn) {
-    for(i <- 0 until spawnerServerNumber){
-      spawnerServer.get(i).asInstanceOf[SpawnerServer].io.connNetwork_master <> stealNW_TQ.io.connVAS(i)
+  if (outsideSpawn) {
+    for (i <- 0 until spawnerServerNumber) {
+      spawnerServer
+        .get(i)
+        .asInstanceOf[SpawnerServer]
+        .io
+        .connNetwork_master <> stealNW_TQ.io.connVAS(i)
     }
   }
 
-  val contentionThreshold_ = (max((peCount + argRouteServersNumber + peCountGlobalTaskIn) / 1.2, 1)).toInt
+  val contentionThreshold_ = (max(
+    (peCount + argRouteServersNumber + peCountGlobalTaskIn) / 1.2,
+    1
+  )).toInt
   val contentionDelta_ = if (contentionThreshold_ > 4) 1 else 0
 
   val schedulerServers = Seq.fill(schedulerServersNumber)(
@@ -175,7 +246,7 @@ class Scheduler(
       taskWidth = taskWidth,
       vssCount = schedulerServersNumber,
       axiMgmtCfg = schedulerServers(0).regBlock.cfgAxi,
-      vssAxiFullCfg = vssAxiFullCfg,
+      vssAxiFullCfg = vssAxiFullCfg
     )
   )
 
@@ -195,7 +266,9 @@ class Scheduler(
   }
   // DEBUG
 
-  val connArgumentNotifier = IO(Vec(argRouteServersNumber, new SchedulerNetworkClientIO(taskWidth)))
+  val connArgumentNotifier = IO(
+    Vec(argRouteServersNumber, new SchedulerNetworkClientIO(taskWidth))
+  )
 
   for (i <- 0 until schedulerServersNumber) {
     io_internal.axi_mgmt_vss(i) :=> schedulerServers(i).io.axi_mgmt
@@ -203,11 +276,7 @@ class Scheduler(
       .ntwDataUnitOccupancyVSS(i)
   }
 
-  // Plain in-order AXI adapter (no chext.elastic) replacing RVtoAXIBridge +
-  // AxiWriteBuffer on the scheduler's HBM ring port. The elastic Arrival/
-  // SinkBuffer write path was the suspected source of the memReader wrap
-  // corruption (read-after-write settling margin had zero effect on HW, ruling
-  // out a read-side cause).
+  // Chext substitute to dodge mysterious bug. Can revert at your own risk.
   val vssAdapter = Seq.fill(schedulerServersNumber)(
     Module(new SchedulerAXIAdapter(taskWidth, addrWidth))
   )
@@ -237,7 +306,9 @@ class Scheduler(
     // DEBUG
   }
 
-  axiFullPorts.zip(io_internal.vss_axi_full).foreach { case (a, s_axi) => a :=> s_axi }
+  axiFullPorts.zip(io_internal.vss_axi_full).foreach { case (a, s_axi) =>
+    a :=> s_axi
+  }
 
   // DEBUG
   if (debug) {
@@ -279,11 +350,15 @@ class Scheduler(
 
   // If taskWidth == pePortWidth, the converter is created as just a wire.
   val axis_stream_converters_out =
-    Seq.fill(peCount)(Module(new AxisDataWidthConverter(taskWidth, pePortWidth)))
+    Seq.fill(peCount)(
+      Module(new AxisDataWidthConverter(taskWidth, pePortWidth))
+    )
   val axis_stream_converters_in =
     if (spawnsItself)
       Some(
-        Seq.fill(peCount)(Module(new AxisDataWidthConverter(pePortWidth, taskWidth)))
+        Seq.fill(peCount)(
+          Module(new AxisDataWidthConverter(pePortWidth, taskWidth))
+        )
       )
     else None
   for (i <- 0 until peCount) {
@@ -302,8 +377,9 @@ class Scheduler(
     }
 
     // Write these values to all scheduler servers (avoids sink not connected errors)
-    for (j <- 0 until schedulerServersNumber){
-      schedulerServers(j).io.lengths_of_hardware_queues(i) := stealNW_TQ.io.lengths_of_hardware_queues(i)
+    for (j <- 0 until schedulerServersNumber) {
+      schedulerServers(j).io.lengths_of_hardware_queues(i) := stealNW_TQ.io
+        .lengths_of_hardware_queues(i)
     }
   }
 
@@ -331,10 +407,12 @@ class Scheduler(
   }
   // DEBUG
 
-  if (argRouteServersNumber > 0 && outsideSpawn){ //&& argRouteServersCreateTasks) { // 
+  if (argRouteServersNumber > 0 && outsideSpawn) { // && argRouteServersCreateTasks) { //
     for (i <- 0 until argRouteServersNumber) {
-      getOutsideSpawnNetwork.get.io.connSS(outTaskSpawnIndicies(i)) <> connArgumentNotifier(i)
-    } 
+      getOutsideSpawnNetwork.get.io.connSS(
+        outTaskSpawnIndicies(i)
+      ) <> connArgumentNotifier(i)
+    }
   } else {
     for (i <- 0 until argRouteServersNumber) {
       connArgumentNotifier(i).ctrl.serveStealReq.ready := 0.U
@@ -352,8 +430,11 @@ class Scheduler(
     val globalsTaskBuffers = Seq.fill(peCountGlobalTaskIn)(
       Module(new GlobalTaskBuffer(taskWidth, peCount))
     )
-    for (i <- argRouteServersNumber until (argRouteServersNumber + peCountGlobalTaskIn)) {
-      
+    for (
+      i <-
+        argRouteServersNumber until (argRouteServersNumber + peCountGlobalTaskIn)
+    ) {
+
       axis_stream_converters_in_global(
         i - argRouteServersNumber
       ).io.dataIn.asLite <> io_export.taskInGlobal
@@ -365,12 +446,13 @@ class Scheduler(
         i - argRouteServersNumber
       ).io.dataOut.asLite
 
-      getOutsideSpawnNetwork.get.io.connSS(outTaskSpawnIndicies(i)) <> globalsTaskBuffers(i - argRouteServersNumber).io.connStealNtw
+      getOutsideSpawnNetwork.get.io.connSS(
+        outTaskSpawnIndicies(i)
+      ) <> globalsTaskBuffers(i - argRouteServersNumber).io.connStealNtw
     }
   }
   buildMfpgaConnections()
 }
-
 
 // Create an emmitter for the Scheduler module that includes the mfPGA connections enabled. Write the sys verilog files in output/mfPGA-scheduler/
 object SchedulerMfpgaEmitter extends App {

@@ -37,13 +37,11 @@ using Addr = uint64_t;
 using epsilon_t = ap_ufixed<32, 16>;
 using density_t = ap_ufixed<64, 32>;
 
-// 136-bit AXI-Stream lock request/response, matching the lockchisel.LockServer
-// wire format (LockServer.ReqWidth == LockServer.RespWidth == 136).
+
 using lock_req = ap_axiu<144, 0, 0, 0>;
 using lock_resp = ap_axiu<136, 0, 0, 0>;
 
-// Opcodes accepted by the LockServer (lockchisel.Operation). The operation
-// field of a request lives at tdata[131:128].
+
 enum LockOperation : uint8_t
 {
   LOCK_OP_UNLOCK = 0b0000,
@@ -66,13 +64,11 @@ enum BfsVisitFlags : uint32_t
 // plain byte array.
 enum AtomicMode : uint8_t
 {
-  ATOMIC_MODE_DOUBLEWORD = 0b00, // 8 bytes (legacy 64-bit behaviour)
+  ATOMIC_MODE_DOUBLEWORD = 0b00, // 8 bytes
   ATOMIC_MODE_BYTE = 0b01,       // 1 byte
   ATOMIC_MODE_WORD = 0b10,       // 4 bytes
 };
 
-// Byte-addressed atomic slots are one byte wide. Addresses stay 64-bit on the
-// wire (truncated to the HBM address width).
 static const addr_t VISITED_SLOT_BYTES = 1;
 
 // Number of active-set vertices the orchestration kernel packs into one helper
@@ -82,8 +78,8 @@ static const addr_t VISITED_SLOT_BYTES = 1;
 #endif
 
 // Each peeling round runs as two barrier-separated waves so that every
-// classification decision in a round sees one frozen snapshot of D[] (BKV12 is
-// a bulk-synchronous peel). The phase flag in the task tells the orchestrator
+// classification decision in a round sees one frozen snapshot of D[].
+// The phase flag in the task tells the orchestrator
 // and helper which wave they are running.
 enum ApproxDenseSubPhase : uint32_t
 {
@@ -111,9 +107,9 @@ struct ApproxDenseSub_args
   addr_t best_frontier;
   density_t best_density;
   uint32_t best_length;
-  uint32_t phase;        // 108  PHASE_CLASSIFY / PHASE_DECREMENT
-  addr_t removed_list;   // 112  vertices removed in the current round
-  addr_t removedChar;    // 120  atomic counter for removed_list length
+  uint32_t phase;        
+  addr_t removed_list;   
+  addr_t removedChar;    
 };
 
 static_assert(sizeof(ApproxDenseSub_args) == 128,
@@ -151,8 +147,8 @@ static_assert(sizeof(vertex_subset_helper_args) == 128,
 //   tdata[131:128] = opcode
 //   tdata[132]     = blocking
 //   tdata[134:133] = atomic mode (00 = double-word, 01 = byte, 10 = word)
-//   tdata[135]     = float-compare flag: when set, the conditional SET_IF_* ops
-//                    order operand vs memory as IEEE-754 floats instead of ints
+//   tdata[135]     = float-compare flag
+
 static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
                                      LockOperation op, bool blocking,
                                      AtomicMode atomic_mode, uint8_t metadata = 0,
@@ -191,9 +187,7 @@ static inline bool lock_resp_success(const lock_resp &resp)
   return resp.data(0, 0) != 0;
 }
 
-// For a conditional AMU op (SET_IF_GREATER / SET_IF_LESS), true iff the store
-// actually happened (the predicate held). For all other ops this mirrors
-// lock_resp_success.
+
 static inline bool lock_resp_write_occurred(const lock_resp &resp)
 {
 #pragma HLS INLINE
@@ -212,9 +206,7 @@ static inline ap_uint<64> lock_resp_tag(const lock_resp &resp)
   return resp.data(71, 8);
 }
 
-// The AMU right-justifies the addressed byte into the low bits of the returned
-// value, so the previous Visited byte is the low byte of lock_resp_current
-// (tdata[79:72]). No shift needed.
+
 static inline uint8_t lock_resp_current_byte(const lock_resp &resp)
 {
 #pragma HLS INLINE

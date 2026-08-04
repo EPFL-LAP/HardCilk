@@ -64,28 +64,11 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                         scheduler_capacity = physical_capacity;
                     }
                 }
-                // Double the initial backing-store size. A mid-run resize copies +
-                // zeroes the queue inside the timed execution window, which hurts
-                // timing; provisioning 2x up front avoids most resizes. (If a
-                // resize still fires, manageSchedulerServer prints a warning so the
-                // initial size can be raised further.)
+                //Double the scheduler capacity
                 scheduler_capacity *= 2;
-                // Allocate memory for the scheduler server
                 uint64_t addr = memory_->allocateMemFPGA(scheduler_capacity * taskDescriptor.widthTask/8, 512);
                 
-                // Zero-fill the backing store. xrt-smi reset does NOT clear HBM, so
-                // a stale slot read (a slot counted in currLen but never written, or
-                // a read-before-write) dispatches a garbage task whose `cont` field
-                // is garbage -> its argOut decrements a random HBM address and the
-                // BFS join counter is left short forever (the intermittent hang).
-                // Zeroing makes any such stale read benign.
-                //
-                // Done in fixed-size chunks from one reusable buffer: a full
-                // queue-sized host vector (up to ~217 MB for as-skitter) is what
-                // "took forever" -- the device transfer itself is cheap (~0.24s for
-                // two 217 MB queues). The real fix is to stop the stale read in the
-                // scheduler/spawner bookkeeping; this keeps the backing store
-                // well-defined until then.
+                // Zero out the HBM
                 {
                     uint64_t queueBytes = scheduler_capacity * taskDescriptor.widthTask/8;
                     static const uint64_t kZeroChunkBytes = 16ull * 1024 * 1024;
@@ -100,9 +83,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                            taskDescriptor.name.c_str(), queueBytes);
                 }
 
-                // Hold the server paused while programming its queue metadata.
-                // Some generated scheduler servers reset with rPause=0 and only
-                // self-pause after their FSM advances, so do not wait here.
+
                 memory_->writeReg64(*base_address + scheduler_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(*base_address + scheduler_server_raddr_shift, addr);
                 memory_->writeReg64(*base_address + scheduler_server_maxLength_shift, scheduler_capacity);
