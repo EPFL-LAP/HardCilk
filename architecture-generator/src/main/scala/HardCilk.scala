@@ -148,10 +148,6 @@ class HardCilk(
 
   fullSysGenDescriptor.lockConfig.foreach { lc => connectLockServer(lc, peMap) }
 
-  // Append the watcher LAST so its dedicated HBM master is the highest-index
-  // (topmost) m_axi port. Gated on watcherConfig => no effect on other benchmarks.
-  fullSysGenDescriptor.watcherConfig.foreach { wc => connectWatcher(wc, peMap) }
-
   if (fullSysGenDescriptor.mFPGASimulation || fullSysGenDescriptor.mFPGASynth) {
     buildMfpgaConnections()
   }
@@ -432,9 +428,6 @@ class HardCilk(
       peMap: Map[String, Seq[VitisWriteBufferModule]]
   ): Unit = {
 
-    // --- A. Deterministic lane assignment ---
-    // Walk taskDescriptors (stable order), not peMap, so lanes are reproducible.
-    // BFS: the 16 sparse_edgemap_helper PEs become lanes 0..15.
     val lockPEs: Seq[(VitisWriteBufferModule, TaskDescriptor)] =
       fullSysGenDescriptor.taskDescriptors
         .filter(_.participatesInLock)
@@ -449,10 +442,6 @@ class HardCilk(
       s"lock lanes ${number_of_needed_lanes} must equal lockConfig.N ${lc.N}"
     ) // tripwire; validate() guarantees it
 
-    // --- B. Instantiate and tie off every lane (unconnected lanes stay safely idle) ---
-    // addrW matches the HBM port address width (widthAXIAddress, 34) so the lock
-    // tags, tag store, and AMU master are all native HBM-width -- no 64->34 address
-    // transition, and the tag-store comparators are 34-bit instead of 64-bit.
     val lockServer = Module(
       new LockServer(
         n = lc.N,
@@ -469,7 +458,6 @@ class HardCilk(
       lockServer.io.resp(i).ready := false.B
     }
 
-    // --- C. Connect endpoints (last-connect semantics override the tie-off above) ---
     for (
       (pe, hasMultiplePorts, index, lane) <-
         (for {
@@ -501,221 +489,7 @@ class HardCilk(
       fromLock.TDATA := resp.bits.tdata
     }
 
-    // --- D. Export io.gmem as its own dedicated m_axi_NN ---
-    // STRATEGY #2 (direct wire): connect gmem straight to its own HBM port with
-    // NO ProtocolConverter (so no IdSerialize id-collapse) and NO Widen. The
-    // exported port matches gmem EXACTLY (64-bit data, full amuId+lane id width),
-    // so every outstanding atomic keeps a UNIQUE HBM id => at most one in flight
-    // per id => the per-id response-ordering assumption can never be violated.
-    // The platform's AXI-compliant HBM adapter performs the 64->256 width step.
     val gmemYanked = AxiUserYanker(lockServer.io.gmem.asFull)
-    val outputCfg = gmemYanked.cfg
-    val portName = f"m_axi_${numHbmPortExports}%02d"
-    val axiOut = IO(axi4.Master(outputCfg)).suggestName(portName)
-
-    axi4.full.SlaveBuffer(
-      gmemYanked,
-      axi4.BufferConfig.all(2)
-    ) :=> axiOut.asFull
-
-    interfaceBuffer.addOne(
-      hdlinfo.Interface(
-        portName,
-        hdlinfo.InterfaceRole.master,
-        hdlinfo.InterfaceKind("axi4"),
-        "clock",
-        "reset",
-        Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
-      )
-    )
-
-    axiOuts.addOne(axiOut)
-    numHbmPortExports += 1
-  }
-
-  /** Instantiate the free-running telemetry watcher, tap each monitored PE's
-    * in/out queue handshakes, tie its start_addr to the configured constant, and
-    * export its HBM master as the dedicated topmost m_axi port.
-    *
-    * The watcher is purely observational: it only READS the PEs' AXIS valid/ready
-    * (no `<>`), so PE<->scheduler connectivity is untouched. The PE count per task
-    * is taken from peMap, so the wiring is dynamic in numProcessingElements.
-    */
-  private def connectWatcher(
-      wc: WatcherConfig,
-      peMap: Map[String, Seq[VitisWriteBufferModule]]
-  ): Unit = {
-
-    // (statusPrefix, peCount) in the configured order (must match the HLS arrays).
-    val monitoredCounts: Seq[(String, Int)] = wc.monitored.map { mon =>
-      val pes = peMap.getOrElse(
-        mon.taskName,
-        throw new RuntimeException(
-          s"watcherConfig monitors unknown/instantiated task '${mon.taskName}'"
-        )
-      )
-      (mon.statusPrefix, pes.length)
-    }
-
-    // Number of per-HBM-port bandwidth/address pin groups on the watcher (matches
-    // the kernel MAX_HBM_PORTS). The actual exported compute masters are wired below;
-    // any remaining pins are tied to 0.
-    val maxHbmPorts = 31
-
-    // Fixed AXI config matching the synthesized watcher.v gmem master: 256b data
-    // (a 256-bit beat = two 128-bit telemetry bundles), 3-bit id, 64b address, 1-bit
-    // user on every channel, full AXI4 (ARLEN=8 => axi3Compat off, qos/prot/cache/
-    // region/lock on). Must match watcher.v C_M_AXI_GMEM_DATA_WIDTH.
-    val gmemCfg = axi4.Config(
-      wId = 3,
-      wAddr = 64,
-      wData = 256,
-      wUserAR = 1,
-      wUserR = 1,
-      wUserAW = 1,
-      wUserW = 1,
-      wUserB = 1,
-      axi3Compat = false,
-      hasQos = true,
-      hasProt = true,
-      hasCache = true,
-      hasRegion = true,
-      hasLock = true
-    )
-
-    val watcher = Module(
-      new HLSHelpers.WatcherBlackBox(
-        moduleName = wc.moduleName,
-        gmemCfg = gmemCfg,
-        addrWidth = 64,
-        monitored = monitoredCounts,
-        maxHbmPorts = maxHbmPorts
-      )
-    )
-
-    watcher.io.elements("ap_clk").asInstanceOf[Clock] := clock
-    watcher.io.elements("ap_rst_n").asInstanceOf[Bool] := ~reset.asBool
-    // mem_0..7 = m_axi base pointers for the eight HLS channels under one gmem
-    // bundle. start_addr = byte offset added in the kernel. The watcher is mapped
-    // exclusively to HBM[16:31], which starts at physical address 0x200000000 in
-    // the device address space. Vitis does NOT automatically subtract this base
-    // for AXI masters, so the kernel must issue the full physical address.
-    // `wc.startAddr` acts as an offset into this window.
-    for (ch <- 0 until 8) {
-      watcher.getPort(watcher.memBasePin(ch)).asInstanceOf[UInt] :=
-        BigInt("200000000", 16).U(64.W)
-    }
-    watcher.io.elements("start_addr").asInstanceOf[UInt] := BigInt(wc.startAddr).U(64.W)
-
-    // --- Tap each monitored PE's in/out queue handshakes ---
-    // Each status pin is 2 bits carrying the RAW AXIS handshake: bit0 = valid,
-    // bit1 = ready (matches the HLS QueueStatus{valid,ready} struct packing).
-    // From these the viewer derives empty(=!valid), full(=valid&&!ready), and the
-    // transfer events consumed(in_valid&&in_ready) / pushed(out_valid&&out_ready).
-    // in_* is the consumer side (PE's input), out_* is the producer side (PE's
-    // output) -- so valid/ready mean opposite things on the two queues.
-    //
-    // Every status bit is passed through a SINGLE uniform RegNext stage so (a)
-    // the long PE->watcher path is broken for timing and (b) all bits share the
-    // exact same 1-cycle delay -> the watcher samples a coherent snapshot (no
-    // cross-bit cycle skew). RegNext on each tap uses the same clock edge, so the
-    // delay is identical across every PE and every bit.
-    wc.monitored.foreach { mon =>
-      val pes = peMap(mon.taskName)
-      pes.zipWithIndex.foreach { case (pe, i) =>
-        val inIf =
-          pe.getPort(mon.inPort).asInstanceOf[chext.amba.axi4s.Interface]
-        val outIf =
-          pe.getPort(mon.outPort).asInstanceOf[chext.amba.axi4s.Interface]
-
-        val inValid = inIf.TVALID
-        val inReady = inIf.TREADY
-        val outValid = outIf.TVALID
-        val outReady = outIf.TREADY
-
-        // Reset value 0 (NOT a bare RegNext): an uninitialized register starts as
-        // X in simulation, and that X propagates through the watcher into its AXI
-        // write path -> a malformed transaction that stalls the shared HBM
-        // crossbar and hangs compute. Initializing to 0 keeps the uniform 1-cycle
-        // delay while guaranteeing defined startup.
-        watcher.getPort(watcher.inPinName(mon.statusPrefix, i)) :=
-          RegNext(chisel3.util.Cat(inReady, inValid), 0.U(2.W))
-        watcher.getPort(watcher.outPinName(mon.statusPrefix, i)) :=
-          RegNext(chisel3.util.Cat(outReady, outValid), 0.U(2.W))
-      }
-    }
-
-    // --- Start gate: the watcher stays idle until the spawn scheduler dispatches its
-    // first task (the first fire of any scheduler's taskOut). This anchors the
-    // telemetry timeline to compute start instead of FPGA programming. All
-    // watcher-scoped: no effect on benchmarks without a watcherConfig.
-    //
-    // CRITICAL: the gate must reach the watcher at least one cycle BEFORE the very
-    // first accept is observable, otherwise that accept is lost. The first task the
-    // scheduler dispatches IS the root task, and the root PE can accept it in the
-    // same cycle it is dispatched (combinational taskIn ready, L=0). The status taps
-    // delay that accept by one RegNext, so an L=0 accept dispatched at cycle T is
-    // observable at the watcher at T+1.
-    //
-    // Matching the gate to the SAME 1-cycle delay (a registered latch, gate high at
-    // T+1) is NOT enough in practice: the watcher HLS samples the scalar `start_gate`
-    // one pipeline stage later than the partitioned status arrays, so a gate that is
-    // only coincident with the accept still misses it by that internal skew (observed:
-    // initiator accepts undercounted by exactly 1 = the root task). So drive the gate
-    // a full cycle EARLY by OR-ing the latch with the combinational firstDispatch:
-    // gate high at T (dispatch cycle) while the accept lands at T+1, giving one cycle
-    // of margin that absorbs the internal skew. firstDispatch covers cycle T; the
-    // RegInit latch holds the gate from T+1 onward. firstDispatch is (TVALID&&TREADY),
-    // driven 0 out of reset, so the gate is X-free at startup. Starting the timeline
-    // one cycle before the first dispatch is harmless (cycle_count is just anchored a
-    // cycle earlier).
-    val firstDispatch =
-      schedulerMap.values
-        .flatMap(s => s.io_export.taskOut.map(t => t.TVALID.asBool && t.TREADY.asBool))
-        .toSeq
-        .reduceOption(_ || _)
-        .getOrElse(false.B)
-    val startedLatch = RegInit(false.B)
-    when(firstDispatch) { startedLatch := true.B }
-    watcher.getPort("start_gate") := (startedLatch || firstDispatch).asUInt
-
-    // --- Per-HBM-port bandwidth + address taps ---
-    // For each exported compute master we register, with reset-init 0 (same X-startup
-    // hazard avoidance as the status taps): the per-cycle write bytes (popcount WSTRB),
-    // the per-cycle read bytes ((ARLEN+1)<<ARSIZE of an issued burst), and the most-
-    // recent AW/AR address bits [39:20] (1 MB granularity, tapped now, used later for
-    // region stats). NB: HBM addresses live at ~0x1_0000_0000.. so the *top* 20 bits
-    // [63:44] are always zero -- bits [39:20] are the ones that actually distinguish
-    // regions (graph vs scheduler) while still covering the full 16 GB map. This
-    // only READS axiOuts (the exported masters) and never drives them, so the compute
-    // datapath is untouched. axiOuts already holds the compute masters here (the
-    // watcher's own port is appended afterwards). Pins beyond the exported count are 0.
-    val nCompute = numHbmPortExports
-    for (p <- 0 until maxHbmPorts) {
-      if (p < nCompute) {
-        val m = axiOuts(p).asFull
-        val wb = Wire(UInt(8.W))
-        wb := Mux(m.w.fire, chisel3.util.PopCount(m.w.bits.strb), 0.U)
-        watcher.getPort(watcher.wbytesPin(p)) := RegNext(wb, 0.U(8.W))
-        val rb = Wire(UInt(16.W))
-        rb := Mux(m.ar.fire, (m.ar.bits.len +& 1.U) << m.ar.bits.size, 0.U)
-        watcher.getPort(watcher.rbytesPin(p)) := RegNext(rb, 0.U(16.W))
-        watcher.getPort(watcher.awaddrPin(p)) :=
-          chisel3.util.RegEnable(m.aw.bits.addr(39, 20), 0.U(20.W), m.aw.fire)
-        watcher.getPort(watcher.araddrPin(p)) :=
-          chisel3.util.RegEnable(m.ar.bits.addr(39, 20), 0.U(20.W), m.ar.fire)
-      } else {
-        watcher.getPort(watcher.wbytesPin(p)) := 0.U
-        watcher.getPort(watcher.rbytesPin(p)) := 0.U
-        watcher.getPort(watcher.awaddrPin(p)) := 0.U
-        watcher.getPort(watcher.araddrPin(p)) := 0.U
-      }
-    }
-
-    // --- Export gmem as the dedicated topmost m_axi_NN (mirrors connectLockServer) ---
-    val gmem =
-      watcher.getPort("m_axi_gmem").asInstanceOf[axi4.RawInterface].asFull
-    val gmemYanked = AxiUserYanker(gmem)
     val outputCfg = gmemYanked.cfg
     val portName = f"m_axi_${numHbmPortExports}%02d"
     val axiOut = IO(axi4.Master(outputCfg)).suggestName(portName)
@@ -812,14 +586,5 @@ class HardCilk(
     )
     write.write(hdlinfoModule.asJson.toString())
     write.close()
-
-    // HBM port -> module descriptor (built by HasHBMInterconnect). Lets the
-    // telemetry viewer label each bandwidth port by the PE/scheduler/etc. attached
-    // to it. Copied next to the xclbin and embedded in the trace .bin by the host.
-    val wports = new java.io.PrintWriter(
-      f"${outputDirPathRTL}/${fullSysGenDescriptor.name}.hbmports.json"
-    )
-    wports.write(hbmPortMappingJson)
-    wports.close()
   }
 }

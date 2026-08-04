@@ -6,12 +6,7 @@
 #define VERTICES_PER_TASK 64
 #define MAX_OUTSTANDING_LOCKS 1
 
-// End-of-stream marker for the uint32_t index streams below. Vertex/neighbor
-// indices are always < vertex_count (well under 2^31), so the top bit is free to
-// flag the terminating beat. Consumers test that single bit instead of a full
-// 32-bit equality, which was the critical path in write_to_frontier
-// (HLS 200-871 / 200-1016). This does NOT apply to vertex_output's 64-bit
-// neighbor_address sentinel, where bit 31 can be a real address bit.
+
 static const uint32_t STREAM_END = 0x80000000u;
 
 void BFS(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlobal,
@@ -41,9 +36,6 @@ void BFS(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlobal,
         task.frontier_length = 1;
         task.active = 0;
         task.done = 0;
-        // Single source = one chunk. Must be set here too: leaving counter at
-        // the incoming value (0) underflows when the lone helper decrements it,
-        // so the continuation would never re-inject.
         task.counter = 1;
     }
     else
@@ -220,15 +212,16 @@ void attempt_test_and_set(hls::stream<uint32_t> &input_unvisited_neighbors, hls:
 
 void recieve_test_and_set_responses(void *mem, hls::stream<uint32_t> &input_awaiting_response, hls::stream<uint32_t> &successful_ts, sparse_edgemap_helper_args &task, hls::stream<lock_resp> &fromLock, hls::stream<lock_req> &toLock2)
 {
-    // Address-math hoist: distance[neighbor] is at mem + task.distance +
-    // neighbor*4, and neighbor = tag - task.visited (the visited array is
-    // byte-addressed, one byte per slot). So distance[neighbor] is also
-    //   mem + (task.distance - task.visited*4) + tag*4.
-    // The parenthesised term is loop-invariant, so fold it out here; inside the
-    // loop the store address is just distance_base + tag*4 (a shift plus one
-    // add). That keeps the 32-bit tag subtraction off the store's address path
-    // -- it still runs for successful_ts below, but that's a parallel FIFO
-    // write, not the critical path (HLS 200-871 / 200-1016).
+    // Fancy optimization suggested by AI:
+    //     Address-math hoist: distance[neighbor] is at mem + task.distance +
+    //     neighbor*4, and neighbor = tag - task.visited (the visited array is
+    //     byte-addressed, one byte per slot). So distance[neighbor] is also
+    //     mem + (task.distance - task.visited*4) + tag*4.
+    //     The parenthesised term is loop-invariant, so fold it out here; inside the
+    //     loop the store address is just distance_base + tag*4 (a shift plus one
+    //     add). That keeps the 32-bit tag subtraction off the store's address path
+    //     -- it still runs for successful_ts below, but that's a parallel FIFO
+    //     write, not the critical path (HLS 200-871 / 200-1016).
     const addr_t distance_base = task.distance - ((addr_t)task.visited << 2);
     while (true)
     {
@@ -267,11 +260,7 @@ void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sp
         {
             break;
         }
-        // The add-N response only carries the allocated slot (its previous
-        // counter value); every second lock shares the same tag (task.nextFChar),
-        // so the tag can't identify the neighbor -- it comes from the FIFO. Any
-        // reorder between the two is harmless: each neighbor still lands in a
-        // unique slot, so next_frontier ends up holding the same set.
+        // Ordering is irrelevant for the ADD-1
         lock_resp resp = fromLock2.read();
         if (lock_resp_success(resp))
         {
@@ -282,18 +271,7 @@ void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sp
         }
     }
 
-    // Memory fence before completion. The next-frontier length the continuation
-    // trusts is `nextFChar`, which is bumped via the lock/AMU at ADD_N time
-    // (recieve_test_and_set_responses) and is committed to HBM before its
-    // response returns. The matching slot store above is a plain m_axi write, and
-    // nothing otherwise guarantees it has committed when we emit argOut below. The
-    // join counter then reaches zero and the continuation spawns the next level,
-    // reading frontier[0 .. frontier_length) -- so a slot that is counted but not
-    // yet committed is read STALE: that vertex is dropped (-1) and the stale slot
-    // value is reprocessed (wrong distance). Force the writes to drain by reading
-    // the last-written slot back (read-after-write on the same m_axi port) and
-    // feeding it into the value we hand to argOut, so HLS cannot drop or reorder
-    // the read past the completion token.
+    // Memory fence before completion to ensure writes complete before we continue
     addr_t cont_out = task.cont;
     if (wrote_any)
     {
@@ -311,9 +289,6 @@ void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sp
     }
 }
 
-// ---------------------------------------------------------
-// Top Level Edge Map Helper
-// ---------------------------------------------------------
 
 void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3, void *mem_4, void *mem_5,
                            hls::stream<sparse_edgemap_helper_args> &taskIn,

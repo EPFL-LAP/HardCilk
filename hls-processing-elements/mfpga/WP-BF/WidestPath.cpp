@@ -39,9 +39,6 @@ void WidestPath(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlo
         task.frontier_length = 1;
         task.active = 0;
         task.done = 0;
-        // Single source = one chunk. Must be set here too: leaving counter at
-        // the incoming value (0) underflows when the lone helper decrements it,
-        // so the continuation would never re-inject.
         task.counter = 1;
     }
     else
@@ -140,10 +137,6 @@ void read_vertices(void *mem, hls::stream<uint32_t> &output_vertices, sparse_edg
     output_vertices.write(STREAM_END);
 }
 
-// relaxed[] is a per-vertex round stamp, not a byte flag cleared by readers.
-// Clearing it here races with the lock-served enqueue path across AXI masters.
-// The enqueue path advances relaxed[v] to round+1 atomically, so this stage only
-// reads graph metadata and the current distance for each frontier vertex.
 void load_vertices(void *mem_graph, void *mem_distance, hls::stream<uint32_t> &input_vertices, hls::stream<vertex_output> &output_vertices, sparse_edgemap_helper_args &task)
 {
     while (true)
@@ -244,16 +237,6 @@ void attempt_priority_write(hls::stream<closer_neighbor_type> &input_closer_neig
         {
             break;
         }
-        // distance[] is a 4-byte float array, so the slot byte address is
-        // task.distance + neighbor*4. The parentheses matter: '+' binds tighter
-        // than '<<', so the shift must be wrapped to apply to the index.
-        //
-        // new_distance is a float, but distance[] stores raw float bits and the
-        // AMU's SET_IF_GREATER compares the stored 32-bit word. Pass the float's bit
-        // pattern reinterpreted as an int -- NOT its numeric value, which the
-        // ap_uint<64> operand would otherwise truncate (e.g. 5.7f -> 5). The
-        // float-compare flag (last arg) makes the AMU order those bits as floats,
-        // so floating-point capacities relax correctly.
         uint32_t new_distance_bits = *((uint32_t *)&closer_neighbor.new_distance);
         lock_req req = make_lock_req(task.distance + ((addr_t)closer_neighbor.neighbor << 2), new_distance_bits, LOCK_OP_SET_IF_GREATER_AND_RETURN_CURRENT, true, ATOMIC_MODE_WORD, 0, true);
         toLock.write(req);
@@ -271,10 +254,6 @@ void listen_priority_write_response(hls::stream<uint32_t> &pw_awaiting_response,
         {
             break;
         }
-        // Responses may arrive out of order, so recover which neighbor this is
-        // from the echoed tag instead of pairing by FIFO order. The lock address
-        // was task.distance + (neighbor << 2) (distance is a 4-byte float array),
-        // so subtract the base and shift back down to recover the index.
         lock_resp resp = fromLock.read();
         ap_uint<64> tag = lock_resp_tag(resp);
         // write_occurred == 1 means the SET_IF_GREATER actually stored, i.e. we
@@ -304,10 +283,6 @@ void recieve_test_and_set_responses(void *mem, hls::stream<uint32_t> &successful
         {
             break;
         }
-        // Responses may arrive out of order, so recover which neighbor this is
-        // from the echoed tag instead of pairing by FIFO order. The lock address
-        // was task.relaxed + (neighbor << 2) (relaxed is a 4-byte round-stamp
-        // array), so subtract the base and shift back down to get the index.
         lock_resp resp = fromLock.read();
         ap_uint<64> tag = lock_resp_tag(resp);
         uint32_t neighbor = (uint32_t)((tag - (ap_uint<64>)task.relaxed) >> 2);
@@ -331,11 +306,7 @@ void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sp
         {
             break;
         }
-        // The add-N response only carries the allocated slot (its previous
-        // counter value); every second lock shares the same tag (task.nextFChar),
-        // so the tag can't identify the neighbor -- it comes from the FIFO. Any
-        // reorder between the two is harmless: each neighbor still lands in a
-        // unique slot, so next_frontier ends up holding the same set.
+        // ADDN order is irrelevant
         lock_resp resp = fromLock2.read();
         if (lock_resp_success(resp))
         {
@@ -351,10 +322,6 @@ void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sp
         sent = argOut.write_nb(task.cont);
     }
 }
-
-// ---------------------------------------------------------
-// Top Level Edge Map Helper
-// ---------------------------------------------------------
 
 void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3, void *mem_4, void *mem_5, void *mem_6,
                            hls::stream<sparse_edgemap_helper_args> &taskIn,

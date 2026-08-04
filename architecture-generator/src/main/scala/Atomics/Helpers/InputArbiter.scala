@@ -7,7 +7,7 @@ import Atomics.Operation
 
 // Takes n inputs (queues where we view the front element but don't pop) and selects p locks and p unlocks (or less depending on how many there are)
 // Then fills in p outputs, giving unlocks priority. Locks to left, unlocks to right (this part should be a simple mux)
-// Each cycle shoulddo the following:
+// Each cycle should do the following:
     Take the input and double it so we have 2n wide
     Calculate a mask n wide that shifts to the right 1 each cycle
     AND the mask on the input validity
@@ -36,8 +36,6 @@ class InputArbiter(
     val selectedRequests = Output(Vec(p, new RequestType(n, addrW)))
   })
 
-  // This arbiter only peeks at queue heads; popping is driven by LockServer. Tie off
-  // the (unused) ready outputs so the Decoupled interface is fully driven.
   io.requests.foreach(_.ready := false.B)
 
   val bucketCount = if (singleSelect) p else 2 * p
@@ -158,9 +156,13 @@ class InputArbiter(
       selectedHeads.map(_.requestingPE)
     )
     selectedRequest.operation :=
-      Operation.safe(Mux1H(requestHits, selectedHeads.map(_.operation.asUInt)))._1
+      Operation
+        .safe(Mux1H(requestHits, selectedHeads.map(_.operation.asUInt)))
+        ._1
     selectedRequest.atomicMode :=
-      AtomicMode.safe(Mux1H(requestHits, selectedHeads.map(_.atomicMode.asUInt)))._1
+      AtomicMode
+        .safe(Mux1H(requestHits, selectedHeads.map(_.atomicMode.asUInt)))
+        ._1
     selectedRequest.floatCompare :=
       Mux1H(requestHits, selectedHeads.map(_.floatCompare))
     selectedRequest.meta := Mux1H(requestHits, selectedHeads.map(_.meta))
@@ -203,10 +205,20 @@ class InputArbiter(
        else Mux(selectCycleReg, selectedRequest2.data, selectedRequest1.data))
     rawSelectedRequest.isBlocking :=
       (if (singleSelect) selectedRequest1.isBlocking
-       else Mux(selectCycleReg, selectedRequest2.isBlocking, selectedRequest1.isBlocking))
+       else
+         Mux(
+           selectCycleReg,
+           selectedRequest2.isBlocking,
+           selectedRequest1.isBlocking
+         ))
     rawSelectedRequest.requestingPE :=
       (if (singleSelect) selectedRequest1.requestingPE
-       else Mux(selectCycleReg, selectedRequest2.requestingPE, selectedRequest1.requestingPE))
+       else
+         Mux(
+           selectCycleReg,
+           selectedRequest2.requestingPE,
+           selectedRequest1.requestingPE
+         ))
     rawSelectedRequest.operation :=
       (if (singleSelect) selectedRequest1.operation
        else
@@ -281,7 +293,9 @@ class InputArbiter(
 
   for (bucket <- 0 until bucketCount) {
     val acceptsNewSelection =
-      acceptsSelectionThisCycle && !bucketWillHold(bucket) && selected_top_2p_buckets(
+      acceptsSelectionThisCycle && !bucketWillHold(
+        bucket
+      ) && selected_top_2p_buckets(
         bucket
       ).orR
 

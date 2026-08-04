@@ -10,10 +10,8 @@ import HLSHelpers._
 import Util.HardCilkUtil._
 import Util._
 
-
-/**
- * Companion object to hold helper classes
- */
+/** Companion object to hold helper classes
+  */
 object HardCilkBuilder {
   case class PortToExport(
       subsystemPortDescriptor: PortDescriptor,
@@ -22,10 +20,13 @@ object HardCilkBuilder {
   )
 }
 
-/**
- * A pure Scala helper that describes how to assemble the HardCilk system.
- */
-class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: Int) {
+/** A pure Scala helper that describes how to assemble the HardCilk system.
+  */
+class HardCilkBuilder(
+    desc: FullSysGenDescriptor,
+    debug: Boolean,
+    argCutCount: Int
+) {
 
   import HardCilkBuilder.PortToExport
 
@@ -47,91 +48,93 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       .filter(task => task.peHDLPath.nonEmpty)
       .map { task =>
         task.name -> (() => VitisModuleFactory(task, desc))
-      }.toMap
+      }
+      .toMap
 
     val schedulerFactories = desc.taskDescriptors.map { task =>
-      task.name -> (() => new Scheduler(
-        addrWidth = desc.widthAddress,
-        taskWidth = task.widthTask,
-        queueDepth = task.getCapacityPhysicalQueue("scheduler"),
-        peCount = task.numProcessingElements,
-        spawnsItself = desc.selfSpawnedCount(task.name) > 0,
-        peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
-        argRouteServersNumber = task.getNumServers("argumentNotifier"),
-        schedulerServersNumber = task.getNumServers("scheduler"),
-        pePortWidth = task.widthTask,
-        peType = task.name,
-        debug = debug,
-        spawnerServerNumber = task.spawnServersCount,
-        // A continuation (isCont) re-injects its own task via the argument
-        // notifier when the join counter hits 0. With mFPGA on, that loops back
-        // through the network; single-FPGA needs the *local* outsideSpawn path,
-        // which requires this flag and a spawner (spawnServersCount > 0). The
-        // original `> 2` heuristic only fired for tasks with an extra (e.g.
-        // allocator) sideConfig, so single-FPGA continuations dropped the
-        // re-injection. The mFPGA benchmarks keep spawnServersCount=0 and are
-        // unaffected.
-        argRouteServersCreateTasks =
-          task.sidesConfigs.length > 2 || (task.isCont && task.spawnServersCount > 0),
-        taskId = task.taskId,
-        mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth
-      ))
+      task.name -> (() =>
+        new Scheduler(
+          addrWidth = desc.widthAddress,
+          taskWidth = task.widthTask,
+          queueDepth = task.getCapacityPhysicalQueue("scheduler"),
+          peCount = task.numProcessingElements,
+          spawnsItself = desc.selfSpawnedCount(task.name) > 0,
+          peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
+          argRouteServersNumber = task.getNumServers("argumentNotifier"),
+          schedulerServersNumber = task.getNumServers("scheduler"),
+          pePortWidth = task.widthTask,
+          peType = task.name,
+          debug = debug,
+          spawnerServerNumber = task.spawnServersCount,
+          argRouteServersCreateTasks =
+            task.sidesConfigs.length > 2 || (task.isCont && task.spawnServersCount > 0),
+          taskId = task.taskId,
+          mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth
+        )
+      )
     }.toMap
 
     val allocatorFactories = desc.taskDescriptors
       .filter(t => desc.getPortCount("spawnNext", t.name) > 0)
       .map { task =>
-        task.name -> (() => new Allocator(
-          addrWidth = desc.widthAddress,
-          peCount = desc.getPortCount("spawnNext", task.name),
-          vcasCount = task.getNumServers("allocator"),
-          queueDepth = task.getCapacityPhysicalQueue("allocator"),
-          pePortWidth = 64 // <-- HARDCODED
-        ))
-      }.toMap
+        task.name -> (() =>
+          new Allocator(
+            addrWidth = desc.widthAddress,
+            peCount = desc.getPortCount("spawnNext", task.name),
+            vcasCount = task.getNumServers("allocator"),
+            queueDepth = task.getCapacityPhysicalQueue("allocator"),
+            pePortWidth = 64 // <-- HARDCODED
+          )
+        )
+      }
+      .toMap
 
     val argNotifierFactories = desc.taskDescriptors
       .filter(t => desc.getPortCount("sendArgument", t.name) > 0)
       .map { task =>
-        task.name -> (() => new ArgumentNotifier(
-          addrWidth =
-            if (task.variableSpawn)
-              (34 + desc.widthContCounter + 6)
-            else
-              desc.widthAddress,
-          taskWidth = task.widthTask,
-          queueDepth = task.getCapacityPhysicalQueue("argumentNotifier"),
-          peCount = desc.getPortCount("sendArgument", task.name),
-          argRouteServersNumber = task.getNumServers("argumentNotifier"),
-          contCounterWidth = desc.widthContCounter,
-          pePortWidth = 64, // <-- HARDCODED
-          cutCount = argCutCount,
-          multiDecrease = task.variableSpawn,
-          mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
-          taskID = task.taskId
-        ))
-      }.toMap
+        task.name -> (() =>
+          new ArgumentNotifier(
+            addrWidth =
+              if (task.variableSpawn)
+                (34 + desc.widthContCounter + 6)
+              else
+                desc.widthAddress,
+            taskWidth = task.widthTask,
+            queueDepth = task.getCapacityPhysicalQueue("argumentNotifier"),
+            peCount = desc.getPortCount("sendArgument", task.name),
+            argRouteServersNumber = task.getNumServers("argumentNotifier"),
+            contCounterWidth = desc.widthContCounter,
+            pePortWidth = 64, // <-- HARDCODED
+            cutCount = argCutCount,
+            multiDecrease = task.variableSpawn,
+            mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
+            taskID = task.taskId
+          )
+        )
+      }
+      .toMap
 
     val memAllocatorFactories = desc.taskDescriptors
       .filter(t => desc.getPortCount("mallocIn", t.name) > 0)
       .map { task =>
-        task.name -> (() => new Allocator(
-          addrWidth = desc.widthAddress,
-          peCount = desc.getPortCount("mallocIn", task.name),
-          vcasCount = task.getNumServers("memoryAllocator"),
-          queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),
-          pePortWidth = 64 // <-- HARDCODED
-        ))
-      }.toMap
+        task.name -> (() =>
+          new Allocator(
+            addrWidth = desc.widthAddress,
+            peCount = desc.getPortCount("mallocIn", task.name),
+            vcasCount = task.getNumServers("memoryAllocator"),
+            queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),
+            pePortWidth = 64 // <-- HARDCODED
+          )
+        )
+      }
+      .toMap
 
-
-    /**
-      * Create a factory of spawnNext write buffers
-      * Conditions to create write buffers:
-      * 1. Task has a PE HDL path which is empty
-      * 2. task.generateSpawnNextWriteBuffer is true
-      * 3. The task issues a spawnNext of another task type
-      * We create one write buffer per PE of the task type
+    /** Create a factory of spawnNext write buffers Conditions to create write
+      * buffers:
+      *   1. Task has a PE HDL path which is empty
+      *   2. task.generateSpawnNextWriteBuffer is true
+      *   3. The task issues a spawnNext of another task type We create one
+      *      write buffer per PE of the task type
       */
 
     val spawnNextWBFactories = desc.taskDescriptors
@@ -143,19 +146,28 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         task.name -> (() => {
           val wbSeq = scala.collection.mutable.ArrayBuffer[WriteBuffer]()
           for (_ <- 0 until task.numProcessingElements) {
-            val wb = Module(new WriteBuffer(
-              new WriteBufferConfig(
-                wAddr = desc.widthAddress,
-                wData = desc.spawnNextList(task.name).map(tn => desc.taskDescriptors.find(_.name == tn).get.widthTask).max, // this assumes a single spawnNext type per task
-                wAllow = (if (task.variableSpawn) 0 else 32), // <-- 32 is HARDCODED
-                wAllowData = Seq(task.widthTask)
+            val wb = Module(
+              new WriteBuffer(
+                new WriteBufferConfig(
+                  wAddr = desc.widthAddress,
+                  wData = desc
+                    .spawnNextList(task.name)
+                    .map(tn =>
+                      desc.taskDescriptors.find(_.name == tn).get.widthTask
+                    )
+                    .max, // this assumes a single spawnNext type per task
+                  wAllow =
+                    (if (task.variableSpawn) 0 else 32), // <-- 32 is HARDCODED
+                  wAllowData = Seq(task.widthTask)
+                )
               )
-            ))
+            )
             wbSeq += wb
           }
           wbSeq.toSeq
         })
-      }.toMap
+      }
+      .toMap
 
     val sendArgumentWBFactories = desc.taskDescriptors
       .filter { task =>
@@ -166,19 +178,24 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         task.name -> (() => {
           val wbSeq = scala.collection.mutable.ArrayBuffer[WriteBuffer]()
           for (_ <- 0 until task.numProcessingElements) {
-            val wb = Module(new WriteBuffer(
-              new WriteBufferConfig(
-                wAddr = desc.widthAddress,
-                wData = task.argumentSizeList.max, // We currently assume a single argument type per task
-                wAllow = 32,
-                wAllowData = Seq(64) // Size of the argument notification address
+            val wb = Module(
+              new WriteBuffer(
+                new WriteBufferConfig(
+                  wAddr = desc.widthAddress,
+                  wData =
+                    task.argumentSizeList.max, // We currently assume a single argument type per task
+                  wAllow = 32,
+                  wAllowData =
+                    Seq(64) // Size of the argument notification address
+                )
               )
-            ))
+            )
             wbSeq += wb
           }
           wbSeq.toSeq
         })
-      }.toMap
+      }
+      .toMap
 
     val remoteStreamToMemFactories = desc.taskDescriptors
       .filter { task =>
@@ -193,10 +210,12 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
               localModulesCount = task.numProcessingElements,
               taskId = task.taskId,
               axiDataWidth = task.argumentSizeList.head
-            ))
+            )
+          )
           remoteStreamToMem
         })
-      }.toMap
+      }
+      .toMap
 
     SubsystemBlueprint(
       peFactories,
@@ -212,9 +231,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
 
   // <-- Removed the private getPhysicalPort helper function -->
 
-  /**
-   * Pure wiring logic — connects instantiated modules.
-   */
+  /** Pure wiring logic — connects instantiated modules.
+    */
   def connectSubsystems(
       scheds: Map[String, Scheduler],
       allocs: Map[String, Allocator],
@@ -225,13 +243,17 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       sendArgumentWBs: Map[String, Seq[WriteBuffer]]
   ): Seq[PortToExport] = {
 
-    println(s"[HardCilk:Builder:197] Connecting ${scheds.size} schedulers, ${allocs.size} allocators, ${notifiers.size} notifiers, ${memAllocs.size} memAllocs")
+    println(
+      s"[HardCilk:Builder:197] Connecting ${scheds.size} schedulers, ${allocs.size} allocators, ${notifiers.size} notifiers, ${memAllocs.size} memAllocs"
+    )
 
     val portsToExport = new scala.collection.mutable.ArrayBuffer[PortToExport]()
 
     for (taskName <- scheds.keys) {
       if (notifiers.contains(taskName)) {
-        scheds(taskName).connArgumentNotifier <> notifiers(taskName).connStealNtw
+        scheds(taskName).connArgumentNotifier <> notifiers(
+          taskName
+        ).connStealNtw
       }
     }
 
@@ -242,8 +264,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         for (idx <- 0 until spawnNextWBs(taskName).length) {
           // val wb = spawnNextWBs(taskName)(idx)
           portsToExport += PortToExport(
-            PortDescriptor(taskName,"spawnNextWB",idx,"s_pkg",0),
-            PortDescriptor(taskName,"pe",idx,"spawnNext",0),
+            PortDescriptor(taskName, "spawnNextWB", idx, "s_pkg", 0),
+            PortDescriptor(taskName, "pe", idx, "spawnNext", 0),
             isSource = false
           )
         }
@@ -256,8 +278,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         for (idx <- 0 until sendArgumentWBs(taskName).length) {
           // val wb = sendArgumentWBs(taskName)(idx)
           portsToExport += PortToExport(
-            PortDescriptor(taskName,"sendArgumentWB",idx,"s_pkg",0),
-            PortDescriptor(taskName,"pe",idx,"argDataOut",0),
+            PortDescriptor(taskName, "sendArgumentWB", idx, "s_pkg", 0),
+            PortDescriptor(taskName, "pe", idx, "argDataOut", 0),
             isSource = false
           )
         }
@@ -269,59 +291,121 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     for (connection <- systemConnectionsDescriptor.connections) {
       val srcIsPE = connection.srcPort.parentType == "PE"
       val dstIsPE = connection.dstPort.parentType == "PE"
-      val peName = if (srcIsPE) connection.srcPort.parentName else if (dstIsPE) connection.dstPort.parentName else ""
+      val peName =
+        if (srcIsPE) connection.srcPort.parentName
+        else if (dstIsPE) connection.dstPort.parentName
+        else ""
       val peExists = pes.contains(peName)
-      val peIdx = if (srcIsPE) connection.srcPort.parentIndex else if (dstIsPE) connection.dstPort.parentIndex else 0
-      val spawnNextWB = if (spawnNextWBs.get(peName).isDefined) spawnNextWBs(peName)(peIdx) else null
-      val sendArgumentWB = if (sendArgumentWBs.get(peName).isDefined) sendArgumentWBs(peName)(peIdx) else null
+      val peIdx =
+        if (srcIsPE) connection.srcPort.parentIndex
+        else if (dstIsPE) connection.dstPort.parentIndex
+        else 0
+      val spawnNextWB =
+        if (spawnNextWBs.get(peName).isDefined) spawnNextWBs(peName)(peIdx)
+        else null
+      val sendArgumentWB =
+        if (sendArgumentWBs.get(peName).isDefined)
+          sendArgumentWBs(peName)(peIdx)
+        else null
 
-      println(s"[HardCilkBuilder] Connecting ${connection.srcPort} to ${connection.dstPort} (PE exists: ${peExists})")
+      println(
+        s"[HardCilkBuilder] Connecting ${connection.srcPort} to ${connection.dstPort} (PE exists: ${peExists})"
+      )
 
       if (srcIsPE && !peExists) {
-        val hardcilkPort = getPhysicalPort(connection.dstPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs)
+        val hardcilkPort = getPhysicalPort(
+          connection.dstPort,
+          scheds,
+          allocs,
+          notifiers,
+          memAllocs,
+          pes,
+          spawnNextWBs,
+          sendArgumentWBs
+        )
         // Connecting WB m_allows to HardCilk and exporting s_allows port
         // Todo: is s_allows and m_allows always index 0? If yes, why it supports multiple?
         connection.srcPort.portType match {
           case "taskOut" => {
             if (spawnNextWB != null) {
               spawnNextWB.m_allows(0) <> hardcilkPort
-              portsToExport += PortToExport(PortDescriptor(peName,"spawnNextWB",peIdx,"s_allows",0), connection.srcPort, isSource = false)
+              portsToExport += PortToExport(
+                PortDescriptor(peName, "spawnNextWB", peIdx, "s_allows", 0),
+                connection.srcPort,
+                isSource = false
+              )
             } else {
-              portsToExport += PortToExport(connection.dstPort, connection.srcPort, isSource = false)
+              portsToExport += PortToExport(
+                connection.dstPort,
+                connection.srcPort,
+                isSource = false
+              )
             }
           }
           case "argOut" => {
             if (sendArgumentWB != null) {
               sendArgumentWB.m_allows(0) <> hardcilkPort
-              portsToExport += PortToExport(PortDescriptor(peName,"sendArgumentWB",peIdx,"s_allows",0), connection.srcPort, isSource = false)
+              portsToExport += PortToExport(
+                PortDescriptor(peName, "sendArgumentWB", peIdx, "s_allows", 0),
+                connection.srcPort,
+                isSource = false
+              )
             } else {
-              portsToExport += PortToExport(connection.dstPort, connection.srcPort, isSource = false)
+              portsToExport += PortToExport(
+                connection.dstPort,
+                connection.srcPort,
+                isSource = false
+              )
             }
           }
           case _: String => {
-            portsToExport += PortToExport(connection.dstPort, connection.srcPort, isSource = false)
+            portsToExport += PortToExport(
+              connection.dstPort,
+              connection.srcPort,
+              isSource = false
+            )
           }
         }
       } else if (dstIsPE && !peExists) {
-        portsToExport += PortToExport(connection.srcPort, connection.dstPort, isSource = true)
+        portsToExport += PortToExport(
+          connection.srcPort,
+          connection.dstPort,
+          isSource = true
+        )
       } else {
         try {
           // Calls the helper from HardCilkUtil
           val physicalSourcePort = getPhysicalPort(
-            connection.srcPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs
+            connection.srcPort,
+            scheds,
+            allocs,
+            notifiers,
+            memAllocs,
+            pes,
+            spawnNextWBs,
+            sendArgumentWBs
           )
 
           // Calls the helper from HardCilkUtil
           val physicalDestinationPort = getPhysicalPort(
-            connection.dstPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs
+            connection.dstPort,
+            scheds,
+            allocs,
+            notifiers,
+            memAllocs,
+            pes,
+            spawnNextWBs,
+            sendArgumentWBs
           )
 
           physicalSourcePort <> physicalDestinationPort
 
           // Log the connection
-          println("[HardCilk:Builder:237] Connected " +
-            s"${connection.srcPort.parentType}(${connection.srcPort.parentName}).${connection.srcPort.portType}.${connection.srcPort.portIndex} " +
-            s"--> ${connection.dstPort.parentType}(${connection.dstPort.parentName}).${connection.dstPort.portType}.${connection.dstPort.portIndex}")
+          println(
+            "[HardCilk:Builder:237] Connected " +
+              s"${connection.srcPort.parentType}(${connection.srcPort.parentName}).${connection.srcPort.portType}.${connection.srcPort.portIndex} " +
+              s"--> ${connection.dstPort.parentType}(${connection.dstPort.parentName}).${connection.dstPort.portType}.${connection.dstPort.portIndex}"
+          )
 
         } catch {
           case e: Exception => {

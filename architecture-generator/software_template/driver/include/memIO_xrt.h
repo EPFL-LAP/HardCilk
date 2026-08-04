@@ -97,6 +97,8 @@ struct XRTMemory : Memory{
       defaultLastBank_ = lastBank;
     }
 
+    // NOTE by Bradley: THIS PART MODIFIED BY AI. Explanation below produced by AI.
+    
     // Clear complete HBM banks without consuming them from this allocator. Each
     // temporary BO is released before the next bank is opened, keeping host
     // memory use bounded while still overwriting every device byte.

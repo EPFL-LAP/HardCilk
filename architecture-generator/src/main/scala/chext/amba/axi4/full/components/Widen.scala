@@ -84,14 +84,6 @@ class Widen(val cfg: WidenConfig) extends Module {
         out.size := size.U
         out.len := len1 -% 1.U
 
-        // BUGFIX: align the wide-side address down to the full-width (2^size)
-        // boundary. We bumped AxSIZE up to the full bus width above but left the
-        // address unaligned (`out := in`), so any narrow access whose address is
-        // not 2^size-aligned was emitted as a malformed wide burst — which hangs
-        // the read datapath or returns the wrong bytes. The read-data reassembly
-        // derives its sub-word index from the ORIGINAL in.addr (see
-        // generateControl), so the aligned wide word is still positioned
-        // correctly downstream; only the outgoing burst address needs aligning.
         out.addr := in.addr & ~(((BigInt(1) << size) - 1).U(axiCfg.wAddr.W))
 
         // left here for debugging purposes
@@ -289,8 +281,10 @@ class Widen(val cfg: WidenConfig) extends Module {
     val validReg = RegInit(false.B)
 
     val haveInput = s_axi.w.valid && control.valid
-    val nextData = Mux(control.bits.beatFirst || !validReg, 0.U, dataReg) | s_axi.w.bits.data
-    val nextStrb = Mux(control.bits.beatFirst || !validReg, 0.U, strbReg) | s_axi.w.bits.strb
+    val nextData =
+      Mux(control.bits.beatFirst || !validReg, 0.U, dataReg) | s_axi.w.bits.data
+    val nextStrb =
+      Mux(control.bits.beatFirst || !validReg, 0.U, strbReg) | s_axi.w.bits.strb
     val emitBeat = haveInput && control.bits.beatLast
 
     m_axi.w.valid := emitBeat

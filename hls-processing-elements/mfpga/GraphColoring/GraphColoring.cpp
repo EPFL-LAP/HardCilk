@@ -692,11 +692,6 @@ void choose_and_write_colors(void *mem_color,
     colored_for_updates.write(STREAM_END);
 }
 
-// Request side only: never read fromLock in the same loop that writes toLock.
-// HLS schedules a same-loop write+read together and gates the request behind a
-// response that cannot exist until the request is sent -> deadlock. The
-// response is drained by a separate dataflow process below (matching the proven
-// init/decrement split).
 void request_colors_used_updates(hls::stream<colored_vertex> &colored_vertices,
                                  hls::stream<uint32_t> &colors_used_awaiting_response,
                                  color_loop_helper_args &task,

@@ -94,35 +94,7 @@ case class MemStats(
     interconnectDescriptors: List[InterconnectDescriptor]
 )
 
-// inflightDepth = per-PE in-flight credit budget: how many lock requests a PE
-// may have unresolved inside the server at once. 1 mimics the original
-// one-request-at-a-time behaviour; raise it to let a PE pipeline locks.
 case class LockConfig(N: Int, P: Int, tagStoreSize: Int, inflightDepth: Int = 1)
-
-// --- Watcher (telemetry) configuration ---
-// Optional, mirrors lockConfig: when present (only triangleCountDecoupled today)
-// the generator builds + wires the free-running `watcher` HLS kernel that snapshots
-// each monitored PE's in/out queue status. When absent, every other benchmark is
-// generated exactly as before. `monitored` lists, in the SAME order as the HLS
-// status arrays, which task each status array tracks and which PE AXIS ports map to
-// the watcher's "in" and "out" queue probes. The wiring loops over the real PE count
-// per task, so it is dynamic to numProcessingElements.
-// statusPrefix is the C++ status-array parameter name in the watcher kernel
-// (e.g. "cont0_status"), which after HLS DISAGGREGATE becomes the pin prefix
-// `<statusPrefix>_<peIndex>_{in,out}_{empty,full}`. inPort/outPort are the PE's
-// AXIS interface names tapped for the in/out queue probes.
-case class WatcherMon(
-    taskName: String,
-    statusPrefix: String,
-    inPort: String,
-    outPort: String
-)
-case class WatcherConfig(
-    hdlPath: String,                       // directory containing the synthesized watcher.v
-    moduleName: String = "watcher",
-    startAddr: Long = 0L,                  // kernel-relative base tie-off (HBM[16:31] window => 0)
-    monitored: List[WatcherMon]
-)
 
 // --- SideConfig with default handling ---
 case class SideConfig(
@@ -278,7 +250,6 @@ case class FullSysGenDescriptor(
     mFPGASynth: Boolean = false,
     mFPGASimulation: Boolean = false,
     lockConfig: Option[LockConfig] = None,
-    watcherConfig: Option[WatcherConfig] = None,
     maximumAXIPorts: Int = 32,
     hasAXIDMAInput: Boolean = false,
     transformAXI: Boolean = false,
@@ -665,18 +636,6 @@ case class FullSysGenDescriptor(
         lockLanes > 0,
         "lockConfig is set but no task has participatesInLock=true"
       )
-    }
-
-    // Watcher: every monitored task must exist and expose the named AXIS ports
-    // (port presence is re-checked at elaboration when the PE is built).
-    watcherConfig.foreach { wc =>
-      require(wc.monitored.nonEmpty, "watcherConfig.monitored must not be empty")
-      wc.monitored.foreach { mon =>
-        require(
-          taskDescriptors.exists(_.name == mon.taskName),
-          s"watcherConfig.monitored references unknown task '${mon.taskName}'"
-        )
-      }
     }
   }
 }

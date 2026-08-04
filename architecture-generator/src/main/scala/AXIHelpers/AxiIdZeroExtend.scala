@@ -7,11 +7,12 @@ import chext.elastic.ConnectOp._
 import chext.amba.axi4
 import chext.amba.axi4.Ops._
 
+// (Bradley) This file written by AI
 /** Zero-extends the AXI id width from ``cfgSlave.wId`` to ``targetWId``.
   *
   * This is effectively free in hardware: the ``:=>`` operator pads the narrower
-  * id with zeros on the AR/AW channels and truncates the response id on the
-  * R/B channels (safe because the upper bits were zero to begin with).
+  * id with zeros on the AR/AW channels and truncates the response id on the R/B
+  * channels (safe because the upper bits were zero to begin with).
   *
   * Follows the same pattern as [[AxiUserYanker]]: a thin config-adapter that
   * lets two AXI interfaces with slightly different configs share a port/mux
@@ -22,8 +23,10 @@ class AxiIdZeroExtend(
     val targetWId: Int
 ) extends Module {
   suggestName("AxiIdZeroExtend")
-  require(targetWId >= cfgSlave.wId,
-    s"AxiIdZeroExtend: targetWId ($targetWId) must be >= source wId (${cfgSlave.wId})")
+  require(
+    targetWId >= cfgSlave.wId,
+    s"AxiIdZeroExtend: targetWId ($targetWId) must be >= source wId (${cfgSlave.wId})"
+  )
 
   val cfgMaster = cfgSlave.copy(wId = targetWId)
 
@@ -32,17 +35,18 @@ class AxiIdZeroExtend(
 
   if (cfgSlave.read) {
     s_axi.ar :=> m_axi.ar
-    m_axi.r  :=> s_axi.r
+    m_axi.r :=> s_axi.r
   }
 
   if (cfgSlave.write) {
     s_axi.aw :=> m_axi.aw
-    s_axi.w  :=> m_axi.w
-    m_axi.b  :=> s_axi.b
+    s_axi.w :=> m_axi.w
+    m_axi.b :=> s_axi.b
   }
 }
 
 object AxiIdZeroExtend {
+
   /** Returns ``s_axi`` unchanged if its id width already matches ``targetWId``,
     * otherwise instantiates a zero-extend adapter.
     */

@@ -34,13 +34,11 @@
 using addr_t = uint64_t;
 using Addr = uint64_t;
 
-// 136-bit AXI-Stream lock request/response, matching the lockchisel.LockServer
-// wire format (LockServer.ReqWidth == LockServer.RespWidth == 136).
+
 using lock_req = ap_axiu<144, 0, 0, 0>;
 using lock_resp = ap_axiu<136, 0, 0, 0>;
 
-// Opcodes accepted by the LockServer (lockchisel.Operation). The operation
-// field of a request lives at tdata[131:128].
+
 enum LockOperation : uint8_t
 {
   LOCK_OP_UNLOCK = 0b0000,
@@ -57,25 +55,16 @@ enum BfsVisitFlags : uint32_t
   BFS_VISIT_VERTEX_ALREADY_MARKED = 1
 };
 
-// Atomic granularity selector (lockchisel.AtomicMode), carried in
-// tdata[134:133] of a lock request. The AMU read-modify-writes only the
-// selected sub-field of the 64-bit beat (byte-strobed), so Visited can be a
-// plain byte array.
+
 enum AtomicMode : uint8_t
 {
-  ATOMIC_MODE_DOUBLEWORD = 0b00, // 8 bytes (legacy 64-bit behaviour)
+  ATOMIC_MODE_DOUBLEWORD = 0b00, // 8 bytes
   ATOMIC_MODE_BYTE = 0b01,       // 1 byte
   ATOMIC_MODE_WORD = 0b10,       // 4 bytes
 };
 
-// With ATOMIC_MODE_BYTE the AMU test-and-sets a single byte, so every Visited
-// slot is one byte (4x less HBM than the 32-bit layout). Addresses stay 64-bit
-// on the wire (truncated to the HBM address width).
 static const addr_t VISITED_SLOT_BYTES = 1;
 
-// BFS_new: number of frontier vertices the orchestration kernel packs into one
-// edge-map helper task (one chunk). Shared so the kernel and the testbench's
-// chunked C model agree. BFS_new.cpp re-#defines this to the same value.
 #ifndef VERTICES_PER_TASK
 #define VERTICES_PER_TASK 64
 #endif
@@ -113,25 +102,12 @@ struct sparse_edgemap_helper_args
   uint32_t round;             // 60
   uint32_t vertex_count;      // 64  total vertices in the graph (bounds checks)
   uint32_t _placeholder;      // 68
-  uint32_t task_vertex_count; // 72  BFS_new: # frontier vertices in THIS chunk
-  // The scheduler's PE-facing AXIS width and backing-queue entry size are both
-  // driven by the descriptor's widthTask, which must be a power of two. The real
-  // payload is 76 bytes; pad to 128 bytes (1024 bits) so it matches
-  // widthTask=1024 in BFS.json. Without this the trailing fields (task_vertex_count,
-  // max_depth) are truncated off the task stream.
+  uint32_t task_vertex_count; // 72 
   uint8_t _pad[52]; // 76..127
 };
 static_assert(sizeof(sparse_edgemap_helper_args) == 128,
               "sparse_edgemap_helper_args must be 1024 bits (widthTask=1024)");
 
-// Build a lock request beat:
-//   tdata[63:0]    = byte address of the slot (tag)
-//   tdata[127:64]  = operand / store value (data)
-//   tdata[131:128] = opcode
-//   tdata[132]     = blocking
-//   tdata[134:133] = atomic mode (00 = double-word, 01 = byte, 10 = word)
-//   tdata[135]     = float-compare flag: when set, the conditional SET_IF_* ops
-//                    order operand vs memory as IEEE-754 floats instead of ints
 static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
                                      LockOperation op, bool blocking,
                                      AtomicMode atomic_mode, uint8_t metadata = 0,
@@ -153,26 +129,14 @@ static inline lock_req make_lock_req(addr_t address, ap_uint<64> value,
   return req;
 }
 
-// Decode a lock response beat. The LockServer packs
-// Cat(meta, prevValue, tag, writeOccurred, success), so:
-//   tdata[0]       = success (1 == request completed)
-//   tdata[1]       = for conditional AMU ops (SET_IF_GREATER / SET_IF_LESS),
-//                    whether the store actually happened; for every other op it
-//                    just mirrors the success bit
-//   tdata[7:2]     = reserved (0)
-//   tdata[71:8]    = echoed request tag (the lock address)
-//   tdata[135:72]  = previous memory contents, with the addressed sub-word
-//                    right-justified into the low bits (byte/word atomics return
-//                    just their lane in [7:0]/[31:0]; doubleword is the full beat)
+
 static inline bool lock_resp_success(const lock_resp &resp)
 {
 #pragma HLS INLINE
   return resp.data(0, 0) != 0;
 }
 
-// For a conditional AMU op (SET_IF_GREATER / SET_IF_LESS), true iff the store
-// actually happened (the predicate held). For all other ops this mirrors
-// lock_resp_success.
+
 static inline bool lock_resp_write_occurred(const lock_resp &resp)
 {
 #pragma HLS INLINE
@@ -191,9 +155,6 @@ static inline ap_uint<64> lock_resp_tag(const lock_resp &resp)
   return resp.data(71, 8);
 }
 
-// The AMU right-justifies the addressed byte into the low bits of the returned
-// value, so the previous Visited byte is the low byte of lock_resp_current
-// (tdata[79:72]). No shift needed.
 static inline uint8_t lock_resp_current_byte(const lock_resp &resp)
 {
 #pragma HLS INLINE

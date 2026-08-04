@@ -61,9 +61,6 @@ object Operation extends ChiselEnum {
     )
   }
 
-  // Extension methods on Operation values. Defined here in the companion object,
-  // so they're in implicit scope for any Operation.Type with no extra import:
-  //   myReq.operation.isLock
   implicit class OperationOps(val op: Operation.Type) {
     def isLock: Bool =
       op === Lock || op === LockSetUnlockAndReturnCurrent || op === LockSetIfGreaterUnlockAndReturnCurrent || op === LockSetIfSignedLessUnlockAndReturnCurrent || op === LockAddNReturnCurrent
@@ -100,9 +97,8 @@ class RequestType(n: Int, addrW: Int = 64) extends Bundle {
   val requestingPE = UInt(log2Ceil(n).W)
   val isBlocking = Bool()
   val atomicMode = AtomicMode()
-  // When set, the conditional SET_IF_* ops compare operand vs memory as IEEE-754
-  // floats instead of integers (so negative values order correctly). Ignored by
-  // every non-conditional op.
+  // Ignored by every non-conditional op. Used to
+  // correct float sign for unsigned int comparison.
   val floatCompare = Bool()
   // Sender-defined correlation id, echoed back in the response.
   val meta = UInt(8.W)
@@ -130,8 +126,7 @@ class LockServer(
     val lockTraceCsv: Boolean = false,
     val singleSelect: Boolean = false,
     // Per-PE in-flight credit budget: how many requests a PE may have unresolved
-    // inside the server (pipeline + replay queue + AMU + response queue). Bounds
-    // every per-PE structure, so all of them are provably overflow-free.
+    // inside the server (pipeline + replay queue + AMU + response queue).
     val inflightDepth: Int = 5
 ) extends Module {
   import LockServer._
@@ -181,18 +176,14 @@ class LockServer(
     Seq.fill(p)(Module(new Queue(new RequestType(n, addrW), entries = 2)))
 
   for (i <- 0 until p) {
-    // FIFO output -> AMU input. (FIFO inputs and AMU outputs left unwired.)
     atomicMemoryUnits(i).io.req <> amuFifos(i).io.deq
-    // AMU AXI master -> mux slave port.
     atomicMemoryUnits(i).io.gmem :=> gmemMux.s_axi(i)
   }
-  // Mux master -> top-level HBM port.
   gmemMux.m_axi <> io.gmem.asFull
 
   // When requests come in, put them in small Queues
 
   // Tag store lives in registers
-  // Data doesn't need init; valid bits must start clear so empty slots don't spuriously match.
   val tagStore = Reg(Vec(tagStoreSize, UInt(addrW.W)))
   val tagStoreValid = RegInit(VecInit(Seq.fill(tagStoreSize)(false.B)))
   val unlockTable = Wire(Vec(tagStoreSize, Bool()))
@@ -213,20 +204,6 @@ class LockServer(
   val inputQueues =
     Seq.fill(n)(Module(new Queue(new RequestType(n, addrW), entries = 2)))
 
-  // Per-PE pipelining state. A request is consumed (popped) the cycle the
-  // arbiter selects it; if it cannot complete at cycle 3 it is re-enqueued into
-  // its PE's replay queue and tried again. The credit counter `inflight` tracks
-  // requests from admission until their response leaves io.resp (or until
-  // cycle 3 for ops with no response); admission stops at inflightDepth, which
-  // bounds every per-PE structure:
-  //  - replay queue: each credited request occupies at most one slot at a time
-  //    (it is either in the pipe, in the replay queue, at the AMU, or in the
-  //    urgent AMU return queue, or in the response queue), so depth
-  //    inflightDepth can never overflow.
-  //  - response queue: at most one response per credit, released on deq.
-  // Known deadlock (deferred to PE authors by contract): a PE that fills all
-  // its credits with blocking locks whose release depends on its own later
-  // unlock wedges itself -- the unlock can never be admitted.
   val replayQueues =
     Seq.fill(n)(
       Module(new Queue(new RequestType(n, addrW), entries = inflightDepth))
@@ -236,11 +213,7 @@ class LockServer(
   val inflight =
     RegInit(VecInit(Seq.fill(n)(0.U(log2Ceil(inflightDepth + 1).W))))
 
-  // Static PE -> lane mapping (mirrors the arbiter's bucketing): a PE lives in
-  // exactly one bucket, and buckets `l` and `p + l` both resolve on lane `l`.
-  // Everything a PE produces or receives therefore flows through one lane --
-  // its retries, its AMU forwards, and its responses -- so all per-PE fanout
-  // below is lane-local (p independent 1-to-(n/p) fanouts, never p-to-n).
+  // PEs are bucketed into lanes
   val bucketCount = if (singleSelect) p else 2 * p
   def laneOfPe(pe: Int): Int = {
     val bucket = pe / (n / bucketCount)
@@ -263,7 +236,7 @@ class LockServer(
     enq.bits.atomicMode := AtomicMode.decode(req.bits.tdata(134, 133))
     enq.bits.floatCompare := req.bits.tdata(135, 135)
     enq.bits.meta := req.bits.tdata(143, 136)
-    // Only ever set by the AMU on its return path; default for fresh requests.
+
     enq.bits.writeOccurred := false.B
   }
 
@@ -279,11 +252,6 @@ class LockServer(
   arbiter.io.availableSlots := availableTagTracker.io.selected_slots
   availableTagTracker.io.consumed := arbiter.io.consumedSlots
 
-  // Arbiter feed: the replay queue drains strictly before the main input queue
-  // (a replayed request already holds a credit; fresh requests need a free
-  // credit to be admitted). The arbiter captures the request bits into its own
-  // registers on the sameCycleSelectedMask cycle, so popping at selection is
-  // safe -- a held/stalled selection replays from the arbiter's copy.
   for (i <- 0 until n) {
     val replay = replayQueues(i).io.deq
     val main = inputQueues(i).io.deq
@@ -296,14 +264,18 @@ class LockServer(
   }
 
   // Take the results of the arbiter and latch them. Lane-local AMU returns have
-  // priority; while one is present, the arbiter holds any ordinary selection for
+  // priority. While one is present, the arbiter holds any ordinary selection for
   // that lane so no input/replay request is consumed and dropped.
   val arbiterOut = Wire(Vec(p, new RequestType(n, addrW)))
   for (i <- 0 until p) {
     val urgentReturn = amuReturnQueues(i).io.deq
     arbiter.io.laneBlocked(i) := urgentReturn.valid
     urgentReturn.ready := true.B
-    arbiterOut(i) := Mux(urgentReturn.valid, urgentReturn.bits, arbiter.io.selectedRequests(i))
+    arbiterOut(i) := Mux(
+      urgentReturn.valid,
+      urgentReturn.bits,
+      arbiter.io.selectedRequests(i)
+    )
   }
 
   val emptyWriteIndex = 0.U.asTypeOf(new WriteIndexEntry(tagStoreSize))
@@ -311,9 +283,7 @@ class LockServer(
   val selected_requests = Seq.tabulate(p)(i =>
     RegNext(arbiterOut(i), 0.U.asTypeOf(new RequestType(n, addrW)))
   )
-  // Latched alongside `selected_requests` (same pipeline stage): the arbiter
-  // forwards only consumed tracker slots. They are pipelined separately and
-  // returned unless one actually commits.
+
   val selected_write_indices: Seq[WriteIndexEntry] =
     Seq.tabulate(p)(i =>
       RegNext(
@@ -324,22 +294,12 @@ class LockServer(
   // In the next cycle, we a) do a very large fanout and compare and
   // b) we also compare against the current writers
 
-  // Bit-exact wide equality mapped to a LUT reduction tree instead of a CARRY8
-  // chain. Vivado infers a carry chain for a 64-bit `===`; carry chains are
-  // column-locked and vertical, so the placer cannot spread them -- they are the
-  // residual routing-congestion hotspot in this tag-match CAM (tagStoreSize * p
-  // = many comparators packed into one pocket). Comparing in 6-bit chunks
-  // (one LUT6 each) and AND-reducing keeps the result identical to `a === b`
-  // while letting every comparator place freely. Used only for the high-
-  // multiplicity store compare below; the small p*p compares stay as `===`.
-  // The reductions are grouped in sixes so each level packs into one LUT6 and
-  // the tree stays shallow (~3 LUT levels for a 64b tag); a flat reduce would
-  // build a deep linear chain, and `.andR`/`===` would re-infer a carry chain.
   def tagEqLut(a: UInt, b: UInt): Bool = {
     def andTree(bits: Seq[Bool]): Bool =
       if (bits.length <= 6) bits.reduce(_ && _)
       else andTree(bits.grouped(6).map(_.reduce(_ && _)).toSeq)
-    val chunkEq = (a ^ b).asBools.grouped(6).map(g => !VecInit(g).asUInt.orR).toSeq
+    val chunkEq =
+      (a ^ b).asBools.grouped(6).map(g => !VecInit(g).asUInt.orR).toSeq
     andTree(chunkEq)
   }
 
@@ -361,11 +321,7 @@ class LockServer(
   for (i <- 0 until tagStoreSize) {
     unlockTable(i) := (0 until p).map(k => unlockMatch(k)(i)).reduce(_ || _)
   }
-  // Free-list return of unlocked slots. Register the match vector before encoding
-  // so the tag compare and the one-hot index encode fall on separate
-  // pipeline stages (their combined path failed timing). Costs one extra cycle
-  // before a freed slot returns to the tracker; the tag release above
-  // (unlockTable -> tagStoreValid) is unaffected.
+
   val delayedUnlockMatch = RegNext(unlockMatch, 0.U.asTypeOf(unlockMatch))
   for (k <- 0 until p) {
     returnedIndices(k).valid := delayedUnlockMatch(k).asUInt.orR
@@ -422,20 +378,7 @@ class LockServer(
     }
   }
 
-  // Peer dedup: two slots can't both lock the same tag in the same cycle, so
-  // exactly one lane in each same-tag locker group wins and the rest report a
-  // conflict and retry. A fixed "lowest lane index wins" tiebreak can starve a
-  // high-index peer, so priority is rotated. To keep the routing-heavy tag
-  // fanout small, the tag compares stay triangular and mirrored (one
-  // comparator per lane pair, reused for both directions), and all priority work
-  // happens on a p-wide collision bitvector -- never on the tags. The rotation
-  // comes from a free-running LFSR turned into a p-bit mask, which is *registered*
-  // so the LFSR and the shifter float away from this region and only the small
-  // mask crosses in. Winner = first set collision bit scanning upward from the
-  // rotation with wraparound (the rotated priority-encoder idiom from
-  // InputArbiter). Tag-equality is transitive among valid lockers, so every
-  // member of a group sees the same collision vector and the same mask -- exactly
-  // one lane is the unique winner.
+  // Peer dedup
   val cycle2PeerConflict = Wire(Vec(p, Bool()))
   if (p == 1) {
     cycle2PeerConflict(0) := false.B
@@ -457,15 +400,10 @@ class LockServer(
 
     val rotWidth = log2Ceil(p)
     val peerRotation = LFSR(16)(rotWidth - 1, 0)
-    // Register the rotation mask so its generation logic can be placed elsewhere;
-    // only this p-bit signal enters the dedup. Bits below the rotation are the
-    // wraparound (low-priority) region.
     val rotMask = RegInit(0.U(p.W))
     rotMask := ((1.U(p.W) << peerRotation) - 1.U)(p - 1, 0)
 
     for (k <- 0 until p) {
-      // Collision group including self: bit k = lane k is a valid lock, bit j =
-      // a same-tag valid-lock peer.
       val group = Wire(UInt(p.W))
       group := VecInit((0 until p).map { j =>
         if (j == k) validLock(k) else tagEq(j)(k)
@@ -504,19 +442,14 @@ class LockServer(
     Seq.tabulate(p)(i =>
       RegNext(cycle2indices(i), 0.U.asTypeOf(new WriteIndexEntry(tagStoreSize)))
     )
-  // A lock is a *candidate* writer if it carries a valid store slot; whether it
-  // actually commits is gated below by the conflict checks (cycle3failures).
-  // Kept separate from writingRequests.isValid so commitsWrite does not read
-  // writingRequests -- writingRequests.isValid is itself driven by commitsWrite.
+  // A lock is a *candidate* writer if it carries a valid store slot
   val rawWriterValid = Seq.tabulate(p)(i =>
     cycle3requests(i).isValid && cycle3requests(i).operation.isLock &&
       cycle3indices(i).valid
   )
-  // Lock commit is computed here (rather than below) because the response path
-  // now depends on whether a forwardable lock actually committed.
+
   val commitsWrite =
     Seq.tabulate(p)(i => rawWriterValid(i) && !cycle3failures(i))
-  // WriteIndex.id is a fixed 16b placeholder; narrow it to the tagStore width here.
   val cycle3indexBits = Seq.tabulate(p)(i =>
     cycle3indices(i).index(availableTagTracker.entrySize - 1, 0)
   )
@@ -545,15 +478,10 @@ class LockServer(
     // An unlock that tag-matches an in-flight committing lock but misses the
     // store would otherwise "succeed" while releasing nothing: the lock only
     // writes the store at its own cycle 3, after this unlock's cycle-1 compare.
-    // Send it around again so it finds the committed entry. (A lock and an
-    // unlock for the same tag selected the same cycle still race; same-PE that
-    // close is impossible, and cross-PE it is an inherently racy program --
-    // unchanged from the unpipelined design.)
+    // Send it around again so it finds the committed entry.
     val unlockMissedWriter = op.isUnlock && cycle2ComparisonCompacted(i) &&
       !storageComparisonReduced(i)
-    // The three retry causes and forwardSuccess are pairwise disjoint:
-    // blockingConflict needs a failure, lockNoSlot needs a missing slot, and
-    // unlockMissedWriter is not a lock; commitsWrite needs the opposite of all.
+
     val try_again = lockNoSlot || blockingConflict || unlockMissedWriter
 
     // A forwardable lock that committed is handed to its AMU instead of being
@@ -561,8 +489,6 @@ class LockServer(
     val forwardSuccess =
       commitsWrite(i) && op.shouldForwardToMemoryUnit
 
-    // Forwarded ops go into this lane's AMU FIFO (lane i -> AMU i). The FIFO is
-    // sized for the worst case, so it must always have room on a commit.
     amuFifos(i).io.enq.valid := forwardSuccess
     amuFifos(i).io.enq.bits := req3
     assert(
@@ -575,10 +501,7 @@ class LockServer(
       op === Operation.UnlockNoResponse
     laneRespond(i) := isReal && !try_again && !forwardSuccess &&
       op =/= Operation.UnlockNoResponse
-    // Status bit 1: for an AMU return (UnlockAndRespond), whether the
-    // conditional read-modify-write actually stored, as reported by the AMU.
-    // For every other op the store-happened notion is meaningless, so it just
-    // mirrors success (1 when the op succeeded).
+
     val writeOccurred =
       Mux(op === Operation.UnlockAndRespond, req3.writeOccurred, success)
     // Response layout:
@@ -589,10 +512,6 @@ class LockServer(
     laneRespData(i) := Cat(
       req3.meta,
       Mux(op === Operation.UnlockAndRespond, req3.data, 0.U(64.W)),
-      // Zero-extend the addrW-bit tag to a fixed 64-bit field so the response
-      // layout (and RespWidth) is independent of addrW: consumers decode the
-      // tag at bits 71:8 and the previous value at 135:72 regardless of the
-      // configured address width. Without this, addrW < 64 shifts every field.
       req3.tag.pad(64),
       0.U(6.W),
       writeOccurred,
@@ -600,9 +519,6 @@ class LockServer(
     )
   }
 
-  // Registered boundary between the cycle-3 resolution logic and the per-PE
-  // queue fanout: the conflict logic stays local to its stage, and only these
-  // registered signals cross into the per-PE region.
   val laneRespondReg = RegNext(laneRespond, VecInit(Seq.fill(p)(false.B)))
   val laneRetryReg = RegNext(laneRetry, VecInit(Seq.fill(p)(false.B)))
   val laneSilentReg = RegNext(laneSilent, VecInit(Seq.fill(p)(false.B)))
@@ -612,9 +528,6 @@ class LockServer(
     RegNext(cycle3requests(i), 0.U.asTypeOf(new RequestType(n, addrW)))
   )
 
-  // AMU returns re-enter through the lane-local urgent return queue as
-  // UnlockAndRespond ops that release the held tag and deliver the result at
-  // their own cycle 3.
   val amuReturn = Seq.tabulate(p) { i =>
     val ret = Wire(new RequestType(n, addrW))
     ret := atomicMemoryUnits(i).io.resp.bits
@@ -629,11 +542,6 @@ class LockServer(
     r.ready := amuReturnQueues(i).io.enq.ready
   }
 
-  // Per-PE queue feeds. All signals here come from the PE's own lane, so this
-  // is p independent 1-to-(n/p) fanouts rather than a p-to-n crossbar, and a
-  // PE's replay/response queues each see at most one enqueue per cycle by
-  // construction. AMU returns bypass these replay queues through the lane-local
-  // urgent return path above.
   for (q <- 0 until n) {
     val l = laneOfPe(q)
     val peHere = laneReqReg(l).requestingPE === q.U
@@ -675,13 +583,6 @@ class LockServer(
     respQueues(i).io.deq.ready := io.resp(i).ready
   }
 
-  // writingRequests is the in-flight conflict source for the cycle-1/cycle-2 tag
-  // compares. Only locks that ACTUALLY commit may block a same-tag peer: a lock
-  // that fails writes nothing to the store and returns its slot, so treating it
-  // as a writer lets a failed lock perpetually kill its same-tag successors --
-  // a livelock when one tag is contended every cycle (no burst leader ever
-  // escapes). Gating isValid by commitsWrite extends this path by the
-  // cycle3failures term on purpose; correctness wins over the cycle it costs.
   for (i <- 0 until p) {
     writingRequests(i) := cycle3requests(i)
     writingRequests(i).isValid := commitsWrite(i)
