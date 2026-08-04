@@ -153,8 +153,19 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         val expectedNew = desc.getPortCount("spawnNext", task.name)
         val expectedUpdates = desc.getPortCount("sendArgument", task.name)
         require(
-          c.numVirtualServers * c.newContinuationLanesPerServer == expectedNew,
-          s"${task.name}: argument servers * new lanes must equal $expectedNew spawnNext sources"
+          c.newContinuationLaneStripingFactor > 0 &&
+            c.newContinuationLanesPerServer %
+              c.newContinuationLaneStripingFactor == 0,
+          s"${task.name}: new continuation lanes must divide evenly into " +
+            "private striped groups"
+        )
+        val newSourcesPerServer =
+          c.newContinuationLanesPerServer /
+            c.newContinuationLaneStripingFactor
+        require(
+          c.numVirtualServers * newSourcesPerServer == expectedNew,
+          s"${task.name}: argument servers * (new lanes / striping factor) " +
+            s"must equal $expectedNew spawnNext sources"
         )
         require(
           c.numVirtualServers * c.directUpdateLanesPerServer == expectedUpdates,
@@ -164,6 +175,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           ArgumentNetworksConfig(
             nServers = c.numVirtualServers,
             newLanesPerServer = c.newContinuationLanesPerServer,
+            newLaneStripingFactor =
+              c.newContinuationLaneStripingFactor,
             updateLanesPerServer = c.directUpdateLanesPerServer,
             nSlowHandlers = c.slowArgumentHandlerCount,
             nEvictionSavers = c.cacheEvictionSaverCount,

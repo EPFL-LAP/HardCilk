@@ -84,6 +84,12 @@ object VerilogResetConverter {
 
 object HardCilkEmitterUtil {
 
+  /** Memory-topology metadata consumed by the XRT and Questa generators. */
+  case class RtlGenResult(
+      numHbmPortExports: Int,
+      ramaPortIndices: Seq[Int]
+  )
+
   def basename(path: String): String = path.split("/").last.split("\\.").head
 
   private def deleteStagedModuleFiles(outputDirPath: String, moduleName: String): Unit = {
@@ -118,7 +124,7 @@ object HardCilkEmitterUtil {
       outputDirPathRTL: String,
       flags: BuilderConfig,
       isSimulation: Boolean
-  ): Int = {
+  ): RtlGenResult = {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
       val peHDLPath = task.peHDLPath
@@ -188,6 +194,7 @@ object HardCilkEmitterUtil {
     }
 
     var numHbmPortExports = 0
+    var ramaPortIndices = Seq.empty[Int]
     ChiselStage.emitSystemVerilogFile(
       {
         val module = new HardCilk(
@@ -198,9 +205,12 @@ object HardCilkEmitterUtil {
           unitedHbm = true,
           isSimulation = isSimulation,
           argumentNotifierCutCount = 1,
+          enableRamaByDefault = flags.ramaStriping || flags.ramaNoStriping,
+          ramaStripingEnabled = flags.ramaStriping,
           enableGlobalStart = flags.enableGlobalStart
         )
         numHbmPortExports = module.numHbmPortExports
+        ramaPortIndices = module.ramaPortIndices
         module
       },
       Array(f"--target-dir=${outputDirPathRTL}"),
@@ -230,6 +240,6 @@ object HardCilkEmitterUtil {
 
     VerilogResetConverter.convertToActivelow(vFilePath, systemDescriptor.name)
 
-    numHbmPortExports
+    RtlGenResult(numHbmPortExports, ramaPortIndices)
   }
 }

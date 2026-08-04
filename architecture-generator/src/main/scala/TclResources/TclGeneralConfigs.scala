@@ -4,6 +4,46 @@ import Descriptors._
 
 object TclGeneralConfigs {
 
+  /** Connect one AXI4 memory master to an HBM ingress through a 1:1 width
+    * adapter and RAMA. In selective mode RAMA only reorders/fragments; in
+    * striped mode it also interleaves fragments across `memoryCount` PCs.
+    */
+  def getRamaHbmPathTcl(
+      name: String,
+      upstreamPin: String,
+      hbmPort: Int,
+      addressWidth: Int,
+      striped: Boolean,
+      memoryCount: Int,
+      clkPin: String,
+      resetPin: String
+  ): String = {
+    require(memoryCount >= 1 && memoryCount <= 32)
+    val sc = s"smartconnect_$name"
+    val rama = s"rama_$name"
+    val interleave = if (striped) "per_memory" else "none"
+    val fragmentBytes = if (striped) 64 else 128
+    val queueDepth = if (striped) 256 else 128
+    val hbmPortName = f"$hbmPort%02d"
+    s"""create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 $sc
+set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] [get_bd_cells $sc]
+create_bd_cell -type ip -vlnv xilinx.com:ip:rama:1.1 $rama
+set_property -dict [list \\
+  CONFIG.ADDR_WIDTH {$addressWidth} \\
+  CONFIG.G_AXI_LITE {0} \\
+  CONFIG.G_FRAGMENT_SIZE_BYTES {$fragmentBytes} \\
+  CONFIG.G_MEM_COUNT {$memoryCount} \\
+  CONFIG.G_MEM_INTERLEAVE_TYPE {$interleave} \\
+  CONFIG.G_REORDER_QUEUE_DEPTH {$queueDepth} \\
+] [get_bd_cells $rama]
+connect_bd_intf_net $upstreamPin [get_bd_intf_pins $sc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins $sc/M00_AXI] [get_bd_intf_pins $rama/s_axi]
+connect_bd_intf_net [get_bd_intf_pins $rama/m_axi] [get_bd_intf_pins hbm_0/SAXI_${hbmPortName}_8HI]
+connect_bd_net $clkPin [get_bd_pins $sc/aclk] [get_bd_pins $rama/axi_aclk]
+connect_bd_net $resetPin [get_bd_pins $sc/aresetn] [get_bd_pins $rama/axi_aresetn]
+"""
+  }
+
   def getProjectWrapperTCLSyntax(functionalTcl: String, descriptor: FullSysGenDescriptor, isQuestaSim: Boolean = false): String = {
     val sb = new StringBuilder
 
@@ -426,7 +466,21 @@ object TclGeneralConfigs {
     sb.toString()
   }
 
-  def getAxiVipConfig(): String = {
+  def getAxiVipConfig(dualMemoryVip: Boolean = false): String = {
+    val secondMemoryVip =
+      if (!dualMemoryVip) ""
+      else
+        """
+    create_bd_cell -type ip -vlnv xilinx.com:ip:axi_vip:1.1 axi_vip_2
+    set_property -dict [list \
+      CONFIG.ADDR_WIDTH {64} \
+      CONFIG.DATA_WIDTH {512} \
+      CONFIG.INTERFACE_MODE {MASTER} \
+    ] [get_bd_cells axi_vip_2]
+    connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_vip_2/aclk]
+    connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_vip_2/aresetn]
+    create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 axi_clock_converter_2
+        """
     """
     create_bd_port -dir I -type clk -freq_hz 250000000 axi_vip_clk
     create_bd_port -dir I axi_vip_aresetn
@@ -460,6 +514,6 @@ object TclGeneralConfigs {
 
     # Create the xdma reset port for other components that need it
     create_bd_port -dir I PCIE_PERST_LS_65
-    """
+    """ + secondMemoryVip
   }
 }

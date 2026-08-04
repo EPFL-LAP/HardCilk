@@ -465,7 +465,9 @@ int runSingleFpgaBenchmark(const std::string &xclbin_path,
   xrt::ip kernel(device, uuid, kernel_name);
   std::cout << "[Init] Opened CU '" << kernel_name << "'.\n";
 
-  XRTMemory memory(device, kernel);
+  // The matching <xclbin>.hbmports.json sidecar carries any RAMA host-address
+  // transform. XRTMemory automatically disables it under hw_emu.
+  XRTMemory memory(device, kernel, xclbin_path);
   auto start = std::chrono::high_resolution_clock::now();
   int rc;
   try

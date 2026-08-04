@@ -157,11 +157,18 @@ if [[ -d "$XRT_GEN_DIR" ]]; then
     [[ -f "$XRT_GEN_DIR/user_0.xml" ]]                 && cp "$XRT_GEN_DIR/user_0.xml"                 "$XCLBIN_WORKSPACE_DIR/src/xml/"
     if [[ -f "$XRT_GEN_DIR/conn_u55c.cfg" ]]; then
         cp "$XRT_GEN_DIR/conn_u55c.cfg" "$XCLBIN_WORKSPACE_DIR/src/cfg/"
+        if [[ -f "$XRT_GEN_DIR/rama_configure_xrt.tcl" ]]; then
+            cp "$XRT_GEN_DIR/rama_configure_xrt.tcl" "$XCLBIN_WORKSPACE_DIR/src/cfg/"
+            RAMA_HOOK_PATH=$(realpath "$XCLBIN_WORKSPACE_DIR/src/cfg/rama_configure_xrt.tcl")
+            sed -i -E \
+                "s#^(custom=postSysLink|do_first=vpl.synth),.*#custom=postSysLink,$RAMA_HOOK_PATH#" \
+                "$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c.cfg"
+        fi
         awk '
-            /^\[clock\]/ { skip = 1; next }
+            /^\[(clock|linkhook)\]/ { skip = 1; next }
             /^\[/ { skip = 0 }
             !skip { print }
-        ' "$XRT_GEN_DIR/conn_u55c.cfg" > "$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c_hw_emu.cfg"
+        ' "$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c.cfg" > "$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c_hw_emu.cfg"
     fi
 fi
 

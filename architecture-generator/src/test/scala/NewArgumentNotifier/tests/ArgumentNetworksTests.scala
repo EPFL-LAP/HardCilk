@@ -65,7 +65,10 @@ class ArgumentNetworksTests extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  private class E2EEnv(dut: ArgumentNetworks) {
+  private class E2EEnv(
+      dut: ArgumentNetworks,
+      envCfg: ArgumentNetworksConfig = cfg
+  ) {
     val mem = mutable.Map.empty[BigInt, BigInt].withDefaultValue(BigInt(0))
     var evictWrites = 0
     val evictWritesByPort = Array.fill(dut.m_axi_evict.size)(0)
@@ -73,10 +76,10 @@ class ArgumentNetworksTests extends AnyFlatSpec with ChiselScalatestTester {
     var slowReads = 0
     val spawned =
       Array.fill(dut.connStealNtw.size)(mutable.ArrayBuffer.empty[BigInt])
-    val metas = Array.fill(cfg.nSourcePEs)(
+    val metas = Array.fill(envCfg.nSourcePEs)(
       mutable.ArrayBuffer.empty[(BigInt, BigInt, BigInt)]
     )
-    val newContB = Array.fill(cfg.nSourcePEs)(0)
+    val newContB = Array.fill(envCfg.nSourcePEs)(0)
 
     // Arrays indexed by eviction-saver-port; degenerates to the old
     // single-port behavior when dut.m_axi_evict.size == 1.
@@ -272,11 +275,11 @@ class ArgumentNetworksTests extends AnyFlatSpec with ChiselScalatestTester {
         lane: BigInt
     ): Unit = {
       val update = dut.s_update(index)
-      val byteOffset = addr & (cfg.lineBytes - 1)
-      val payloadBytes = cfg.updatePayloadWidth / 8
+      val byteOffset = addr & (envCfg.lineBytes - 1)
+      val payloadBytes = envCfg.updatePayloadWidth / 8
       require(byteOffset % payloadBytes == 0)
-      require(data < (BigInt(1) << cfg.updatePayloadWidth))
-      update.bits.address.poke((addr >> cfg.lineShift).U)
+      require(data < (BigInt(1) << envCfg.updatePayloadWidth))
+      update.bits.address.poke((addr >> envCfg.lineShift).U)
       update.bits.metadata.server.poke(server.U)
       update.bits.metadata.id.poke(id.U)
       update.bits.metadata.lane.poke(lane.U)
@@ -291,6 +294,84 @@ class ArgumentNetworksTests extends AnyFlatSpec with ChiselScalatestTester {
       }
       step()
       update.valid.poke(false.B)
+    }
+  }
+
+  it should "stripe each source across private lanes and return the accepted lane metadata" in {
+    val stripedCfg = cfg.copy(
+      nServers = 1,
+      newLanesPerServer = 2,
+      newLaneStripingFactor = 2,
+      updateLanesPerServer = 2,
+      slowCutCount = 1
+    )
+    test(new ArgumentNetworks(stripedCfg)) { dut =>
+      val env = new E2EEnv(dut, stripedCfg)
+      val stripedLine =
+        NanTestUtil.line(stripedCfg.counterWidth, stripedCfg.continuationSize) _
+      env.init()
+      env.step(2)
+
+      assert(dut.s_axi_newCont.size == 1)
+      val firstInserts = Seq(
+        (0x100, stripedLine(1, 0x1)),
+        (0x200, stripedLine(1, 0x2)),
+        (0x300, stripedLine(7, 0x3)),
+        (0x400, stripedLine(7, 0x4))
+      )
+      for (((address, data), i) <- firstInserts.zipWithIndex) {
+        env.axiWrite(
+          dut.s_axi_newCont(0),
+          address,
+          data,
+          strbAll
+        )
+        env.waitUntil(env.metas(0).size == i + 1, 50, s"striped metadata $i")
+      }
+
+      assert(
+        env.metas(0).toSeq == Seq(
+          (BigInt(0), BigInt(0), BigInt(0)),
+          (BigInt(0), BigInt(0), BigInt(1)),
+          (BigInt(0), BigInt(1), BigInt(0)),
+          (BigInt(0), BigInt(1), BigInt(1))
+        )
+      )
+
+      // Feed the returned lane metadata back through each lane's local update
+      // input. Successful independent spawns prove the lane tag was not only
+      // reported correctly but also routes back to the selected cache bank.
+      env.axiUpdate(0, 0x101, 0x10, 0xff, server = 0, id = 0, lane = 0)
+      env.axiUpdate(1, 0x201, 0x20, 0xff, server = 0, id = 0, lane = 1)
+      env.step(20)
+
+      for ((address, remainder) <- Seq(
+          (0x500, 0x5),
+          (0x600, 0x6),
+          (0x700, 0x7),
+          (0x800, 0x8)
+        )) {
+        env.axiWrite(
+          dut.s_axi_newCont(0),
+          address,
+          stripedLine(7, remainder),
+          strbAll
+        )
+      }
+
+      env.waitUntil(
+        env.spawned(0).nonEmpty && env.spawned(1).nonEmpty,
+        200,
+        "striped fast-path spawns"
+      )
+      assert(env.spawned(0).toSeq == Seq(stripedLine(0, 0x11)))
+      assert(env.spawned(1).toSeq == Seq(stripedLine(0, 0x22)))
+      assert(env.spawned(2).isEmpty)
+      assert(env.evictWrites == 0 && env.slowReads == 0)
+      env.waitUntil(env.newContB(0) == 8, 50, "all striped write responses")
+      assert(env.newContB(0) == 8)
+      assert(env.metas(0).map(_._2).toSeq == Seq(0, 0, 1, 1, 2, 2, 3, 3))
+      assert(env.metas(0).map(_._3).toSeq == Seq(0, 1, 0, 1, 0, 1, 0, 1))
     }
   }
 

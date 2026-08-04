@@ -1,9 +1,11 @@
 #pragma once
 #include <memIO.h>
+#include <rama_striping.h>
 
 #include <algorithm>
 #include <bits/stdc++.h>
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <memory>
 #include <thread>
@@ -44,13 +46,25 @@ struct XRTMemory : Memory{
     xrt::ip hardCilk_ip_;
     int defaultFirstBank_ = 0;
     int defaultLastBank_ = NUM_BANKS - 1;
+    RamaHostMapping ramaMapping_;
 
 
     public:
-    XRTMemory(xrt::device &dev, xrt::ip &hardCilk_ip) : availableBytes(NUM_BANKS){
+    XRTMemory(xrt::device &dev, xrt::ip &hardCilk_ip,
+              const std::string &xclbin_path = std::string())
+        : availableBytes(NUM_BANKS){
       std::fill(availableBytes.begin(), availableBytes.end(), BANK_SIZE);
       dev_ = dev;
       hardCilk_ip_ = hardCilk_ip;
+      const std::string runtime = isEmulation() ? "hw_emu" : "hw";
+      ramaMapping_ = loadRamaHostMapping(xclbin_path, runtime);
+      if (ramaMapping_.enabled()) {
+        if (ramaMapping_.bytes_per_bank != BANK_SIZE ||
+            ramaMapping_.first_bank + ramaMapping_.memory_count > NUM_BANKS) {
+          throw std::runtime_error("RAMA host mapping is incompatible with this XRTMemory HBM geometry");
+        }
+      }
+      logRamaHostMapping(ramaMapping_, runtime);
     }
 
     bool isEmulation() const {
@@ -100,6 +114,13 @@ struct XRTMemory : Memory{
 
       uint64_t alloc_alignment = std::max<uint64_t>(alignment, PAGE_SIZE);
       uint64_t aligned_size = alignUp(size, alloc_alignment);
+
+      if (ramaMapping_.enabled() &&
+          defaultFirstBank_ <= static_cast<int>(ramaMapping_.first_bank) &&
+          defaultLastBank_ >= static_cast<int>(ramaMapping_.first_bank +
+                                               ramaMapping_.memory_count - 1)) {
+        return allocateStripedBoSpan(aligned_size, alignment);
+      }
 
       if (aligned_size <= BANK_SIZE) {
         return allocateSingleBoInBankRange(aligned_size, alignment,
@@ -169,6 +190,14 @@ struct XRTMemory : Memory{
 
       uint64_t alloc_alignment = std::max<uint64_t>(alignment, PAGE_SIZE);
       uint64_t aligned_size = alignUp(size, alloc_alignment);
+
+      if (ramaMapping_.enabled()) {
+        const int stripeFirst = static_cast<int>(ramaMapping_.first_bank);
+        const int stripeLast = static_cast<int>(ramaMapping_.first_bank +
+                                                ramaMapping_.memory_count - 1);
+        if (firstBank <= stripeLast && lastBank >= stripeFirst)
+          return allocateStripedBoSpan(aligned_size, alignment);
+      }
 
       if (aligned_size <= BANK_SIZE) {
         return allocateSingleBoInBankRange(aligned_size, alignment, firstBank, lastBank);
@@ -246,6 +275,17 @@ struct XRTMemory : Memory{
 
   void copyToDevice(uint64_t dest_addr, uint8_t const* src, uint64_t size) override
   {
+    if (size != 0 && ramaMapping_.contains(dest_addr)) {
+      if (size > ramaMapping_.windowEnd() - dest_addr)
+        throw std::runtime_error("RAMA-striped host write crosses the compute-memory window");
+      copyToDeviceStriped(dest_addr, src, size);
+      return;
+    }
+    copyToDeviceLinear(dest_addr, src, size);
+  }
+
+  void copyToDeviceLinear(uint64_t dest_addr, uint8_t const* src, uint64_t size)
+  {
     uint64_t current_addr = dest_addr;
     uint64_t left = size;
 
@@ -281,6 +321,17 @@ struct XRTMemory : Memory{
 
 
   void copyFromDevice(uint8_t* dest, uint64_t src_addr, uint64_t size) override
+  {
+    if (size != 0 && ramaMapping_.contains(src_addr)) {
+      if (size > ramaMapping_.windowEnd() - src_addr)
+        throw std::runtime_error("RAMA-striped host read crosses the compute-memory window");
+      copyFromDeviceStriped(dest, src_addr, size);
+      return;
+    }
+    copyFromDeviceLinear(dest, src_addr, size);
+  }
+
+  void copyFromDeviceLinear(uint8_t* dest, uint64_t src_addr, uint64_t size)
   {
     uint64_t current_addr = src_addr;
     uint64_t left = size;
@@ -360,6 +411,138 @@ struct XRTMemory : Memory{
   ~XRTMemory() {}
 
 private:
+    struct StripePiece {
+      uint64_t logical_offset;
+      uint64_t size;
+    };
+
+    struct StripeGather {
+      bool used = false;
+      uint64_t physical_start = 0;
+      uint64_t physical_next = 0;
+      std::vector<uint8_t> bytes;
+      std::vector<StripePiece> pieces;
+    };
+
+    std::vector<StripeGather> buildStripeGathers(uint64_t logical_addr,
+                                                  uint64_t size) const {
+      std::vector<StripeGather> gathers(
+          static_cast<size_t>(ramaMapping_.memory_count));
+      const uint64_t reserve =
+          size / ramaMapping_.memory_count + ramaMapping_.fragment_bytes;
+      for (auto &g : gathers)
+        g.bytes.reserve(static_cast<size_t>(reserve));
+
+      uint64_t cursor = logical_addr;
+      uint64_t logical_offset = 0;
+      uint64_t left = size;
+      while (left > 0) {
+        const uint64_t chunk = std::min<uint64_t>(
+            left, ramaMapping_.bytesUntilFragmentEnd(cursor));
+        const size_t stripe =
+            static_cast<size_t>(ramaMapping_.stripeIndex(cursor));
+        const uint64_t physical = ramaMapping_.physicalAddress(cursor);
+        StripeGather &g = gathers[stripe];
+        if (!g.used) {
+          g.used = true;
+          g.physical_start = physical;
+          g.physical_next = physical;
+        }
+        if (physical != g.physical_next)
+          throw std::runtime_error("RAMA mapping produced a non-contiguous per-bank transfer");
+        g.pieces.push_back(StripePiece{logical_offset, chunk});
+        g.physical_next += chunk;
+        cursor += chunk;
+        logical_offset += chunk;
+        left -= chunk;
+      }
+      return gathers;
+    }
+
+    void copyToDeviceStriped(uint64_t dest_addr, uint8_t const *src,
+                             uint64_t size) {
+      std::vector<StripeGather> gathers = buildStripeGathers(dest_addr, size);
+      for (StripeGather &g : gathers) {
+        if (!g.used)
+          continue;
+        for (const StripePiece &piece : g.pieces) {
+          const size_t old_size = g.bytes.size();
+          g.bytes.resize(old_size + static_cast<size_t>(piece.size));
+          std::memcpy(g.bytes.data() + old_size, src + piece.logical_offset,
+                      static_cast<size_t>(piece.size));
+        }
+        copyToDeviceLinear(g.physical_start, g.bytes.data(), g.bytes.size());
+      }
+    }
+
+    void copyFromDeviceStriped(uint8_t *dest, uint64_t src_addr,
+                               uint64_t size) {
+      std::vector<StripeGather> gathers = buildStripeGathers(src_addr, size);
+      for (StripeGather &g : gathers) {
+        if (!g.used)
+          continue;
+        uint64_t bytes = 0;
+        for (const StripePiece &piece : g.pieces)
+          bytes += piece.size;
+        g.bytes.resize(static_cast<size_t>(bytes));
+        copyFromDeviceLinear(g.bytes.data(), g.physical_start, bytes);
+        size_t gathered_offset = 0;
+        for (const StripePiece &piece : g.pieces) {
+          std::memcpy(dest + piece.logical_offset,
+                      g.bytes.data() + gathered_offset,
+                      static_cast<size_t>(piece.size));
+          gathered_offset += static_cast<size_t>(piece.size);
+        }
+      }
+    }
+
+    uint64_t allocateStripedBoSpan(uint64_t aligned_size,
+                                   uint64_t requested_alignment) {
+      const uint64_t stripe_span =
+          ramaMapping_.fragment_bytes * ramaMapping_.memory_count;
+      aligned_size = alignUp(aligned_size, stripe_span);
+      const uint64_t per_bank_size = aligned_size / ramaMapping_.memory_count;
+      if (per_bank_size == 0 || per_bank_size > BANK_SIZE)
+        throw std::runtime_error("RAMA-striped allocation exceeds its HBM window");
+
+      std::vector<std::pair<uint64_t, BufferInfo>> buffers;
+      buffers.reserve(static_cast<size_t>(ramaMapping_.memory_count));
+      uint64_t common_offset = UINT64_MAX;
+      for (uint64_t stripe = 0; stripe < ramaMapping_.memory_count; ++stripe) {
+        const int bank = static_cast<int>(ramaMapping_.first_bank + stripe);
+        if (availableBytes[bank] < per_bank_size)
+          throw std::runtime_error("RAMA-striped allocation exhausted an HBM bank");
+
+        auto buffer = xrt::bo(dev_, per_bank_size, xrt::bo::flags::device_only,
+                              bank);
+        const uint64_t addr = buffer.address();
+        const uint64_t bank_base = static_cast<uint64_t>(bank) * BANK_SIZE;
+        if (addr < bank_base || addr + per_bank_size > bank_base + BANK_SIZE)
+          throw std::runtime_error("XRT returned a BO outside its requested HBM bank");
+        const uint64_t offset = addr - bank_base;
+        if (common_offset == UINT64_MAX)
+          common_offset = offset;
+        else if (offset != common_offset)
+          throw std::runtime_error(
+              "RAMA-striped BOs did not receive matching offsets in every HBM bank");
+        buffers.emplace_back(
+            addr, BufferInfo{std::move(buffer), per_bank_size, bank});
+      }
+
+      const uint64_t logical_addr =
+          ramaMapping_.windowBase() + common_offset * ramaMapping_.memory_count;
+      if (logical_addr + aligned_size > ramaMapping_.windowEnd() ||
+          (requested_alignment != 0 &&
+           logical_addr % requested_alignment != 0))
+        throw std::runtime_error("RAMA-striped logical allocation has an invalid address");
+
+      for (auto &entry : buffers) {
+        availableBytes[entry.second.bank_index] -= entry.second.size;
+        addressBufferMap.emplace(entry.first, std::move(entry.second));
+      }
+      return logical_addr;
+    }
+
     // Under XCL_EMULATION_MODE=hw_emu, register access is a protobuf
     // request/response over a socket to the xsim process. Deep into a long run
     // (thousands of polls) that channel can drop or corrupt a SINGLE response --

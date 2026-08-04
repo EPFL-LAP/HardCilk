@@ -10,6 +10,10 @@ case class BuilderConfig(
   cpp_header_generation: Boolean = false,
   tcl_generation: Boolean = false,
   questa_generation: Boolean = false,
+  // Global RAMA defaults for task PE main ports whose descriptor omits
+  // generateRAMA. Explicit true/false descriptor values override these flags.
+  ramaStriping: Boolean = false,
+  ramaNoStriping: Boolean = false,
   rtl_generation: Boolean = false,
   sc_header_generation: Boolean = false,
   project_sc_generation: Boolean = false,
@@ -58,6 +62,21 @@ object ArgParser {
       opt[Unit]('q', "questa-sim")
         .action((_, c) => c.copy(questa_generation = true))
         .text("Generates the QuestaSim one-click simulation project (TCL + simulate.do + simulate.sh)"),
+      opt[Unit]("rama-striping")
+        .action((_, c) => c.copy(ramaStriping = true))
+        .text(
+          "Enable striped RAMA by default; generateRAMA=false opts a task out and " +
+            "generateRAMA=true remains opted in"
+        ),
+      opt[Unit]("rama-no-striping")
+        .action((_, c) => c.copy(ramaNoStriping = true))
+        .text(
+          "Enable non-striped RAMA by default; generateRAMA=false opts a task out and " +
+            "generateRAMA=true remains opted in"
+        ),
+      opt[Unit]("questa-rama-striping")
+        .action((_, c) => c.copy(ramaStriping = true))
+        .text("Alias for --rama-striping (kept for compatibility with Mahfouz's QuestaSim flow)"),
       opt[Unit]('s', "sc-headers")
         .action((_, c) => c.copy(sc_header_generation = true))
         .text("Generates the C++ header for SystemC simulation"),
@@ -84,7 +103,12 @@ object ArgParser {
       opt[Unit]("global-start")
         .action((_, c) => c.copy(enableGlobalStart = true))
         .text("enable the kernel-global start broadcast (simultaneous server release + watcher start gate)"),
-      help("help").text("Prints this help text")
+      help("help").text("Prints this help text"),
+      checkConfig(c =>
+        if (c.ramaStriping && c.ramaNoStriping)
+          failure("--rama-striping and --rama-no-striping are mutually exclusive")
+        else success
+      )
     )
   }
 
@@ -116,5 +140,3 @@ object ArgParserExample extends App {
       // parser already printed usage
   }
 }
-
-

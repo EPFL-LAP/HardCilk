@@ -9,6 +9,13 @@ set WS "../../../../../../software"
 if {[info exists ::env(HARDCILK_HOST_DIR)]} { set WS $::env(HARDCILK_HOST_DIR) }
 puts "== compiling host from: $WS"
 
+# The generated memory-layout sidecar is the source of truth for host-side RAMA
+# striping. Callers may override this when testing a timestamped xclbin backup.
+if {![info exists ::env(HARDCILK_HBM_DESCRIPTOR)]} {
+  set ::env(HARDCILK_HBM_DESCRIPTOR) [file normalize "../../../../../../rtl/DESCRIPTOR_NAME.hbmports.json"]
+}
+puts "== HBM descriptor: $::env(HARDCILK_HBM_DESCRIPTOR)"
+
 # Compile + link the SystemC host.
 # NOTE: do NOT add -std=c++17 here. sccom uses QuestaSim's bundled gcc (7.4.0),
 # whose C++17 support is incomplete; building the SystemC module that way has

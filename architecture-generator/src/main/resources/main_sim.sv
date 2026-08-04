@@ -25,6 +25,10 @@ import design_1_axi_vip_0_0_pkg::*;
 
 import design_1_axi_vip_1_0_pkg::*;
 
+`ifdef HC_DUAL_MEMORY_VIP
+import design_1_axi_vip_2_0_pkg::*;
+`endif
+
 module main_sim(
         output logic  HBM_CATTRIP_LS,
         output logic  PCIE_PERST_LS_65,
@@ -45,6 +49,9 @@ export "DPI-SC" task S_AXI_WRITE_REG;
     
 design_1_axi_vip_0_0_mst_t        mst_agent_0_mem;
 design_1_axi_vip_1_0_mst_t        mst_agent_1_reg;
+`ifdef HC_DUAL_MEMORY_VIP
+design_1_axi_vip_2_0_mst_t        mst_agent_2_watcher_mem;
+`endif
 
 
 logic HBM_CATTRIP_LS_;
@@ -77,6 +84,12 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
     mst_agent_1_reg = new("master vip agent",DUT.design_1_i.axi_vip_1.inst.IF);//ms  
     mst_agent_1_reg.set_agent_tag("Master VIP 1"); 
     mst_agent_1_reg.start_master(); 
+
+`ifdef HC_DUAL_MEMORY_VIP
+    mst_agent_2_watcher_mem = new("watcher memory vip agent",DUT.design_1_i.axi_vip_2.inst.IF);
+    mst_agent_2_watcher_mem.set_agent_tag("Master VIP 2 (watcher memory)");
+    mst_agent_2_watcher_mem.start_master();
+`endif
     
     
     $timeformat (-12, 1, " ps", 1);
@@ -145,7 +158,9 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
   begin
     burst_length = xil_axi_len_t'(burst_length_);
     burst_size_mem = xil_axi_size_t'(burst_size_);
-    mst_agent_0_mem.AXI4_READ_BURST (
+`ifdef HC_DUAL_MEMORY_VIP
+    if (Addr >= 64'h0000000200000000) begin
+      mst_agent_2_watcher_mem.AXI4_READ_BURST (
             id,
             Addr,
             burst_length,
@@ -161,6 +176,27 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
             resp,
             ruser
           );
+    end else begin
+`endif
+      mst_agent_0_mem.AXI4_READ_BURST (
+            id,
+            Addr,
+            burst_length,
+            burst_size_mem,
+            burstType,
+            xil_axi_lock_t'(0),
+            xil_axi_cache_t'(0),
+            xil_axi_prot_t'(0),
+            xil_axi_region_t'(0),
+            xil_axi_qos_t'(0),
+            xil_axi_user_beat'(0),
+            RData,
+            resp,
+            ruser
+          );
+`ifdef HC_DUAL_MEMORY_VIP
+    end
+`endif
   end
   endtask
 
@@ -169,7 +205,27 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
     begin
     burst_length = xil_axi_len_t'(burst_length_);
     burst_size_mem = xil_axi_size_t'(burst_size_);
-    mst_agent_0_mem.AXI4_WRITE_BURST(
+`ifdef HC_DUAL_MEMORY_VIP
+    if (Addr >= 64'h0000000200000000) begin
+      mst_agent_2_watcher_mem.AXI4_WRITE_BURST(
+            id,
+            Addr,
+            burst_length,
+            burst_size_mem,
+            burstType,
+            xil_axi_lock_t'(0),
+            xil_axi_cache_t'(0),
+            xil_axi_prot_t'(0),
+            xil_axi_region_t'(0),
+            xil_axi_qos_t'(0),
+            xil_axi_user_beat'(0),
+            WData,
+            wuser,
+            resp_w
+          );
+    end else begin
+`endif
+      mst_agent_0_mem.AXI4_WRITE_BURST(
             id,
             Addr,
             burst_length,
@@ -185,6 +241,9 @@ top_sim DUT( HBM_CATTRIP_LS_, PCIE_PERST_LS_65_, SYSCLK2_clk_n_, SYSCLK2_clk_p_,
             wuser,  
             resp_w
           ); 
+`ifdef HC_DUAL_MEMORY_VIP
+    end
+`endif
     end
   endtask
 

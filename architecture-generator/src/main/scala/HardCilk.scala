@@ -34,6 +34,9 @@ class HardCilk(
     isSimulation: Boolean,
     argumentNotifierCutCount: Int,
     override val addressTransformFlag: Boolean = false, // Made public for trait
+    // CLI RAMA modes apply to ports whose task descriptor omits generateRAMA.
+    override val enableRamaByDefault: Boolean = false,
+    override val ramaStripingEnabled: Boolean = false,
     // Opt-in kernel-global start broadcast (default OFF -> byte-identical to the
     // pre-feature design). When ON: one host-writable register releases all
     // scheduler servers on the same cycle and anchors the watcher start gate.
@@ -57,6 +60,8 @@ class HardCilk(
   val interfacesAxiManagement =
     scala.collection.mutable.ArrayBuffer[axi4.RawInterface]()
   var numHbmPortExports = reduceAxi
+  // Exported m_axi_NN indices whose PE task requested selective RAMA.
+  var ramaPortIndices: Seq[Int] = Seq.empty
   val interfaceBuffer = new ArrayBuffer[hdlinfo.Interface]()
   val exportedPeHdlinfoPorts = new ArrayBuffer[hdlinfo.Port]()
 
@@ -635,6 +640,8 @@ class HardCilk(
     )
 
     axiOuts.addOne(axiOut)
+    // LockServer has no task-level override, so it inherits the CLI RAMA mode.
+    if (enableRamaByDefault) ramaPortIndices = ramaPortIndices :+ numHbmPortExports
     numHbmPortExports += 1
   }
 

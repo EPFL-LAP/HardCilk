@@ -11,6 +11,8 @@
 #   BENCHMARK=GraphColoring RUN_ARGS="/path/graph.txt 64 1 1200" bash scripts/rebuild_and_run.sh
 #   SKIP_HLS=1 bash scripts/rebuild_and_run.sh BFS
 #   START_STEP=5 bash scripts/rebuild_and_run.sh BFS 2
+#   RAMA_MODE=striped bash scripts/rebuild_and_run.sh countDecoupled
+#   RAMA_MODE=no-striping bash scripts/rebuild_and_run.sh countDecoupled
 #   HLS_CFLAGS=-DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=1 \
 #     bash scripts/rebuild_and_run.sh countDecoupled
 #
@@ -156,6 +158,7 @@ echo "START_STEP=$START_STEP"
 echo "MODE=$( [[ "$QUESTA" == "1" ]] && echo 'QuestaSim co-simulation' || echo 'Vitis hw_emu' )"
 echo "RUN_ARGS=$RUN_ARGS"
 echo "HLS_CFLAGS=${HLS_CFLAGS:-<none>}"
+echo "RAMA_MODE=${RAMA_MODE:-descriptor-only}"
 
 if (( START_STEP <= 1 )); then
   echo "===== STEP1 HLS ====="
@@ -203,7 +206,14 @@ if (( START_STEP <= 2 )); then
   if [[ "$QUESTA" == "1" ]]; then
     QUESTA_FLAG="-q"
   fi
-  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p ${GLOBAL_START_FLAG} ${QUESTA_FLAG}"
+  RAMA_FLAG=""
+  case "${RAMA_MODE:-}" in
+    "") ;;
+    striped) RAMA_FLAG="--rama-striping" ;;
+    no-striping) RAMA_FLAG="--rama-no-striping" ;;
+    *) echo "RAMA_MODE must be 'striped', 'no-striping', or empty" >&2; exit 2 ;;
+  esac
+  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p ${GLOBAL_START_FLAG} ${QUESTA_FLAG} ${RAMA_FLAG}"
 fi
 
 if (( START_STEP <= 3 )); then
@@ -271,6 +281,7 @@ if [[ "$QUESTA" == "1" ]]; then
   # The simulation compiles the STAGED workspace host, so the code under test is
   # the same one the XRT flow builds.
   export HARDCILK_HOST_DIR="$WORKSPACE_DIR/src/host"
+  export HARDCILK_HBM_DESCRIPTOR="$WORKSPACE_DIR/${BENCHMARK}.hbmports.json"
   # Problem size comes from the same SIZE/INSTANCES knobs the hw_emu args use.
   export COUNTDECOUPLED_SIZE=${SIZE:-10}
   export COUNTDECOUPLED_INSTANCES=${INSTANCES:-10}

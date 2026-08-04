@@ -33,6 +33,10 @@ trait HasHBMInterconnect extends Module {
   val fullSysGenDescriptor: FullSysGenDescriptor
   val reduceAxi: Int
   val addressTransformFlag: Boolean
+  val enableRamaByDefault: Boolean
+  // True only for --rama-striping. --rama-no-striping also enables RAMA ports,
+  // but leaves the host-visible address map linear.
+  val ramaStripingEnabled: Boolean
   val cfgAxi4HBM: axi4.Config
   val cfgXDMA: axi4.Config
   val interfaceBuffer: ArrayBuffer[hdlinfo.Interface]
@@ -41,6 +45,10 @@ trait HasHBMInterconnect extends Module {
 
   // This is an "output" var that this trait will update
   var numHbmPortExports: Int
+
+  // Exact exported m_axi_NN indices that should receive RAMA after applying the
+  // CLI default and every task's tri-state generateRAMA override.
+  var ramaPortIndices: Seq[Int]
 
   // Output: JSON mapping each exported HBM port (m_axi_NN, compacted index ==
   // watcher bandwidth-tap index) to the module masters attached to it. Built in
@@ -106,12 +114,18 @@ trait HasHBMInterconnect extends Module {
     }
 
     val peInterfaceGroups = new ArrayBuffer[HbmInterfaceGroup]()
-    // PEs whose descriptor sets dedicatedAxiPort get their MAIN compute master
+    // PEs whose descriptor sets dedicatedAxiPort or generateRAMA get their MAIN compute master
     // (m_axi_gmem) pulled onto its OWN reserved HBM port -- one port per PE
     // instance, never muxed with any other master (PATH 1 direct passthrough).
     // Their write-buffer ports (spawnNext/argOut), if any, still ride the shared
     // pool. Everything else is unchanged.
     val dedicatedGroups = new ArrayBuffer[HbmInterfaceGroup]()
+    // Identity-tracked subset of the dedicated main masters that requested
+    // RAMA. Interface identity is stable through allocation into hbmSlaves.
+    val interfacesRama = new ArrayBuffer[axi4.full.Interface]()
+    // Explicit generateRAMA=false interfaces. Under a global CLI RAMA mode they
+    // are isolated so their exported ingress can safely bypass RAMA.
+    val interfacesNoRama = new ArrayBuffer[axi4.full.Interface]()
     // totalAxiPorts consolidation: (portCount, mainMasterGroups) per task whose
     // descriptor sets totalAxiPorts > 0. The main masters of ALL its PEs are
     // pulled out of the shared pool (like dedicated) and later packed onto
@@ -122,17 +136,23 @@ trait HasHBMInterconnect extends Module {
 
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       peMap.get(task.name).foreach { peArray =>
-        val consolidateMain = !task.dedicatedAxiPort && task.totalAxiPorts > 0
+        val forceRama = task.generateRAMA.contains(true)
+        val forceNoRama = task.generateRAMA.contains(false)
+        val isolateNoRama = enableRamaByDefault && forceNoRama && task.totalAxiPorts == 0
+        val reserveMain = task.dedicatedAxiPort || forceRama || isolateNoRama
+        val consolidateMain = !reserveMain && task.totalAxiPorts > 0
         val taskMainGroups = new ArrayBuffer[HbmInterfaceGroup]()
         peArray.zipWithIndex.foreach { case (pe, peIndex) =>
           val rolePorts = peOwnedPorts(pe, task)
           if (rolePorts.nonEmpty) {
-            if (task.dedicatedAxiPort) {
+            if (reserveMain) {
               val (mainPorts, otherPorts) = rolePorts.partition(_._1 == "main")
               mainPorts.foreach { case (role, iface) =>
                 dedicatedGroups.addOne(
                   HbmInterfaceGroup(s"pe:${task.name}:$peIndex", Seq(iface), Seq(role))
                 )
+                if (forceRama) interfacesRama.addOne(iface)
+                if (forceNoRama) interfacesNoRama.addOne(iface)
               }
               if (otherPorts.nonEmpty) {
                 peInterfaceGroups.addOne(
@@ -149,6 +169,7 @@ trait HasHBMInterconnect extends Module {
                 taskMainGroups.addOne(
                   HbmInterfaceGroup(s"pe:${task.name}:$peIndex", Seq(iface), Seq(role))
                 )
+                if (forceNoRama) interfacesNoRama.addOne(iface)
               }
               if (otherPorts.nonEmpty) {
                 peInterfaceGroups.addOne(
@@ -322,7 +343,7 @@ trait HasHBMInterconnect extends Module {
     val numReserved = numDedicated + numConsolidated
     require(
       numReserved < numHBMPorts,
-      s"dedicatedAxiPort/totalAxiPorts requested $numReserved reserved port(s) but only " +
+      s"dedicatedAxiPort/generateRAMA/totalAxiPorts requested $numReserved reserved port(s) but only " +
         s"$numHBMPorts HBM port(s) exist; leave at least one for schedulers/servers"
     )
     val remainingPorts = numHBMPorts - numReserved
@@ -534,6 +555,40 @@ trait HasHBMInterconnect extends Module {
       axiXDMA.addOne(xdma_axi)
     }
 
+    // hbmSlaves can contain empty physical buckets, while exported m_axi_NN
+    // indices are compact. Derive descriptor-forced indices in that exact order.
+    val compactBuckets = hbmSlaves.filter(_.nonEmpty).zipWithIndex
+    val forcedRamaPorts = compactBuckets.collect {
+      case (bucket, exportedIndex)
+          if bucket.length == 1 && interfacesRama.exists(_ eq bucket.head) => exportedIndex
+    }
+    require(
+      forcedRamaPorts.length == interfacesRama.length,
+      s"generateRAMA=true requested ${interfacesRama.length} PE port(s), but only ${forcedRamaPorts.length} ended up on unshared exported HBM ports"
+    )
+
+    val forcedNoRamaPorts = compactBuckets.collect {
+      case (bucket, exportedIndex)
+          if bucket.exists(iface => interfacesNoRama.exists(_ eq iface)) =>
+        if (enableRamaByDefault) {
+          require(
+            bucket.forall(iface => interfacesNoRama.exists(_ eq iface)),
+            s"generateRAMA=false traffic reached shared exported HBM port $exportedIndex while a global RAMA mode is enabled"
+          )
+        }
+        exportedIndex
+    }.toSet
+
+    ramaPortIndices =
+      if (enableRamaByDefault)
+        compactBuckets.map(_._2).filterNot(forcedNoRamaPorts).toSeq
+      else forcedRamaPorts.toSeq
+    if (ramaPortIndices.nonEmpty) {
+      println(
+        s"[HBM:Interconnect] RAMA enabled on exported port(s): ${ramaPortIndices.map(i => f"m_axi_$i%02d").mkString(", ")}"
+      )
+    }
+
     val axi3CompatFlag = false
     numHbmPortExports = hbmSlaves.count(_.nonEmpty)
     // ------------------------------------------------------------------
@@ -657,11 +712,22 @@ $mastersJson
     }"""
       }.mkString(",\n")
 
+      val stripedHostMapping = ramaStripingEnabled && ramaPortIndices.nonEmpty
+      val stripeMemoryCount =
+        if (fullSysGenDescriptor.watcherConfig.isDefined) 16 else 32
+      val ramaPortsJson = ramaPortIndices.sorted.mkString(", ")
+      val hostMappingJson =
+        if (stripedHostMapping)
+          s"""{"mode":"per_memory","runtimeModes":["hw","questa"],"firstBank":0,"memoryCount":$stripeMemoryCount,"fragmentBytes":64,"bytesPerBank":536870912}"""
+        else
+          """{"mode":"none","runtimeModes":[]}"""
+
       hbmPortMappingJson =
         s"""{
   "design": "${fullSysGenDescriptor.name}",
   "numComputePorts": ${hbmSlaves.count(_.nonEmpty)},
   "note": "'pes' is the configured physical STATUS-slot table. Each port master carries 'role' (main = the m_axi_gmem compute port; argOut/argDataOut/spawnNext = argument/continuation write-buffer ports; ring/spawner = scheduler ports) and 'peNumber' = the selected STATUS slot that owns it, or null for shared servers (scheduler/allocator/argumentNotifier). port index == watcher BW_READ/BW_WRITE tap index. owner = '<kind>:<task>:<index>[#<role>]'.",
+  "rama": {"ports": [$ramaPortsJson], "hostMapping": $hostMappingJson},
   "statusSlotSchema": {"slotBits": 4, "fieldOrder": "lowToHigh", "encodings": {"boolean1": {"bits": 1}, "readyValid2": {"bits": 2, "bit0": "valid", "bit1": "ready"}}},
   "pes": [
 $pesJson

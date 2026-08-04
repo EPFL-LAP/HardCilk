@@ -111,7 +111,8 @@ inline FpgaContext init_fpgas(const BenchArgs& args, const std::string& kernel_n
     }
 
     for (int i = 0; i < args.fpga_count; ++i) {
-        ctx.xrt_memories.emplace_back(ctx.fpgas[i], ctx.kernels[i]);
+        ctx.xrt_memories.emplace_back(ctx.fpgas[i], ctx.kernels[i],
+                                      args.xclbin_path);
         ctx.memories.push_back(&ctx.xrt_memories[i]);
     }
 

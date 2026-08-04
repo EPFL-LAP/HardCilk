@@ -45,7 +45,7 @@ import Util._
 
 case class ArgumentNetworksConfig(
     nServers: Int,
-    /** Continuation-source PEs (and therefore "new" lanes) per server. */
+    /** Physical continuation-cache lanes per server. */
     newLanesPerServer: Int,
     /** Update-source PEs directly attached per server; the server gets one
       * extra update lane fed from the redirect ring (base case 4 -> 5 lanes).
@@ -77,7 +77,12 @@ case class ArgumentNetworksConfig(
     cacheDelayCycles: Int = 0,
     // Extra coupledQ slots for missed updates with no co-cycle eviction (throughput
     // knob for the non-backpressuring front porch; see ArgumentServer).
-    missedUpdateExtra: Int = 64
+    missedUpdateExtra: Int = 64,
+    /** Number of adjacent, private cache lanes assigned round-robin to each
+      * continuation source. One preserves the historical one-source/one-lane
+      * mapping.
+      */
+    newLaneStripingFactor: Int = 1
 ) {
   require(nServers >= 1)
   require(newLanesPerServer >= 1 && updateLanesPerServer >= 1)
@@ -85,6 +90,16 @@ case class ArgumentNetworksConfig(
   require(isPow2(continuationSize) && continuationSize >= 8)
   require(slowAxiIdWidth >= 1)
   require(cacheDelayCycles >= 0)
+  require(newLaneStripingFactor >= 1)
+  require(
+    newLanesPerServer % newLaneStripingFactor == 0,
+    "newLanesPerServer must be divisible by newLaneStripingFactor"
+  )
+  require(
+    newLanesPerServer <= updateLanesPerServer + 1,
+    "Each cache lane needs a local ArgumentServer update input; direct update " +
+      "lanes plus the redirect-ring input are insufficient"
+  )
   require(slowCutCount >= 1 && slowCutCount <= nServers)
   require(evictCutCount >= 1 && evictCutCount <= nServers)
   require(slowRequestQueueDepth >= 1)
@@ -100,9 +115,14 @@ case class ArgumentNetworksConfig(
 
   val serverTagWidth = math.max(1, log2Ceil(nServers))
   val laneWidth = ArgumentNotifierHelpers.laneWidth(newLanesPerServer)
+  require(
+    serverTagWidth + serverIDWidth + laneWidth <= 32,
+    "Continuation metadata {server,id,lane} must fit in the 32-bit task ABI field"
+  )
   require(realAddressWidth <= sysAddressWidth)
 
-  val nSourcePEs = nServers * newLanesPerServer
+  val newSourcesPerServer = newLanesPerServer / newLaneStripingFactor
+  val nSourcePEs = nServers * newSourcesPerServer
   val nUpdatePEs = nServers * updateLanesPerServer
 
   val lineBytes = continuationSize / 8
@@ -520,15 +540,53 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
   }
 
   // ---- New-continuation path (replaces the spawnNext ROB) --------------------
-  for (s <- 0 until nServers; j <- 0 until newLanesPerServer) {
-    val idx = s * newLanesPerServer + j
+  // Each source owns one disjoint group of adjacent cache lanes within its
+  // statically selected server. The group-local pointer advances only when the
+  // server accepts the insertion, so a stalled Decoupled request cannot change
+  // its destination or the metadata captured by NewContinuationBridge.
+  for (s <- 0 until nServers; source <- 0 until newSourcesPerServer) {
+    val idx = s * newSourcesPerServer + source
+    val laneBase = source * newLaneStripingFactor
     val bridge = Module(new NewContinuationBridge(cfg, s))
 
     s_axi_newCont(idx) :=> bridge.io.from_master
-    bridge.io.newContReq :=> servers(s).io.newContInput(j).req
-    bridge.io.assignedId := servers(s).io.newContInput(j).assignedId
-    bridge.io.assignedLane := servers(s).io.newContInput(j).assignedLane
     bridge.io.continuationOut :=> m_continuation(idx)
+
+    val selectWidth = math.max(1, log2Ceil(newLaneStripingFactor))
+    val selectedOffset = RegInit(0.U(selectWidth.W))
+    val selected = (0 until newLaneStripingFactor).map { offset =>
+      selectedOffset === offset.U
+    }
+
+    for (offset <- 0 until newLaneStripingFactor) {
+      val laneReq = servers(s).io.newContInput(laneBase + offset).req
+      laneReq.valid := bridge.io.newContReq.valid && selected(offset)
+      laneReq.bits := bridge.io.newContReq.bits
+    }
+
+    bridge.io.newContReq.ready := Mux1H(
+      selected.zipWithIndex.map { case (isSelected, offset) =>
+        isSelected -> servers(s).io.newContInput(laneBase + offset).req.ready
+      }
+    )
+    bridge.io.assignedId := Mux1H(
+      selected.zipWithIndex.map { case (isSelected, offset) =>
+        isSelected -> servers(s).io.newContInput(laneBase + offset).assignedId
+      }
+    )
+    bridge.io.assignedLane := Mux1H(
+      selected.zipWithIndex.map { case (isSelected, offset) =>
+        isSelected -> servers(s).io.newContInput(laneBase + offset).assignedLane
+      }
+    )
+
+    when(bridge.io.newContReq.fire) {
+      selectedOffset := Mux(
+        selectedOffset === (newLaneStripingFactor - 1).U,
+        0.U,
+        selectedOffset + 1.U
+      )
+    }
   }
 
   // ---- Update path (replaces the argOut ROB + old notifier network) ----------

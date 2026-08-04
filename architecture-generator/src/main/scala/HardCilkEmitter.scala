@@ -27,6 +27,12 @@ object HardCilkEmitter extends App {
       val systemDescriptor =
         parseJsonFile[FullSysGenDescriptor](cfg.json_path).normalized
 
+      val ramaCliMode =
+        if (cfg.ramaStriping) "striped"
+        else if (cfg.ramaNoStriping) "non-striped"
+        else "descriptor-only"
+      println(s"[HardCilkEmitter] RAMA mode: $ramaCliMode")
+
       // Read system descriptor from JSON
       try {
         systemDescriptor.validate()
@@ -43,13 +49,14 @@ object HardCilkEmitter extends App {
         Files.createDirectories(Paths.get(outputDirPathRTL))
 
         // Call the generate RTL function
-        val numHbmPortExports = generateRTL(
+        val rtlResult = generateRTL(
           systemDescriptor = systemDescriptor,
           pathInputJsonFile = cfg.json_path,
           outputDirPathRTL = outputDirPathRTL,
           flags = cfg,
           isSimulation = false
         )
+        val numHbmPortExports = rtlResult.numHbmPortExports
         println(s"Emitted RTL to: $outputDirPathRTL")
 
         // Generate the Vitis kernel description (user_0.xml) and v++ connectivity
@@ -74,7 +81,9 @@ object HardCilkEmitter extends App {
             numHbmPortExports = numHbmPortExports,
             kernelName = s"${rootTaskName}_0",
             vlnvName = rootTaskName,
-            outputDir = xrtDir
+            outputDir = xrtDir,
+            ramaPortIndices = rtlResult.ramaPortIndices.toSet,
+            enableRamaStriping = cfg.ramaStriping
           )
           println(s"Emitted kernel.xml + conn cfg to: $xrtDir")
         }
@@ -88,16 +97,12 @@ object HardCilkEmitter extends App {
           // port for the memory VIP.
           val outputDirPathTcl = s"${cfg.output_dir}/$outputDirName/tcl"
           Files.createDirectories(Paths.get(outputDirPathTcl))
-          require(
-            numHbmPortExports + 1 <= 32,
-            s"QuestaSim HBM port count is ${numHbmPortExports + 1} (design $numHbmPortExports + 1 VIP), " +
-              s"but U55C HBM exposes at most 32 AXI ports."
-          )
-
           TclResources.TclQuestaSim.generate(
             fullSysGenDescriptor = systemDescriptor,
             tclFileDirectory = outputDirPathTcl,
-            reduce_axi = numHbmPortExports
+            reduce_axi = numHbmPortExports,
+            ramaPorts = rtlResult.ramaPortIndices.toSet,
+            enableRamaStriping = cfg.ramaStriping
           )
 
           println(s"Emitted QuestaSim project (run ./simulate.sh) to: $outputDirPathTcl")
@@ -105,6 +110,15 @@ object HardCilkEmitter extends App {
       }
 
       if (cfg.tcl_generation) {
+        if (
+          cfg.ramaStriping || cfg.ramaNoStriping ||
+          systemDescriptor.taskDescriptors.exists(_.generateRAMA.contains(true))
+        ) {
+          println(
+            "[HardCilkEmitter] WARNING: the custom Vivado flow does not place RAMA; " +
+              "RAMA is currently emitted only for XRT connectivity and QuestaSim."
+          )
+        }
         val outputDirPathTcl = s"${cfg.output_dir}/$outputDirName/tcl"
         Files.createDirectories(Paths.get(outputDirPathTcl))
         val lockAxiPortCount = if (systemDescriptor.lockConfig.nonEmpty) 1 else 0
@@ -174,13 +188,14 @@ object HardCilkEmitter extends App {
 
         // Generate the HDL in outputDirPathSC/projects/${jsonName}/hdl
         new java.io.File(s"$outputDirPathSC/projects/$jsonName/hdl").mkdirs()
-        val numHbmPortExports = generateRTL(
+        val rtlResult = generateRTL(
           systemDescriptor,
           cfg.json_path,
           s"$outputDirPathSC/projects/$jsonName/hdl",
           cfg,
           true
         )
+        val numHbmPortExports = rtlResult.numHbmPortExports
 
         // Generate the SystemC project headers
         new java.io.File(s"$outputDirPathSC/projects/$jsonName/include").mkdirs()

@@ -1,7 +1,12 @@
 #pragma once
 
 #include <memIO.h>
+#include <rama_striping.h>
 #include <sc_dpiheader_questa.h>
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <utility>
 #include <systemc.h>
@@ -22,12 +27,69 @@ struct questaMemory : Memory
 {
     questaMemory()
     {
+        ramaMapping_ = loadRamaHostMapping(std::string(), "questa");
+        logRamaHostMapping(ramaMapping_, "questa");
     }
 
     private:
     uint64_t free_mem_base_addr = 0x0;
     std::vector<freedMemBlock> freed_mem_blocks;
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
+    RamaHostMapping ramaMapping_;
+
+    struct StripePiece
+    {
+        uint64_t logical_offset;
+        uint64_t size;
+    };
+
+    struct StripeGather
+    {
+        bool used = false;
+        uint64_t physical_start = 0;
+        uint64_t physical_next = 0;
+        std::vector<uint8_t> bytes;
+        std::vector<StripePiece> pieces;
+    };
+
+    std::vector<StripeGather> buildStripeGathers(uint64_t logical_addr,
+                                                  uint64_t size) const
+    {
+        std::vector<StripeGather> gathers(
+            static_cast<size_t>(ramaMapping_.memory_count));
+        const uint64_t reserve =
+            size / ramaMapping_.memory_count + ramaMapping_.fragment_bytes;
+        for (auto &g : gathers)
+            g.bytes.reserve(static_cast<size_t>(reserve));
+
+        uint64_t cursor = logical_addr;
+        uint64_t logical_offset = 0;
+        uint64_t left = size;
+        while (left > 0)
+        {
+            const uint64_t chunk = std::min<uint64_t>(
+                left, ramaMapping_.bytesUntilFragmentEnd(cursor));
+            const size_t stripe =
+                static_cast<size_t>(ramaMapping_.stripeIndex(cursor));
+            const uint64_t physical = ramaMapping_.physicalAddress(cursor);
+            StripeGather &g = gathers[stripe];
+            if (!g.used)
+            {
+                g.used = true;
+                g.physical_start = physical;
+                g.physical_next = physical;
+            }
+            if (physical != g.physical_next)
+                throw std::runtime_error(
+                    "RAMA mapping produced a non-contiguous per-bank transfer");
+            g.pieces.push_back(StripePiece{logical_offset, chunk});
+            g.physical_next += chunk;
+            cursor += chunk;
+            logical_offset += chunk;
+            left -= chunk;
+        }
+        return gathers;
+    }
 
     public:
     uint32_t readReg32(uint64_t addr)
@@ -89,6 +151,34 @@ struct questaMemory : Memory
     }
 
     void copyToDevice(uint64_t dest_addr, uint8_t const *src, uint64_t size)
+    {
+        if (size != 0 && ramaMapping_.contains(dest_addr))
+        {
+            if (size > ramaMapping_.windowEnd() - dest_addr)
+                throw std::runtime_error("RAMA-striped Questa write crosses the compute-memory window");
+            std::vector<StripeGather> gathers =
+                buildStripeGathers(dest_addr, size);
+            for (StripeGather &g : gathers)
+            {
+                if (!g.used)
+                    continue;
+                for (const StripePiece &piece : g.pieces)
+                {
+                    const size_t old_size = g.bytes.size();
+                    g.bytes.resize(old_size + static_cast<size_t>(piece.size));
+                    std::memcpy(g.bytes.data() + old_size,
+                                src + piece.logical_offset,
+                                static_cast<size_t>(piece.size));
+                }
+                copyToDeviceLinear(g.physical_start, g.bytes.data(),
+                                   g.bytes.size());
+            }
+            return;
+        }
+        copyToDeviceLinear(dest_addr, src, size);
+    }
+
+    void copyToDeviceLinear(uint64_t dest_addr, uint8_t const *src, uint64_t size)
     {
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
@@ -189,9 +279,41 @@ struct questaMemory : Memory
                 }
             }
         }
+        delete[] data_tmp;
     }
 
     void copyFromDevice(uint8_t *dest, uint64_t src_addr, uint64_t size)
+    {
+        if (size != 0 && ramaMapping_.contains(src_addr))
+        {
+            if (size > ramaMapping_.windowEnd() - src_addr)
+                throw std::runtime_error("RAMA-striped Questa read crosses the compute-memory window");
+            std::vector<StripeGather> gathers =
+                buildStripeGathers(src_addr, size);
+            for (StripeGather &g : gathers)
+            {
+                if (!g.used)
+                    continue;
+                uint64_t bytes = 0;
+                for (const StripePiece &piece : g.pieces)
+                    bytes += piece.size;
+                g.bytes.resize(static_cast<size_t>(bytes));
+                copyFromDeviceLinear(g.bytes.data(), g.physical_start, bytes);
+                size_t gathered_offset = 0;
+                for (const StripePiece &piece : g.pieces)
+                {
+                    std::memcpy(dest + piece.logical_offset,
+                                g.bytes.data() + gathered_offset,
+                                static_cast<size_t>(piece.size));
+                    gathered_offset += static_cast<size_t>(piece.size);
+                }
+            }
+            return;
+        }
+        copyFromDeviceLinear(dest, src_addr, size);
+    }
+
+    void copyFromDeviceLinear(uint8_t *dest, uint64_t src_addr, uint64_t size)
     {
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
@@ -273,6 +395,7 @@ struct questaMemory : Memory
 
         // Copy the data from the local buffer
         memcpy(dest, data, size);
+        delete[] data;
     }
 
     uint64_t allocateMemFPGA(uint64_t size, uint64_t alignment /** alignment is a byte value */)

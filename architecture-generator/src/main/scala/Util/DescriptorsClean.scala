@@ -157,6 +157,11 @@ case class SideConfig(
     // match.
     cacheEvictionSaverCount: Int = 1,
     newContinuationLanesPerServer: Int = 1,
+    // Number of adjacent, private cache lanes used round-robin by each
+    // continuation-source PE. A value of 1 preserves the historical static
+    // source-to-lane mapping. The physical lane count must be divisible by this
+    // factor so every source owns one disjoint lane group within a server.
+    newContinuationLaneStripingFactor: Int = 1,
     directUpdateLanesPerServer: Int = 1,
     // Cut count for the slow-update collection network (servers -> slow
     // handlers).
@@ -204,7 +209,18 @@ case class SideConfig(
       require(slowArgumentHandlerCount > 0)
       require(cacheEvictionSaverCount > 0)
       require(newContinuationLanesPerServer > 0)
+      require(newContinuationLaneStripingFactor > 0)
+      require(
+        newContinuationLanesPerServer % newContinuationLaneStripingFactor == 0,
+        "newContinuationLanesPerServer must be divisible by " +
+          "newContinuationLaneStripingFactor"
+      )
       require(directUpdateLanesPerServer > 0)
+      require(
+        newContinuationLanesPerServer <= directUpdateLanesPerServer + 1,
+        "newContinuationLanesPerServer exceeds the direct update lanes plus " +
+          "the redirect-ring input"
+      )
       require(argumentNotifierCutCount > 0)
       require(evictionCutCount > 0)
       require(argumentServerIdWidth > 0)
@@ -258,6 +274,11 @@ case class TaskDescriptor(
     // master. One port per PE instance. Use for bandwidth-critical PEs (e.g.
     // countDecoupled's memReader) so they are never throttled by port sharing.
     dedicatedAxiPort: Boolean = false,
+    // Tri-state RAMA override for every PE instance's main m_axi_gmem master:
+    // omitted/None -> inherit the command-line RAMA mode
+    // false        -> never attach RAMA
+    // true         -> always attach RAMA (striped only with --rama-striping)
+    generateRAMA: Option[Boolean] = None,
     // When > 0, the main compute masters (m_axi_gmem) of ALL this task's PE
     // instances are CONSOLIDATED onto exactly this many reserved HBM ports,
     // regardless of the PE count. The reserved port(s) form a flat mux carrying
@@ -354,6 +375,20 @@ case class TaskDescriptor(
       !(dedicatedAxiPort && totalAxiPorts > 0),
       s"Task '$name': dedicatedAxiPort and totalAxiPorts are mutually exclusive"
     )
+    require(
+      !(generateRAMA.contains(true) && totalAxiPorts > 0),
+      s"Task '$name': generateRAMA and totalAxiPorts are mutually exclusive because each RAMA PE master needs an unshared HBM port"
+    )
+    if (generateRAMA.contains(true)) {
+      require(
+        hasAXI,
+        s"Task '$name': generateRAMA applies to the PEs' m_axi_gmem masters, but hasAXI is false"
+      )
+      require(
+        peHDLPath.nonEmpty,
+        s"Task '$name': generateRAMA needs PEs in the design, but no 'peHDLPath' is set"
+      )
+    }
 
     if (peHDLPath.nonEmpty) {
       require(

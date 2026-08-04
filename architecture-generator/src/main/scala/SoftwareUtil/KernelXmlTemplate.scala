@@ -43,13 +43,21 @@ object KernelXmlTemplate {
     *   VLNV leaf, e.g. "BFS" -> epfl.ch:hardcilk:BFS:1.0
     * @param outputDir
     *   directory to write both files into
+    * @param ramaPortIndices
+    *   exact exported memory ports that use Vitis native RAMA after descriptor
+    *   overrides and the CLI default have been resolved
+    * @param enableRamaStriping
+    *   configure the selected RAMA ports for per-memory striping; watcher ports
+    *   remain direct and exclusive when present
     */
   def generate(
       descriptor: FullSysGenDescriptor,
       numHbmPortExports: Int,
       kernelName: String,
       vlnvName: String,
-      outputDir: String
+      outputDir: String,
+      ramaPortIndices: Set[Int] = Set.empty,
+      enableRamaStriping: Boolean = false
   ): Unit = {
     Files.createDirectories(Paths.get(outputDir))
 
@@ -57,6 +65,11 @@ object KernelXmlTemplate {
     // the exclusive top HBM channels HBM[16:31]; every other master is confined to
     // HBM[0:15] and its addressable range is the lower 8 GB.
     val hasWatcher = descriptor.watcherConfig.isDefined
+    val ramaHookPath = Paths
+      .get(outputDir)
+      .toAbsolutePath
+      .normalize()
+      .resolve("rama_configure_xrt.tcl")
 
     val xml =
       renderKernelXml(
@@ -69,8 +82,27 @@ object KernelXmlTemplate {
     write(s"$outputDir/user_0.xml", xml)
 
     val cfg =
-      renderConnCfg(descriptor, numHbmPortExports, kernelName, hasWatcher)
+      renderConnCfg(
+        descriptor,
+        numHbmPortExports,
+        kernelName,
+        hasWatcher,
+        ramaPortIndices,
+        enableRamaStriping,
+        if (ramaPortIndices.nonEmpty) Some(ramaHookPath.toString) else None
+      )
     write(s"$outputDir/conn_u55c.cfg", cfg)
+    if (ramaPortIndices.nonEmpty) {
+      val memoryCount = if (hasWatcher) 16 else 32
+      write(
+        ramaHookPath.toString,
+        renderRamaXrtHookTcl(
+          expectedRamaCount = ramaPortIndices.size,
+          striped = enableRamaStriping,
+          memoryCount = memoryCount
+        )
+      )
+    }
   }
 
   // --- helpers ---------------------------------------------------------------
@@ -220,11 +252,14 @@ ${argsBlock}
 
   // --- conn_u55c.cfg ---------------------------------------------------------
 
-  private def renderConnCfg(
+  private[SoftwareUtil] def renderConnCfg(
       descriptor: FullSysGenDescriptor,
       numMasters: Int,
       kernelName: String,
-      hasWatcher: Boolean
+      hasWatcher: Boolean,
+      ramaPortIndices: Set[Int],
+      enableRamaStriping: Boolean,
+      ramaHookPath: Option[String] = None
   ): String = {
 
     val freqHz = descriptor.targetFrequency.toLong * 1000000L
@@ -251,12 +286,20 @@ ${argsBlock}
     // never crosses theirs.
     val watcherPortB = numMasters - 1 // m_axi_gmem1 -> HBM[24:31]
     val watcherPortA = numMasters - 2 // m_axi_gmem  -> HBM[16:23]
-    def spTag(i: Int): String =
+    val nonWatcherPortCount = if (hasWatcher) numMasters - 2 else numMasters
+    val invalidRamaPorts = ramaPortIndices.filter(i => i < 0 || i >= nonWatcherPortCount)
+    require(
+      invalidRamaPorts.isEmpty,
+      s"selective RAMA ports must be non-watcher m_axi indices in [0, ${nonWatcherPortCount - 1}], got ${invalidRamaPorts.toSeq.sorted.mkString(", ")}"
+    )
+    def baseSpTag(i: Int): String =
       if (hasWatcher) {
         if (i == watcherPortB) "HBM[24:31].24"
         else if (i == watcherPortA) "HBM[16:23].16"
         else s"HBM[0:15].${i % 16}"
       } else s"HBM[0:31].${fullRangeSwitchIndex(i)}"
+    def spTag(i: Int): String =
+      baseSpTag(i) + (if (ramaPortIndices.contains(i)) ".RAMA" else "")
 
     // Load-bearing ownership invariant. Keep this as an explicit validation even
     // though the mappings above are generated here: a future custom-placement
@@ -283,6 +326,21 @@ ${argsBlock}
       }
       .mkString("\n")
 
+    if (ramaPortIndices.nonEmpty) {
+      println(
+        s"[KernelXmlTemplate] Native Vitis RAMA enabled on ${ramaPortIndices.size} port(s): " +
+          ramaPortIndices.toSeq.sorted.map(portName).mkString(", ")
+      )
+    }
+
+    // Native Vitis RAMA instances live in a generated child of the HBM memory
+    // subsystem. The postSysLink hook wraps generate_target so it can update the
+    // final generated RAMA artifacts before Vitis configures the IP-cache and
+    // synthesis runs.
+    val linkHookBlock = ramaHookPath
+      .map(path => s"[linkhook]\ncustom=postSysLink,$path\n\n")
+      .getOrElse("")
+
     s"""[connectivity]
 nk=${kernelName}:1:${kernelName}
 
@@ -291,8 +349,159 @@ ${spLines}
 [clock]
 freqHz=${freqHz}:${kernelName}.clock
 
-[vivado]
+${linkHookBlock}[vivado]
 prop=run.impl_1.strategy=Performance_HighUtilSLRs
+"""
+  }
+
+  /** Pre-synthesis customization for the RAMA instances inserted by `.RAMA`.
+    * Vitis 2024.1 creates the HBM subsystem's child block design after the
+    * postSysLink hook and regenerates it during `generate_target`, so changing
+    * the child BD directly from that hook is either too early or overwritten.
+    * Wrap `generate_target` and patch its final XCI/VHDL products before Vitis
+    * configures the IP cache and OOC synthesis runs. Keep every parameter
+    * explicit so the linked XCI is directly auditable and matches Mahfouz's
+    * configuration.
+    */
+  private[SoftwareUtil] def renderRamaXrtHookTcl(
+      expectedRamaCount: Int,
+      striped: Boolean,
+      memoryCount: Int
+  ): String = {
+    require(expectedRamaCount > 0)
+    require(memoryCount >= 1 && memoryCount <= 32)
+    val interleave = if (striped) "per_memory" else "none"
+    val fragmentBytes = if (striped) 64 else 128
+    val queueDepth = if (striped) 256 else 128
+    val configuredMemoryCount = if (striped) memoryCount else 4
+
+    s"""# Generated by HardCilk: configure native Vitis RAMA after generate_target.
+proc hc_replace_file {hc_path hc_map} {
+  set hc_in [open $$hc_path r]
+  set hc_data [read $$hc_in]
+  close $$hc_in
+  set hc_new [string map $$hc_map $$hc_data]
+  if {$$hc_new ne $$hc_data} {
+    set hc_out [open $$hc_path w]
+    puts -nonewline $$hc_out $$hc_new
+    close $$hc_out
+  }
+}
+
+# Keep the generated HBM child-BD metadata consistent with its XCI products.
+# The child design is read-only when opened through the parent, hence this
+# narrow, validated textual update after generation.
+proc hc_patch_hmss_bd {hc_hmss_bd} {
+  set hc_in [open $$hc_hmss_bd r]
+  set hc_data [read $$hc_in]
+  close $$hc_in
+  set hc_existing [regexp -all {"G_MEM_INTERLEAVE_TYPE"} $$hc_data]
+  if {$$hc_existing == $expectedRamaCount} {
+    return
+  }
+  if {$$hc_existing != 0} {
+    error "HardCilk found $$hc_existing partial RAMA configurations in $$hc_hmss_bd"
+  }
+  set hc_out_lines {}
+  set hc_rama_candidate 0
+  set hc_rama_cell 0
+  set hc_patched 0
+  foreach hc_line [split $$hc_data "\\n"] {
+    if {[regexp {^\\s+"rama_[0-9]+": \\{$$} $$hc_line]} {
+      set hc_rama_candidate 1
+      set hc_rama_cell 0
+    }
+    if {$$hc_rama_candidate && [string first {"vlnv": "xilinx.com:ip:rama:1.1"} $$hc_line] >= 0} {
+      set hc_rama_cell 1
+    }
+    lappend hc_out_lines $$hc_line
+    if {$$hc_rama_cell && [regexp {^(\\s+)"parameters": \\{$$} $$hc_line -> hc_indent]} {
+      set hc_param_indent "$${hc_indent}  "
+      lappend hc_out_lines "$${hc_param_indent}\\\"G_AXI_LITE\\\": {\\\"value\\\": \\\"0\\\"},"
+      lappend hc_out_lines "$${hc_param_indent}\\\"G_FRAGMENT_SIZE_BYTES\\\": {\\\"value\\\": \\\"$fragmentBytes\\\"},"
+      lappend hc_out_lines "$${hc_param_indent}\\\"G_MEM_COUNT\\\": {\\\"value\\\": \\\"$configuredMemoryCount\\\"},"
+      lappend hc_out_lines "$${hc_param_indent}\\\"G_MEM_INTERLEAVE_TYPE\\\": {\\\"value\\\": \\\"$interleave\\\"},"
+      lappend hc_out_lines "$${hc_param_indent}\\\"G_REORDER_QUEUE_DEPTH\\\": {\\\"value\\\": \\\"$queueDepth\\\"},"
+      lappend hc_out_lines "$${hc_param_indent}\\\"ID_WIDTH\\\": {\\\"value\\\": \\\"1\\\"},"
+      incr hc_patched
+      set hc_rama_candidate 0
+      set hc_rama_cell 0
+    }
+  }
+  if {$$hc_patched != $expectedRamaCount} {
+    error "HardCilk expected to patch $expectedRamaCount RAMA cells in $$hc_hmss_bd, patched $$hc_patched"
+  }
+  set hc_out [open $$hc_hmss_bd w]
+  puts -nonewline $$hc_out [join $$hc_out_lines "\\n"]
+  close $$hc_out
+}
+
+proc hc_patch_generated_ramas {} {
+  set hc_project_dir [get_property DIRECTORY [current_project]]
+  set hc_rama_xcis [glob -nocomplain [file join $$hc_project_dir *.gen * bd * ip *hmss* bd_* ip * *rama*.xci]]
+  if {[llength $$hc_rama_xcis] == 0} {
+    return
+  }
+  if {[llength $$hc_rama_xcis] != $expectedRamaCount} {
+    error "HardCilk expected $expectedRamaCount generated RAMA XCI files, found [llength $$hc_rama_xcis]: $$hc_rama_xcis"
+  }
+  set hc_hmss_bds [glob -nocomplain [file join $$hc_project_dir *.gen * bd * ip *hmss* bd_0 *.bd]]
+  if {[llength $$hc_hmss_bds] != 1} {
+    error "HardCilk expected one generated HBM subsystem BD, found [llength $$hc_hmss_bds]: $$hc_hmss_bds"
+  }
+  hc_patch_hmss_bd [lindex $$hc_hmss_bds 0]
+
+  set hc_xci_map [list \\
+    {"G_REORDER_QUEUE_DEPTH": [ \\{ "value": "128"} {"G_REORDER_QUEUE_DEPTH": [ \\{ "value": "$queueDepth"} \\
+    {"G_FRAGMENT_SIZE_BYTES": [ \\{ "value": "128"} {"G_FRAGMENT_SIZE_BYTES": [ \\{ "value": "$fragmentBytes"} \\
+    {"G_MEM_INTERLEAVE_TYPE": [ \\{ "value": "none"} {"G_MEM_INTERLEAVE_TYPE": [ \\{ "value": "$interleave"} \\
+    {"G_MEM_COUNT": [ \\{ "value": "4"} {"G_MEM_COUNT": [ \\{ "value": "$configuredMemoryCount"}]
+  set hc_vhdl_map [list \\
+    {G_FRAGMENT_SIZE_BYTES=128} {G_FRAGMENT_SIZE_BYTES=$fragmentBytes} \\
+    {G_MEM_COUNT=4} {G_MEM_COUNT=$configuredMemoryCount} \\
+    {G_MEM_INTERLEAVE_TYPE=none} {G_MEM_INTERLEAVE_TYPE=$interleave} \\
+    {G_REORDER_QUEUE_DEPTH=128} {G_REORDER_QUEUE_DEPTH=$queueDepth} \\
+    {G_FRAGMENT_SIZE_BYTES => 128} {G_FRAGMENT_SIZE_BYTES => $fragmentBytes} \\
+    {G_MEM_COUNT => 4} {G_MEM_COUNT => $configuredMemoryCount} \\
+    {G_MEM_INTERLEAVE_TYPE => "none"} {G_MEM_INTERLEAVE_TYPE => "$interleave"} \\
+    {G_REORDER_QUEUE_DEPTH => 128} {G_REORDER_QUEUE_DEPTH => $queueDepth}]
+  foreach hc_xci $$hc_rama_xcis {
+    hc_replace_file $$hc_xci $$hc_xci_map
+    set hc_synth_vhdl [file join [file dirname $$hc_xci] synth "[file rootname [file tail $$hc_xci]].vhd"]
+    if {[file exists $$hc_synth_vhdl]} {
+      hc_replace_file $$hc_synth_vhdl $$hc_vhdl_map
+    }
+  }
+
+  set hc_rama_ips [get_ips -quiet -all *rama*]
+  if {[llength $$hc_rama_ips] != $expectedRamaCount} {
+    error "HardCilk expected $expectedRamaCount RAMA IPs, found [llength $$hc_rama_ips]: $$hc_rama_ips"
+  }
+  foreach hc_rama $$hc_rama_ips {
+    set_property -dict [list \\
+      CONFIG.ID_WIDTH {1} \\
+      CONFIG.G_AXI_LITE {0} \\
+      CONFIG.G_FRAGMENT_SIZE_BYTES {$fragmentBytes} \\
+      CONFIG.G_MEM_COUNT {$configuredMemoryCount} \\
+      CONFIG.G_MEM_INTERLEAVE_TYPE {$interleave} \\
+      CONFIG.G_REORDER_QUEUE_DEPTH {$queueDepth} \\
+    ] $$hc_rama
+  }
+  puts "HardCilk configured [llength $$hc_rama_ips] generated RAMA IP(s): interleave=$interleave memories=$configuredMemoryCount fragment=$fragmentBytes queue=$queueDepth"
+}
+
+# There is no Vitis custom hook after generate_target. Wrap the command while
+# this VPL process is alive so each parent/sub-design generation is followed by
+# the RAMA update, before IP-cache checks and OOC synthesis are created.
+if {[llength [info commands hc_generate_target_original]] == 0} {
+  rename generate_target hc_generate_target_original
+  proc generate_target {args} {
+    set hc_result [uplevel 1 [list hc_generate_target_original {*}$$args]]
+    hc_patch_generated_ramas
+    return $$hc_result
+  }
+}
+puts "HardCilk installed generated-RAMA configuration hook"
 """
   }
 }
