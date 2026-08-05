@@ -34,6 +34,11 @@ object DescriptorJSON {
   
   implicit val memStatsDecoder: Decoder[MemStats] = deriveConfiguredDecoder[MemStats]
   implicit val memStatsEncoder: Encoder[MemStats] = deriveConfiguredEncoder[MemStats]
+
+  implicit val legacySideOverridesDecoder: Decoder[LegacySideOverrides] = deriveConfiguredDecoder[LegacySideOverrides]
+  implicit val legacySideOverridesEncoder: Encoder[LegacySideOverrides] = deriveConfiguredEncoder[LegacySideOverrides]
+  implicit val legacyTaskOverridesDecoder: Decoder[LegacyTaskOverrides] = deriveConfiguredDecoder[LegacyTaskOverrides]
+  implicit val legacyTaskOverridesEncoder: Encoder[LegacyTaskOverrides] = deriveConfiguredEncoder[LegacyTaskOverrides]
   
   implicit val sideConfigDecoder: Decoder[SideConfig] = deriveConfiguredDecoder[SideConfig]
   implicit val sideConfigEncoder: Encoder[SideConfig] = deriveConfiguredEncoder[SideConfig]

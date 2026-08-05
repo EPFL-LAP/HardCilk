@@ -145,15 +145,27 @@ public:
       //                      and argOut ports 3/4 (all flowing UP, one direction),
       //                      READ by notifier ports 10..13
       //   graph A -> 0, count/done -> 2 (kept off the hot closure banks; see below)
-      setContinuationBankRange(CLOSURE_FIRST_BANK, CLOSURE_LAST_BANK);
-      setRegionBankOverride("sched:taskAdder_cont0:0", 7);
-      setRegionBankOverride("sched:taskInitiator_reentry0:0", 8);
-      setRegionBankOverride("sched:taskInitiator_reentry0:1", 9);
-      // memReader has no scheduler server (0 virtual servers) -> no ring region to
-      // place; it is fed purely by its on-chip spawner ring (no HBM spill).
-      setRegionBankOverride("alloc:taskAdder_cont0:0", 15);
-      std::cout << "[hbm-dist] smart placement: rings@7/8/9, allocFIFO@15, "
-                << "closures@" << CLOSURE_FIRST_BANK << ".." << CLOSURE_LAST_BANK
+      const bool striped_host_mapping =
+          buildDescriptor_.loaded && buildDescriptor_.ramaMode == "striped";
+      if (!striped_host_mapping)
+        setContinuationBankRange(CLOSURE_FIRST_BANK, CLOSURE_LAST_BANK);
+      if (buildDescriptor_.loaded)
+      {
+        for (const auto &override : buildDescriptor_.managementBankOverrides())
+          setRegionBankOverride(override.region, override.hbmPort);
+      }
+      else if (!buildDescriptor_.loaded)
+      {
+        // Backward compatibility for schema-v1 sidecars/generated headers.
+        setRegionBankOverride("sched:taskAdder_cont0:0", 7);
+        setRegionBankOverride("sched:taskInitiator_reentry0:0", 8);
+        setRegionBankOverride("sched:taskInitiator_reentry0:1", 9);
+        setRegionBankOverride("alloc:taskAdder_cont0:0", 15);
+      }
+      std::cout << "[hbm-dist] smart placement: management queues use sidecar ownership, "
+                << (striped_host_mapping ? "closures@striped" :
+                    "closures@" + std::to_string(CLOSURE_FIRST_BANK) + ".." +
+                    std::to_string(CLOSURE_LAST_BANK))
                 << ", A@" << GRAPH_A_BANK << ", count/done@" << COUNT_DONE_BANK
                 << " (continuation bank-run entries="
                 << hbm_continuation_bank_run_entries_ << ")\n";

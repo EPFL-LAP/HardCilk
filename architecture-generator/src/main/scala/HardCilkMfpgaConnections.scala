@@ -53,8 +53,8 @@ trait HardCilkHasMfpgaSupport extends Module {
 
   val demux : axi4.lite.components.Demux 
   val fullSysGenDescriptor: FullSysGenDescriptor
-  val schedulerMap: Map[String, Scheduler]
-  val notifierMap: Map[String, ArgumentNotifier]
+  val schedulerMap: Map[String, SchedulerModule]
+  val notifierMap: Map[String, ArgumentNotifierModule]
   
   val peMap: Map[String, Seq[VitisWriteBufferModule]]
   val remoteStreamToMemMap: Map[String, RemoteStreamToMem]

@@ -1,4 +1,4 @@
-package AllocatorOG
+package AllocatorLegacy
 
 import chisel3._
 import chisel3.util._
@@ -7,11 +7,7 @@ import chisel3.ChiselEnum
 import chext.amba.axi4
 import axi4.lite.components.RegisterBlock
 
-class AllocatorServerIO(
-    dataWidth: Int,
-    regBlock: RegisterBlock,
-    sysAddressWidth: Int
-) extends Bundle {
+class LegacyAllocatorServerIO(dataWidth: Int, regBlock: RegisterBlock, sysAddressWidth: Int) extends Bundle {
   val dataOut = DecoupledIO(UInt(dataWidth.W))
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
   val read_address = DecoupledIO(UInt(sysAddressWidth.W))
@@ -19,8 +15,7 @@ class AllocatorServerIO(
   val paused = Output(Bool())
 }
 
-class AllocatorServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int)
-    extends Module {
+class LegacyAllocatorServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int) extends Module {
 
   assert(burstLength <= 15) // 15 is equivalent to 16 beats
 
@@ -34,7 +29,7 @@ class AllocatorServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int)
 
   val regBlock = new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
 
-  val io = IO(new AllocatorServerIO(dataWidth, regBlock, sysAddressWidth))
+  val io = IO(new LegacyAllocatorServerIO(dataWidth, regBlock, sysAddressWidth))
 
   io.axi_mgmt.suggestName("0_S_AXI_MGMT")
   regBlock.s_axil <> io.axi_mgmt
@@ -45,30 +40,13 @@ class AllocatorServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int)
   private val stateReg = RegInit(state.init)
   private val addrShift = RegInit((log2Ceil(dataWidth / 8)).U)
   private val index = avaialbleSize - (burstLength + 1).U
-  private val continuationsRegisters = RegInit(
-    VecInit(Seq.fill(burstLength + 1)(0.U(sysAddressWidth.W)))
-  )
+  private val continuationsRegisters = RegInit(VecInit(Seq.fill(burstLength + 1)(0.U(sysAddressWidth.W))))
   private val burstCounter = RegInit(burstLength.U(log2Ceil(burstLength).W))
 
   regBlock.base(0x00)
-  regBlock.reg(
-    rPause,
-    read = true,
-    write = true,
-    desc = "Register to indicate whether the FSM is paused or not."
-  )
-  regBlock.reg(
-    rAddr,
-    read = true,
-    write = true,
-    desc = "Base address of virtual continuation FIFO"
-  )
-  regBlock.reg(
-    avaialbleSize,
-    read = true,
-    write = true,
-    desc = "Availble address FIFO size"
-  )
+  regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
+  regBlock.reg(rAddr, read = true, write = true, desc = "Base address of virtual continuation FIFO")
+  regBlock.reg(avaialbleSize, read = true, write = true, desc = "Availble address FIFO size")
   io.paused := rPause
 
   when(stateReg === state.init) {
@@ -133,3 +111,4 @@ class AllocatorServer(dataWidth: Int, sysAddressWidth: Int, burstLength: Int)
     regBlock.wrOk()
   }
 }
+

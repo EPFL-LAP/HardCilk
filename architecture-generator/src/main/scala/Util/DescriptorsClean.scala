@@ -14,6 +14,7 @@ object DescriptorLogger {
 
 case class MemSystemDescriptor(
     var schedulerServersBaseAddresses: Seq[Int] = Seq.empty,
+    var spawnerServersBaseAddresses: Seq[Int] = Seq.empty,
     var allocationServersBaseAddresses: Seq[Int] = Seq.empty,
     var memoryAllocatorServersBaseAddresses: Seq[Int] = Seq.empty
 )
@@ -132,6 +133,18 @@ case class WatcherConfig(
     statusSlots: List[WatcherStatusSlot] = Nil
 )
 
+case class LegacySideOverrides(
+    numVirtualServers: Option[Int] = None,
+    capacityVirtualQueue: Option[Int] = None,
+    capacityPhysicalQueue: Option[Int] = None,
+    portWidth: Option[Int] = None
+)
+
+case class LegacyTaskOverrides(
+    spawnServersCount: Option[Int] = None,
+    spawnerQueueDepth: Option[Int] = None
+)
+
 // --- SideConfig with default handling ---
 case class SideConfig(
     sideType: String,
@@ -144,8 +157,8 @@ case class SideConfig(
     portWidth: Int = 32,
     virtualEntrtyWidth: Int = 0,
     numSpawnerServer: Int = 0,
-    // NewArgumentNotifier is opt-in so every existing descriptor keeps the
-    // legacy implementation and its exact interfaces.
+    // Internal resolved-mode bit. GeneratorProfile overwrites any decoded value;
+    // descriptors select the implementation through --argument-server instead.
     useNewArgumentNotifier: Boolean = false,
     slowArgumentHandlerCount: Int = 1,
     // Number of independent CacheEvictionSaver / eviction AXI ports. Each also
@@ -175,7 +188,8 @@ case class SideConfig(
     // eviction. Throughput knob for the non-backpressuring front porch; too small
     // only throttles (never incorrect). See ArgumentServer.scala.
     missedUpdateExtra: Int = 64,
-    slowRequestQueueDepth: Int = 64
+    slowRequestQueueDepth: Int = 64,
+    legacyOverrides: Option[LegacySideOverrides] = None
 ) {
   def validate(): Unit = {
     require(
@@ -236,6 +250,23 @@ case class SideConfig(
   def normalized: SideConfig =
     if (useAffinity) this
     else copy(affinityQueueDepth = 0, affinityTagBits = 0)
+
+  def resolved(profile: Util.GeneratorProfile): SideConfig = {
+    val selected = if (profile.isLegacy) {
+      legacyOverrides.fold(this) { legacy =>
+        copy(
+          numVirtualServers = legacy.numVirtualServers.getOrElse(numVirtualServers),
+          capacityVirtualQueue = legacy.capacityVirtualQueue.getOrElse(capacityVirtualQueue),
+          capacityPhysicalQueue = legacy.capacityPhysicalQueue.getOrElse(capacityPhysicalQueue),
+          portWidth = legacy.portWidth.getOrElse(portWidth)
+        )
+      }
+    } else this
+    selected.copy(
+      useNewArgumentNotifier = profile.usesCachedArgumentServer,
+      legacyOverrides = None
+    ).normalized
+  }
 }
 
 // --- TaskDescriptor with validation ---
@@ -300,7 +331,13 @@ case class TaskDescriptor(
     // any mismatch.  A full-continuation payload has zero offset bits and omits
     // the field from the physical packet.
     argumentOffsetWidth: Option[Int] = None,
-    taskId: Int = 0 // Defaulted
+    // Payload width stored by the no-cache argDataOut write buffer. This applies
+    // to both updated-no-cache and legacy-2469686 builds. It is independent from
+    // argumentSizeList, which describes cached update payloads.
+    argumentWriteDataWidth_NoCache: Int = 0,
+    taskId: Int = 0, // Defaulted
+    peHDLVariants: Map[String, String] = Map.empty,
+    legacyOverrides: Option[LegacyTaskOverrides] = None
 ) {
   // Helper methods are fine to keep here
   def getNumServers(sideType: String): Int = { //
@@ -314,6 +351,38 @@ case class TaskDescriptor(
 
   def normalized: TaskDescriptor =
     copy(sidesConfigs = sidesConfigs.map(_.normalized))
+
+  def resolved(profile: Util.GeneratorProfile): TaskDescriptor = {
+    val argumentKey = profile.argumentServer.cliName
+    val selectedPath =
+      if (peHDLVariants.isEmpty) peHDLPath
+      else peHDLVariants.getOrElse(
+        argumentKey,
+        throw new IllegalArgumentException(
+          s"Task '$name': peHDLVariants is mode-specific but has no '$argumentKey' path"
+        )
+      )
+    val selected = if (profile.isLegacy) {
+      legacyOverrides.fold(this) { legacy =>
+        copy(
+          spawnServersCount = legacy.spawnServersCount.getOrElse(spawnServersCount),
+          spawnerQueueDepth = legacy.spawnerQueueDepth.getOrElse(spawnerQueueDepth)
+        )
+      }
+    } else this
+    selected.copy(
+      peHDLPath = selectedPath,
+      generateArgOutWriteBuffer = selected.generateArgOutWriteBuffer ||
+        (!profile.usesCachedArgumentServer && selected.argumentWriteDataWidth_NoCache > 0),
+      sidesConfigs = selected.sidesConfigs.map(_.resolved(profile)),
+      // Address assignment mutates this legacy container during elaboration.
+      // Give the resolved build its own instance so the parsed source descriptor
+      // remains reusable for another profile in the same JVM.
+      mgmtBaseAddresses = MemSystemDescriptor(),
+      peHDLVariants = Map.empty,
+      legacyOverrides = None
+    )
+  }
 
   def usesNewArgumentNotifier: Boolean =
     getSideConfig("argumentNotifier").exists(_.useNewArgumentNotifier)
@@ -350,6 +419,15 @@ case class TaskDescriptor(
     require(
       argumentOffsetWidth.forall(_ >= 0),
       s"Task '$name': argumentOffsetWidth must be >= 0"
+    )
+    require(
+      argumentSizeList.size <= 1,
+      s"Task '$name': multiple argumentSizeList entries are not supported yet; " +
+        "the generator currently supports only one argument payload width per task"
+    )
+    require(
+      peHDLVariants.keySet.subsetOf(Set("cached", "no-cache")),
+      s"Task '$name': peHDLVariants keys must be cached or no-cache"
     )
     if (injectPeIndex) {
       require(
@@ -472,7 +550,8 @@ case class FullSysGenDescriptor(
     transformAXI: Boolean = false,
     transformPattern: List[Int] = List(),
     widthAXIAddress: Int = 34,
-    fpgaCountSim: Int = 1
+    fpgaCountSim: Int = 1,
+    resolvedArchitecture: String = "updated"
 ) {
   // --- All helper logic is kept here ---
   // Assign base addresses
@@ -488,6 +567,15 @@ case class FullSysGenDescriptor(
     }
     j += numSchedulerServers
     println("J value after scheduler: " + j)
+
+    if (resolvedArchitecture == "legacy" && task.spawnServersCount > 0) {
+      for (i <- j until j + task.spawnServersCount) {
+        task.mgmtBaseAddresses.spawnerServersBaseAddresses =
+          task.mgmtBaseAddresses.spawnerServersBaseAddresses :+ ((i << 6) + base)
+      }
+      j += task.spawnServersCount
+    }
+    println("J value after spawner: " + j)
 
     if (task.isCont) {
       val numAllocationServers = task.getNumServers("allocator")
@@ -602,26 +690,30 @@ case class FullSysGenDescriptor(
           )
       }
 
+      // Number global spawn inputs PE-major: all output ports from PE 0, then
+      // all output ports from PE 1, and so on. This keeps duplicated targets
+      // (for example two memReader launches per reentry PE) adjacent at the
+      // destination scheduler.
+      val globalSpawnedTasks = spawnedTasks.filterNot(_ == task.name)
       val spawnedConnections =
-        spawnedTasks.filterNot(_ == task.name).zipWithIndex.flatMap {
-          case (spawnedTask, j) =>
+        (0 until task.numProcessingElements).flatMap { i =>
+          globalSpawnedTasks.zipWithIndex.map { case (spawnedTask, j) =>
             val spawnedTaskDescriptor =
               taskDescriptors.find(_.name == spawnedTask).get
-            (0 until task.numProcessingElements).map { i =>
-              aggregatorMapSpawn(spawnedTask) += 1
-              ConnectionDescriptor(
-                PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
-                PortDescriptor(
-                  f"${spawnedTask}",
-                  "HardCilk",
-                  0,
-                  "taskInGlobal",
-                  aggregatorMapSpawn(spawnedTask) - 1
-                ),
-                spawnedTaskDescriptor.widthTask,
-                "AXIS"
-              )
-            }
+            aggregatorMapSpawn(spawnedTask) += 1
+            ConnectionDescriptor(
+              PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
+              PortDescriptor(
+                f"${spawnedTask}",
+                "HardCilk",
+                0,
+                "taskInGlobal",
+                aggregatorMapSpawn(spawnedTask) - 1
+              ),
+              spawnedTaskDescriptor.widthTask,
+              "AXIS"
+            )
+          }
         }
 
       val argumentConnections = argumentTasks.zipWithIndex.flatMap {
@@ -694,6 +786,7 @@ case class FullSysGenDescriptor(
     taskDescriptors.map(_.getNumServers("scheduler")).sum + taskDescriptors
       .map(_.getNumServers("memoryAllocator"))
       .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +
+      (if (resolvedArchitecture == "legacy") taskDescriptors.map(_.spawnServersCount).sum else 0) +
       {
         if (mFPGASynth || mFPGASimulation) 1 else 0
       } +
@@ -754,6 +847,12 @@ case class FullSysGenDescriptor(
 
   def normalized: FullSysGenDescriptor =
     copy(taskDescriptors = taskDescriptors.map(_.normalized))
+
+  def resolved(profile: Util.GeneratorProfile): FullSysGenDescriptor =
+    copy(
+      taskDescriptors = taskDescriptors.map(_.resolved(profile)),
+      resolvedArchitecture = profile.architecture.cliName
+    ).normalized
 
   def validate(): Unit = {
     taskDescriptors.foreach(_.validate()) // Validate all sub-tasks
@@ -950,27 +1049,33 @@ case class FullSysGenDescriptor(
             case "slowUpdateHandler" | "evictionSaver" | "argumentServer" =>
               require(field.encoding == "readyValid2",
                 s"watcher slot $slotIndex field $fieldIndex ${target.kind} targets require readyValid2")
-              require(task.exists(_.usesNewArgumentNotifier),
-                s"watcher slot $slotIndex field $fieldIndex requires a new argument notifier for '${target.taskName}'")
-              val side = task.get.getSideConfig("argumentNotifier").get
-              target.kind match {
+              require(task.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references unknown argument task '${target.taskName}'")
+              val side = task.get.getSideConfig("argumentNotifier")
+              require(side.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references task '${target.taskName}' without an argumentNotifier side")
+              // Cached-only observer fields retain their physical slot in
+              // no-cache/legacy builds and are tied to zero at elaboration.
+              // Bounds that describe cached hardware are therefore meaningful
+              // only when that hardware is selected.
+              if (task.get.usesNewArgumentNotifier) target.kind match {
                 case "slowUpdateHandler" =>
                   require(target.port == "input",
                     s"watcher slowUpdateHandler port must be input")
-                  require(target.index >= 0 && target.index < side.slowArgumentHandlerCount,
-                    s"watcher slowUpdateHandler index ${target.index} is outside ${target.taskName}[0,${side.slowArgumentHandlerCount})")
+                  require(target.index >= 0 && target.index < side.get.slowArgumentHandlerCount,
+                    s"watcher slowUpdateHandler index ${target.index} is outside ${target.taskName}[0,${side.get.slowArgumentHandlerCount})")
                 case "evictionSaver" =>
                   require(target.port == "input",
                     s"watcher evictionSaver port must be input")
-                  require(target.index >= 0 && target.index < side.cacheEvictionSaverCount,
-                    s"watcher evictionSaver index ${target.index} is outside ${target.taskName}[0,${side.cacheEvictionSaverCount})")
+                  require(target.index >= 0 && target.index < side.get.cacheEvictionSaverCount,
+                    s"watcher evictionSaver index ${target.index} is outside ${target.taskName}[0,${side.get.cacheEvictionSaverCount})")
                 case "argumentServer" =>
                   require(target.port == "fastSpawn",
                     s"watcher argumentServer port must be fastSpawn")
-                  require(target.index >= 0 && target.index < side.numVirtualServers,
-                    s"watcher argumentServer index ${target.index} is outside ${target.taskName}[0,${side.numVirtualServers})")
-                  require(target.lane >= 0 && target.lane < side.newContinuationLanesPerServer,
-                    s"watcher argumentServer lane ${target.lane} is outside [0,${side.newContinuationLanesPerServer})")
+                  require(target.index >= 0 && target.index < side.get.numVirtualServers,
+                    s"watcher argumentServer index ${target.index} is outside ${target.taskName}[0,${side.get.numVirtualServers})")
+                  require(target.lane >= 0 && target.lane < side.get.newContinuationLanesPerServer,
+                    s"watcher argumentServer lane ${target.lane} is outside [0,${side.get.newContinuationLanesPerServer})")
               }
 
             case other => throw new IllegalArgumentException(

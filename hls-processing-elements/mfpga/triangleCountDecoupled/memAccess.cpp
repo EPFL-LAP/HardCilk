@@ -1,5 +1,6 @@
 #include "hls_stream.h"
 #include "memAccess_defs.h"
+#include <ap_int.h>
 #include <stdint.h>
 
 void whileLoopMain_reentry0_cont0(
@@ -44,45 +45,61 @@ void whileLoopMain_reentry0_cont0(
   whileLoopMain_reentry0_args0.size = args.size;
   whileLoopMain_reentry0_args0.i = args.i;
   whileLoopMain_reentry0_args0.j = args.j;
-  whileLoopMain_reentry0_args0.a_i = args.a_i;
-  whileLoopMain_reentry0_args0.b_j = args.b_j;
   taskOutGlobal.write(whileLoopMain_reentry0_args0);
 }
 
-void whileLoopMain_exit0(
-    hls::stream<whileLoopMain_exit0_task> &taskIn,
-    hls::stream<uint64_t> &argOut)
-{
-#pragma HLS INTERFACE mode = axis port = taskIn
-#pragma HLS INTERFACE mode = axis port = argOut
-#pragma HLS INTERFACE ap_ctrl_none port = return
-#pragma HLS PIPELINE II = 1 style = flp
+// void whileLoopMain_exit0(
+//     hls::stream<whileLoopMain_exit0_task> &taskIn,
+//     hls::stream<uint64_t> &argOut)
+// {
+// #pragma HLS INTERFACE mode = axis port = taskIn
+// #pragma HLS INTERFACE mode = axis port = argOut
+// #pragma HLS INTERFACE ap_ctrl_none port = return
+// #pragma HLS PIPELINE II = 1 style = flp
 
-  whileLoopMain_exit0_task args = taskIn.read();
-  argOut.write(args._cont);
-}
+//   whileLoopMain_exit0_task args = taskIn.read();
+//   argOut.write(args._cont);
+// }
 
 void memReader(
     void *mem,
     hls::stream<memReader_task> &taskIn,
+#if COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER
     hls::stream<uint64_t> &argOut,
     hls::stream<uint32_t_arg_out> &argDataOut)
+#else
+    hls::stream<whileLoopMain_reentry0_cont0_argument_update> &argOut)
+#endif
 {
 #pragma HLS INTERFACE mode = axis port = taskIn
 #pragma HLS INTERFACE mode = axis port = argOut
+#if COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER
 #pragma HLS INTERFACE mode = axis register_mode = off port = argDataOut
+#endif
 #pragma HLS INTERFACE mode = m_axi port = mem
 #pragma HLS INTERFACE ap_ctrl_none port = return
 #pragma HLS PIPELINE II = 1 style = flp
 
   memReader_task args = taskIn.read();
-  uint32_t_arg_out a0;
-  a0.addr = args._cont;
-  a0.data = MEM_ARR_IN(mem, args.mem, args.idx, int);
-  a0.size = 2;
-  a0.allow = 1;
-  argDataOut.write(a0);
-  argOut.write(args._cont);
+
+#if COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER
+    const addr_t continuationAddress =
+        args._cont + addr_t(args.offset) * sizeof(uint32_t);
+    uint32_t_arg_out update;
+    update.addr = continuationAddress;
+    update.data = MEM_ARR_IN(mem, args.mem, args.idx, int);
+    update.size = 2;
+    update.allow = 1;
+    argDataOut.write(update);
+    argOut.write(continuationAddress);
+#else
+    whileLoopMain_reentry0_cont0_argument_update update;
+    update.address = args._cont;
+    update.continuation_meta = args.continuation_meta;
+    update.payload = MEM_ARR_IN(mem, args.mem, args.idx, int);
+    update.offset = args.offset;
+    argOut.write(update);
+#endif
 }
 
 void whileLoopMain(
@@ -109,8 +126,6 @@ void whileLoopMain(
   whileLoopMain_reentry0_args1.size = args.size;
   whileLoopMain_reentry0_args1.i = i;
   whileLoopMain_reentry0_args1.j = j;
-  whileLoopMain_reentry0_args1.a_i = 0;
-  whileLoopMain_reentry0_args1.b_j = 0;
   taskOutGlobal.write(whileLoopMain_reentry0_args1);
 }
 
@@ -148,8 +163,10 @@ void whileLoopMain_reentry0(
     SN_whileLoopMain_reentry0_cont0c.count_final = args.count_final;
     SN_whileLoopMain_reentry0_cont0c.B = args.B;
     SN_whileLoopMain_reentry0_cont0c.A = args.A;
-    SN_whileLoopMain_reentry0_cont0c.a_i = args.a_i;
-    SN_whileLoopMain_reentry0_cont0c.b_j = args.b_j;
+    // Cached argument updates are OR-merged into this base continuation, so
+    // fields populated by the memReaders must start clear.
+    SN_whileLoopMain_reentry0_cont0c.a_i = 0;
+    SN_whileLoopMain_reentry0_cont0c.b_j = 0;
     whileLoopMain_reentry0_cont0_spawn_next SN_whileLoopMain_reentry0_cont0;
     SN_whileLoopMain_reentry0_cont0.addr = SN_whileLoopMain_reentry0_cont0c_k;
     SN_whileLoopMain_reentry0_cont0.data = SN_whileLoopMain_reentry0_cont0c;
@@ -159,15 +176,23 @@ void whileLoopMain_reentry0(
     spawnNext.write(SN_whileLoopMain_reentry0_cont0);
 
     memReader_task memReader_args2;
-    memReader_args2._cont = SN_whileLoopMain_reentry0_cont0c_k + offsetof(whileLoopMain_reentry0_cont0_task, a_i);
+    memReader_args2._cont = SN_whileLoopMain_reentry0_cont0c_k;
+    // The spawnNext write buffer replaces this with the metadata assigned by
+    // NewArgumentNotifier before releasing the child.
+    memReader_args2.continuation_meta = 0;
     memReader_args2.mem = args.A;
     memReader_args2.idx = args.i;
+    memReader_args2.offset =
+        offsetof(whileLoopMain_reentry0_cont0_task, a_i) / sizeof(uint32_t);
     taskOutGlobal1.write(memReader_args2);
 
     memReader_task memReader_args3;
-    memReader_args3._cont = SN_whileLoopMain_reentry0_cont0c_k + offsetof(whileLoopMain_reentry0_cont0_task, b_j);
+    memReader_args3._cont = SN_whileLoopMain_reentry0_cont0c_k;
+    memReader_args3.continuation_meta = 0;
     memReader_args3.mem = args.B;
     memReader_args3.idx = args.j;
+    memReader_args3.offset =
+        offsetof(whileLoopMain_reentry0_cont0_task, b_j) / sizeof(uint32_t);
     taskOutGlobal2.write(memReader_args3);
   }
   else

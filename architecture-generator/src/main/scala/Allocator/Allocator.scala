@@ -58,7 +58,7 @@ class Allocator(
     vcasCount: Int,
     queueDepth: Int,
     pePortWidth: Int  // output pointer width to the PE (e.g. 64); addresses zero-extended to it
-) extends Module {
+) extends Module with AllocatorModule {
 
   require(vcasCount >= 1 && peCount >= 1)
   // HBM beat / task width; continuations pack at addrWidth - log2(memDataWidth/8)

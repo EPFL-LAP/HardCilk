@@ -15,7 +15,10 @@ object HardCilkEmitter extends App {
     case None =>
       // parser printed usage; exit quietly
     case Some(cfg) =>
-      val jsonName = basename(cfg.json_path)
+      // Normally the descriptor basename identifies the generated project. Build
+      // scripts may override it when testing alternate descriptors against one
+      // benchmark's existing software driver.
+      val jsonName = cfg.benchmarkName.getOrElse(basename(cfg.json_path))
       val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
       val timeFmt = DateTimeFormatter.ofPattern("HH-mm-ss")
       val outputDirName =
@@ -24,8 +27,21 @@ object HardCilkEmitter extends App {
           else
             s"${jsonName}_hardcilk_output"
 
-      val systemDescriptor =
-        parseJsonFile[FullSysGenDescriptor](cfg.json_path).normalized
+      val generatorProfile = cfg.generatorProfile
+      val sourceDescriptor =
+        parseJsonFile[FullSysGenDescriptor](cfg.json_path)
+      val systemDescriptor = sourceDescriptor.resolved(generatorProfile)
+      require(
+        !(generatorProfile.isLegacy &&
+          (systemDescriptor.mFPGASynth || systemDescriptor.mFPGASimulation)),
+        "legacy architecture from reference commit 2469686 is incompatible with the current mFPGA adapter"
+      )
+
+      println(
+        s"[HardCilkEmitter] architecture=${generatorProfile.architecture.cliName}, " +
+          s"argument-server=${generatorProfile.argumentServer.cliName} " +
+          s"(${generatorProfile.argumentServerImplementation})"
+      )
 
       val ramaCliMode =
         if (cfg.ramaStriping) "striped"
@@ -35,6 +51,35 @@ object HardCilkEmitter extends App {
 
       // Read system descriptor from JSON
       try {
+        systemDescriptor.taskDescriptors.foreach { task =>
+          if (task.peHDLPath.nonEmpty) {
+              val directory = Paths.get(task.peHDLPath)
+              require(
+                Files.isDirectory(directory),
+                s"selected ${generatorProfile.argumentServer.cliName} HLS RTL " +
+                  s"for '${task.name}' is missing: ${task.peHDLPath}"
+              )
+              val top = directory.resolve(s"${task.name}.v")
+              require(
+                Files.isRegularFile(top),
+                s"selected HLS RTL directory for '${task.name}' has no ${task.name}.v: " +
+                  task.peHDLPath
+              )
+              if (task.name == "memReader" && sourceDescriptor.taskDescriptors
+                  .find(_.name == task.name).exists(_.peHDLVariants.nonEmpty)) {
+                val rtl = Files.readString(top)
+                val hasLegacyWritePacket = rtl.contains("argDataOut")
+                val expectsLegacy = generatorProfile.argumentServer.cliName == "no-cache"
+                require(
+                  hasLegacyWritePacket == expectsLegacy,
+                  s"memReader RTL ABI mismatch: generator selected " +
+                    s"${generatorProfile.argumentServer.cliName}, but ${top} " +
+                    (if (hasLegacyWritePacket) "contains" else "does not contain") +
+                    " argDataOut"
+                )
+              }
+          }
+        }
         systemDescriptor.validate()
       } catch {
         case e: IllegalArgumentException =>

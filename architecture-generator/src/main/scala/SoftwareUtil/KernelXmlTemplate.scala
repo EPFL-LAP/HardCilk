@@ -132,6 +132,7 @@ object KernelXmlTemplate {
   private def configBaseAddresses(descriptor: FullSysGenDescriptor): Seq[Int] =
     descriptor.taskDescriptors.flatMap { t =>
       t.mgmtBaseAddresses.schedulerServersBaseAddresses ++
+        t.mgmtBaseAddresses.spawnerServersBaseAddresses ++
         t.mgmtBaseAddresses.allocationServersBaseAddresses ++
         t.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses
     }.sorted

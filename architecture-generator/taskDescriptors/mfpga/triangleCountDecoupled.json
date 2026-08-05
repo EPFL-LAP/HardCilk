@@ -24,41 +24,6 @@
     ]
   },
   "targetFrequency": 100,
-  "watcherConfig": {
-    "hdlPath": "../hls-kernel-output/watcher/watcher",
-    "moduleName": "watcher",
-    "startAddr": 0,
-    "statusSlots": [
-      {
-        "label": "cont0",
-        "fields": [
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "whileLoopMain_reentry0_cont0", "index": 0, "port": "taskIn" } },
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "whileLoopMain_reentry0_cont0", "index": 0, "port": "taskOutGlobal" } }
-        ]
-      },
-      {
-        "label": "memReader0",
-        "fields": [
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "memReader", "index": 0, "port": "taskIn" } },
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "memReader", "index": 0, "port": "argDataOut" } }
-        ]
-      },
-      {
-        "label": "memReader1",
-        "fields": [
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "memReader", "index": 1, "port": "taskIn" } },
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "memReader", "index": 1, "port": "argDataOut" } }
-        ]
-      },
-      {
-        "label": "reentry0",
-        "fields": [
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "whileLoopMain_reentry0", "index": 0, "port": "taskIn" } },
-          { "encoding": "readyValid2", "target": { "kind": "pe", "taskName": "whileLoopMain_reentry0", "index": 0, "port": "taskOutGlobal" } }
-        ]
-      }
-    ]
-  },
   "taskDescriptors": [
     {
       "dynamicMemAlloc": false,
@@ -67,8 +32,12 @@
       "isCont": true,
       "isRoot": false,
       "name": "whileLoopMain_reentry0_cont0",
-      "numProcessingElements": 1,
+      "numProcessingElements": 4,
       "peHDLPath": "../hls-kernel-output/triangleCountDecoupled/whileLoopMain_reentry0_cont0",
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/triangleCountDecoupled/cached/whileLoopMain_reentry0_cont0",
+        "no-cache": "../hls-kernel-output/triangleCountDecoupled/no-cache/whileLoopMain_reentry0_cont0"
+      },
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -81,8 +50,22 @@
           "capacityPhysicalQueue": 32,
           "capacityVirtualQueue": 128,
           "numVirtualServers": 2,
+          "slowArgumentHandlerCount": 1,
+          "cacheEvictionSaverCount": 1,
+          "newContinuationLanesPerServer": 4,
+          "directUpdateLanesPerServer": 4,
+          "argumentNotifierCutCount": 1,
+          "evictionCutCount": 1,
+          "argumentServerIdWidth": 7,
+          "cacheDelayCycles": 65,
+          "missedUpdateExtra": 64,
+          "slowRequestQueueDepth": 64,
+          "newContinuationLaneStripingFactor": 2,
           "portWidth": 64,
-          "sideType": "argumentNotifier"
+          "sideType": "argumentNotifier",
+          "legacyOverrides": {
+            "numVirtualServers": 1
+          }
         },
         {
           "capacityPhysicalQueue": 32,
@@ -92,34 +75,52 @@
           "sideType": "allocator"
         }
       ],
-      "spawnServersCount": 1,
+      "spawnServersCount": 4,
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 512
     },
     {
       "dynamicMemAlloc": false,
-      "generateArgOutWriteBuffer": true,
+      "generateArgOutWriteBuffer": false,
       "argumentSizeList": [
         32
       ],
+      "argumentWriteDataWidth_NoCache": 32,
+      "argumentOffsetWidth": 4,
       "generateSpawnNextWriteBuffer": false,
       "hasAXI": true,
       "isCont": false,
       "isRoot": false,
       "name": "memReader",
-      "numProcessingElements": 2,
+      "numProcessingElements": 8,
       "peHDLPath": "../hls-kernel-output/triangleCountDecoupled/memReader",
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/triangleCountDecoupled/cached/memReader",
+        "no-cache": "../hls-kernel-output/triangleCountDecoupled/no-cache/memReader"
+      },
       "sidesConfigs": [
         {
-          "capacityPhysicalQueue": 64,
+          "capacityPhysicalQueue": 10,
           "capacityVirtualQueue": 4096,
-          "numVirtualServers": 1,
+          "useAffinity": false,
+          "affinityQueueDepth": 8,
+          "affinityTagBits": 4,
+          "numVirtualServers": 0,
           "portWidth": 256,
-          "sideType": "scheduler"
+          "sideType": "scheduler",
+          "legacyOverrides": {
+            "numVirtualServers": 1,
+            "capacityPhysicalQueue": 64
+          }
         }
       ],
-      "spawnServersCount": 2,
+      "spawnServersCount": 8,
+      "spawnerQueueDepth": 8,
+      "legacyOverrides": {
+        "spawnServersCount": 1,
+        "spawnerQueueDepth": 16
+      },
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 256
@@ -128,11 +129,15 @@
       "dynamicMemAlloc": false,
       "generateArgOutWriteBuffer": false,
       "hasAXI": true,
+      "totalAxiPorts": 1,
       "isCont": false,
       "isRoot": true,
       "name": "whileLoopMain_reentry0",
-      "numProcessingElements": 1,
-      "peHDLPath": "../hls-kernel-output/triangleCountDecoupled/whileLoopMain_reentry0",
+      "numProcessingElements": 4,
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/triangleCountDecoupled/cached/whileLoopMain_reentry0",
+        "no-cache": "../hls-kernel-output/triangleCountDecoupled/no-cache/whileLoopMain_reentry0"
+      },
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -142,7 +147,7 @@
           "sideType": "scheduler"
         }
       ],
-      "spawnServersCount": 2,
+      "spawnServersCount": 4,
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 512
@@ -157,5 +162,517 @@
   "maximumAXIPorts": 30,
   "hasAXIDMAInput": false,
   "transformAXI": false,
-  "transformPattern": []
+  "transformPattern": [],
+  "watcherConfig": {
+    "hdlPath": "../hls-kernel-output/watcher/watcher",
+    "moduleName": "watcher",
+    "startAddr": 0,
+    "statusSlots": [
+      {
+        "label": "cont0",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "cont1",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 1,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 1,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "cont2",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 2,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 2,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "cont3",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 3,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 3,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader0",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 0,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 0,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader1",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 1,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 1,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader2",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 2,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 2,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader3",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 3,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 3,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader4",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 4,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 4,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader5",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 5,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 5,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader6",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 6,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 6,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader7",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 7,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 7,
+              "port": "argOut"
+            }
+          }
+        ]
+      },
+      {
+        "label": "reentry0",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 0,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 0,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "reentry1",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 1,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 1,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "reentry2",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 2,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 2,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "reentry3",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 3,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 3,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "schedulerCongestion",
+        "fields": [
+          {
+            "encoding": "boolean1",
+            "target": {
+              "kind": "schedulerServer",
+              "taskName": "whileLoopMain_reentry0",
+              "index": 0,
+              "signal": "congested"
+            }
+          }
+        ]
+      },
+      {
+        "label": "slowUpdateEviction0",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "slowUpdateHandler",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "input"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "evictionSaver",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "input"
+            }
+          }
+        ]
+      },
+      {
+        "label": "argumentServer0FastSpawns01",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 0
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 1
+            }
+          }
+        ]
+      },
+      {
+        "label": "argumentServer0FastSpawns23",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 2
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 3
+            }
+          }
+        ]
+      },
+      {
+        "label": "argumentServer1FastSpawns01",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 0
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 1
+            }
+          }
+        ]
+      },
+      {
+        "label": "argumentServer1FastSpawns23",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 2
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "whileLoopMain_reentry0_cont0",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 3
+            }
+          }
+        ]
+      }
+    ]
+  }
 }

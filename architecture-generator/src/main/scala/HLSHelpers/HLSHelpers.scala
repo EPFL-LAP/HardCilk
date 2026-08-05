@@ -207,6 +207,8 @@ class VitisWriteBufferModule(
       releaseMetadataOffset = continuationMetaOffset
     )
   )
+  private val legacyArchitecture =
+    fullSysGenDescriptor.resolvedArchitecture == "legacy"
 
   private val argOutWriteBufferConfig = pe.io.elements
     .get("argDataOut")
@@ -246,7 +248,11 @@ class VitisWriteBufferModule(
           if (cfg.is_ap_idle) Some("ap_idle" -> Output(Bool())) else None,
           if (cfg.is_ap_ready) Some("ap_ready" -> Output(Bool())) else None,
           spawnNextWriteBufferConfig.map(wbCfg =>
-            "m_axi_spawnNext" -> axi4.Master(wbCfg.cfgAxi)
+            "m_axi_spawnNext" -> axi4.Master(
+              if (legacyArchitecture)
+                axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = wbCfg.wData)
+              else wbCfg.cfgAxi
+            )
           ),
           spawnNextWriteBufferConfig.map(_ =>
             "watcher_spawnNext_valid" -> Output(Bool())
@@ -255,7 +261,11 @@ class VitisWriteBufferModule(
             "watcher_spawnNext_ready" -> Output(Bool())
           ),
           argOutWriteBufferConfig.map(wbCfg =>
-            "m_axi_argOut" -> axi4.Master(wbCfg.cfgAxi)
+            "m_axi_argOut" -> axi4.Master(
+              if (legacyArchitecture)
+                axi4.Config(wAddr = fullSysGenDescriptor.widthAddress, wData = wbCfg.wData)
+              else wbCfg.cfgAxi
+            )
           ),
           argOutWriteBufferConfig.map(_ =>
             "watcher_argOut_valid" -> Output(Bool())
@@ -329,9 +339,12 @@ class VitisWriteBufferModule(
   println(s"[HLS:HELPERS:169] ${peTaskOutGlobal}")
 
   spawnNextWriteBufferConfig.foreach(wbCfg => {
-    val mWriteBuffer = Module(
-      new WriteBuffer(wbCfg)
-    )
+    val mWriteBuffer: WriteBufferModule =
+      if (legacyArchitecture)
+        Module(new UtilLegacy.WriteBuffer(new UtilLegacy.WriteBufferConfig(
+          wbCfg.wAddr, wbCfg.wData, wbCfg.wAllow, wbCfg.wAllowData
+        )))
+      else Module(new WriteBuffer(wbCfg))
 
     val rawSpawnNext = pe.getPort("spawnNext").asInstanceOf[axi4s.Interface]
     mWriteBuffer.s_pkg <> rawSpawnNext
@@ -357,12 +370,6 @@ class VitisWriteBufferModule(
       taskOuts(i)._2 match {
         case Some(value) => {
           value.asInstanceOf[axi4s.Interface] <> mWriteBuffer.s_allows(idx)
-          if (newSpawnTarget.isDefined) {
-            require(
-              taskOuts.length == 1,
-              s"NewArgumentNotifier metadata insertion currently requires one released child stream for $taskName"
-            )
-          }
           mWriteBuffer.m_allows(idx) <> getPort(taskOuts(i)._1)
           idx = idx + 1
         }
@@ -388,9 +395,13 @@ class VitisWriteBufferModule(
     assert(cfg.hasArgumentWriteBuffer, "Found argDataOut in the PE but the task has no write buffer data width specified in the JSON!")
     argOutWriteBufferConfig
       .map(wbCfg => {
-        val mWriteBuffer = Module(
-          new WriteBuffer(wbCfg)
-        )
+        val mWriteBuffer: WriteBufferModule =
+          if (legacyArchitecture)
+            Module(new UtilLegacy.WriteBuffer(new UtilLegacy.WriteBufferConfig(
+              wbCfg.wAddr, wbCfg.wData, wbCfg.wAllow, wbCfg.wAllowData,
+              isRemoteWriteBuffer = wbCfg.isRemoteWriteBuffer
+            )))
+          else Module(new WriteBuffer(wbCfg))
 
         mWriteBuffer.s_pkg <> pe
           .getPort("argDataOut")
@@ -750,7 +761,11 @@ object VitisModuleFactory {
       is_ap_idle,
       is_ap_ready,
       hasArgumentWriteBuffer_,
-      if(taskDescriptor.generateArgOutWriteBuffer) taskDescriptor.argumentSizeList.head else 0,
+      if (taskDescriptor.generateArgOutWriteBuffer)
+        if (taskDescriptor.argumentWriteDataWidth_NoCache > 0)
+          taskDescriptor.argumentWriteDataWidth_NoCache
+        else taskDescriptor.argumentSizeList.head
+      else 0,
       taskDescriptor.generateArgOutWriteBuffer
     )
   }

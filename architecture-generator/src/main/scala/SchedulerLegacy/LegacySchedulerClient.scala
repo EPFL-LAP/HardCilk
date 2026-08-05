@@ -1,15 +1,15 @@
-package SchedulerOG
+package SchedulerLegacy
 
 import chisel3._
 import Util._
 import chisel3.ChiselEnum
 
-class SchedulerClientIO(taskWidth: Int, queueMaxLength: Int) extends Bundle {
+class LegacySchedulerClientIO(taskWidth: Int, queueMaxLength: Int) extends Bundle {
   val connNetwork = Flipped(new SchedulerNetworkClientIO(taskWidth))
   val connQ = Flipped(new DequeInterface(taskWidth, queueMaxLength))
 }
 
-class SchedulerClient(
+class LegacySchedulerClient(
     taskWidth: Int,
     queueMaxLength: Int,
     minLengthThresh: Int,
@@ -17,7 +17,7 @@ class SchedulerClient(
     networkLength: Int,
     vssIgnoresRequests: Boolean
 ) extends Module {
-  val io = IO(new SchedulerClientIO(taskWidth, queueMaxLength))
+  val io = IO(new LegacySchedulerClientIO(taskWidth, queueMaxLength))
 
   object state extends ChiselEnum {
     val init = Value(0.U)
@@ -135,9 +135,7 @@ class SchedulerClient(
           (io.connNetwork.ctrl.serveStealReq.ready && io.connQ.currLength >= minLengthThresh.U)
       ) {
         stateReg := state.popTask
-      }.elsewhen(
-        io.connQ.currLength < minLengthThresh.U && io.connNetwork.ctrl.serveStealReq.ready
-      ) {
+      }.elsewhen(io.connQ.currLength < minLengthThresh.U && io.connNetwork.ctrl.serveStealReq.ready) {
         requestKilledCount := networkLength.U(32.W) + 2.U
         stateReg := state.takeInTask
         requestTaskCount := requestTaskCount + 2.U
@@ -182,9 +180,7 @@ class SchedulerClient(
       when(io.connNetwork.ctrl.stealReq.ready && taskRequestCount === 1.U) {
         stateReg := state.takeInTask
         requestKilledCount := networkLength.U(32.W)
-      }.elsewhen(
-        io.connNetwork.ctrl.stealReq.ready && taskRequestCount === 2.U
-      ) {
+      }.elsewhen(io.connNetwork.ctrl.stealReq.ready && taskRequestCount === 2.U) {
         taskRequestCount := 1.U
         requestFullCount := networkLength.U(32.W)
         stateReg := state.requestTask
@@ -259,10 +255,10 @@ class SchedulerClient(
         tasksGivenAwayCount := tasksGivenAwayCount + 1.U
         stateReg := state.init
       }.otherwise {
-        when(io.connQ.currLength < minLengthThresh.U) {
+        when(io.connQ.currLength < minLengthThresh.U){
           stolenTaskReg := giveTaskReg
           stateReg := state.pushTask
-        }.otherwise {
+        }.otherwise{
           stateReg := state.giveAwayTask
         }
       }
@@ -276,9 +272,7 @@ class SchedulerClient(
           (io.connNetwork.ctrl.serveStealReq.ready && io.connQ.currLength >= minLengthThresh.U)
       ) {
         stateReg := state.popTask
-      }.elsewhen(
-        io.connQ.currLength < minLengthThresh.U && io.connNetwork.ctrl.serveStealReq.ready
-      ) {
+      }.elsewhen(io.connQ.currLength < minLengthThresh.U && io.connNetwork.ctrl.serveStealReq.ready) {
         requestFullCount := networkLength.U(32.W)
         stateReg := state.requestTask
         taskRequestCount := 2.U
@@ -295,3 +289,4 @@ class SchedulerClient(
     }
   }
 }
+

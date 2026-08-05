@@ -10,6 +10,9 @@ import NewArgumentNotifier._
 import HLSHelpers._
 import Util.HardCilkUtil._
 import Util._
+import SchedulerLegacy.LegacyScheduler
+import AllocatorLegacy.LegacyAllocator
+import ArgumentNotifierLegacy.LegacyArgumentNotifier
 
 
 /**
@@ -27,17 +30,18 @@ object HardCilkBuilder {
  * A pure Scala helper that describes how to assemble the HardCilk system.
  */
 class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: Int,
-    enableGlobalStart: Boolean = false) {
+    enableGlobalStart: Boolean = false,
+    generatorProfile: GeneratorProfile = GeneratorProfile(ArchitectureMode.Updated, ArgumentServerMode.Cached)) {
 
   import HardCilkBuilder.PortToExport
 
   case class SubsystemBlueprint(
       peFactories: Map[String, () => Seq[VitisWriteBufferModule]],
-      schedulerFactories: Map[String, () => Scheduler],
-      allocatorFactories: Map[String, () => Allocator],
-      argNotifierFactories: Map[String, () => ArgumentNotifier],
+      schedulerFactories: Map[String, () => SchedulerModule],
+      allocatorFactories: Map[String, () => AllocatorModule],
+      argNotifierFactories: Map[String, () => ArgumentNotifierModule],
       newArgNotifierFactories: Map[String, () => ArgumentNetworks],
-      memAllocatorFactories: Map[String, () => Allocator],
+      memAllocatorFactories: Map[String, () => AllocatorModule],
       spawnNextWBFactories: Map[String, () => Seq[WriteBuffer]],
       sendArgumentWBFactories: Map[String, () => Seq[WriteBuffer]],
       remoteStreamToMemFactories: Map[String, () => RemoteStreamToMem]
@@ -52,8 +56,26 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         task.name -> (() => VitisModuleFactory(task, desc))
       }.toMap
 
-    val schedulerFactories = desc.taskDescriptors.map { task =>
-      task.name -> (() => new Scheduler(
+    val schedulerFactories: Map[String, () => SchedulerModule] = desc.taskDescriptors.map { task =>
+      task.name -> (() => if (generatorProfile.isLegacy) new LegacyScheduler(
+        addrWidth = desc.widthAddress,
+        taskWidth = task.widthTask,
+        queueDepth = task.getCapacityPhysicalQueue("scheduler"),
+        peCount = task.numProcessingElements,
+        spawnsItself = desc.selfSpawnedCount(task.name) > 0,
+        peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
+        argRouteServersNumber = task.getNumServers("argumentNotifier"),
+        schedulerServersNumber = task.getNumServers("scheduler"),
+        pePortWidth = task.widthTask,
+        peType = task.name,
+        debug = debug,
+        spawnerServerNumber = task.spawnServersCount,
+        spawnerQueueDepth = task.spawnerQueueDepth,
+        argRouteServersCreateTasks =
+          task.sidesConfigs.length > 2 || (task.isCont && task.spawnServersCount > 0),
+        taskId = task.taskId,
+        mfpgaSupport = desc.mFPGASimulation || desc.mFPGASynth
+      ) else new Scheduler(
         addrWidth = desc.widthAddress,
         taskWidth = task.widthTask,
         queueDepth = task.getCapacityPhysicalQueue("scheduler"),
@@ -77,6 +99,17 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           task.getSideConfig("scheduler").map(_.affinityQueueDepth).getOrElse(0),
         affinityTagBits =
           task.getSideConfig("scheduler").map(_.affinityTagBits).getOrElse(0),
+        fastArgumentRouteServersNumber = task.getSideConfig("argumentNotifier") match {
+          case Some(c) if c.useNewArgumentNotifier =>
+            c.numVirtualServers * c.newContinuationLanesPerServer
+          case _ => 0
+        },
+        newContinuationLaneStripingFactor =
+          task.getSideConfig("argumentNotifier") match {
+            case Some(c) if c.useNewArgumentNotifier =>
+              c.newContinuationLaneStripingFactor
+            case _ => 1
+          },
         // A continuation (isCont) re-injects its own task via the argument
         // notifier when the join counter hits 0. With mFPGA on, that loops back
         // through the network; single-FPGA needs the *local* outsideSpawn path,
@@ -96,13 +129,19 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     val allocatorFactories = desc.taskDescriptors
       .filter(t => desc.getPortCount("spawnNext", t.name) > 0)
       .map { task =>
-        task.name -> (() => new Allocator(
+        task.name -> (() => (if (generatorProfile.isLegacy) new LegacyAllocator(
+          addrWidth = desc.widthAddress,
+          peCount = desc.getPortCount("spawnNext", task.name),
+          vcasCount = task.getNumServers("allocator"),
+          queueDepth = task.getCapacityPhysicalQueue("allocator"),
+          pePortWidth = 64
+        ) else new Allocator(
           addrWidth = desc.widthAXIAddress, // HBM address width (34): continuations pack/address natively at HBM width
           peCount = desc.getPortCount("spawnNext", task.name),
           vcasCount = task.getNumServers("allocator"),
           queueDepth = task.getCapacityPhysicalQueue("allocator"),
           pePortWidth = 64 // <-- HARDCODED
-        ))
+        )))
       }.toMap
 
     val argNotifierFactories = desc.taskDescriptors
@@ -118,7 +157,21 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         // whole continuation-firing stage at 1/cycle (the old global default of 1).
         // Never exceed peCount (asserted in ArgumentNotifierNetwork).
         val argCut = math.max(1, math.min(argPeCount, argServerCount))
-        task.name -> (() => new ArgumentNotifier(
+        task.name -> (() => (if (generatorProfile.isLegacy) new LegacyArgumentNotifier(
+          addrWidth =
+            if (task.variableSpawn) (34 + desc.widthContCounter + 6)
+            else desc.widthAddress,
+          taskWidth = task.widthTask,
+          queueDepth = task.getCapacityPhysicalQueue("argumentNotifier"),
+          peCount = argPeCount,
+          argRouteServersNumber = argServerCount,
+          contCounterWidth = desc.widthContCounter,
+          pePortWidth = 64,
+          cutCount = argCutCount,
+          multiDecrease = task.variableSpawn,
+          mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
+          taskID = task.taskId
+        ) else new ArgumentNotifier(
           addrWidth =
             if (task.variableSpawn)
               (34 + desc.widthContCounter + 6)
@@ -134,7 +187,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           multiDecrease = task.variableSpawn,
           mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
           taskID = task.taskId
-        ))
+        )))
       }.toMap
 
     val newArgNotifierFactories = desc.taskDescriptors
@@ -199,13 +252,19 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     val memAllocatorFactories = desc.taskDescriptors
       .filter(t => desc.getPortCount("mallocIn", t.name) > 0)
       .map { task =>
-        task.name -> (() => new Allocator(
+        task.name -> (() => (if (generatorProfile.isLegacy) new LegacyAllocator(
+          addrWidth = desc.widthAddress,
+          peCount = desc.getPortCount("mallocIn", task.name),
+          vcasCount = task.getNumServers("memoryAllocator"),
+          queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),
+          pePortWidth = 64
+        ) else new Allocator(
           addrWidth = desc.widthAXIAddress, // HBM address width (34): continuations pack/address natively at HBM width
           peCount = desc.getPortCount("mallocIn", task.name),
           vcasCount = task.getNumServers("memoryAllocator"),
           queueDepth = task.getCapacityPhysicalQueue("memoryAllocator"),
           pePortWidth = 64 // <-- HARDCODED
-        ))
+        )))
       }.toMap
 
 
@@ -301,11 +360,11 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
    * Pure wiring logic — connects instantiated modules.
    */
   def connectSubsystems(
-      scheds: Map[String, Scheduler],
-      allocs: Map[String, Allocator],
-      notifiers: Map[String, ArgumentNotifier],
+      scheds: Map[String, SchedulerModule],
+      allocs: Map[String, AllocatorModule],
+      notifiers: Map[String, ArgumentNotifierModule],
       newNotifiers: Map[String, ArgumentNetworks],
-      memAllocs: Map[String, Allocator],
+      memAllocs: Map[String, AllocatorModule],
       pes: Map[String, Seq[VitisWriteBufferModule]],
       spawnNextWBs: Map[String, Seq[WriteBuffer]],
       sendArgumentWBs: Map[String, Seq[WriteBuffer]]

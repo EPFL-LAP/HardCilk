@@ -78,8 +78,33 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             // from cycle 0 -- otherwise the servers/PEs downstream of the sole
             // seeded server starve until work migrates around the steal ring.
             // Contiguous split: servers [0, remainder) get one extra task.
-            const uint64_t numSchedulerServers =
-                taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.size();
+            std::vector<HardCilkManagementServer> schedulerServers;
+            std::vector<HardCilkManagementServer> queueServers;
+            if (buildDescriptor_.loaded) {
+                schedulerServers = buildDescriptor_.serversFor(taskDescriptor.name, "scheduler");
+                queueServers = schedulerServers;
+                const auto spawners = buildDescriptor_.serversFor(taskDescriptor.name, "spawner");
+                queueServers.insert(queueServers.end(), spawners.begin(), spawners.end());
+            } else {
+                uint64_t index = 0;
+                for (uint64_t base : taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses) {
+                    HardCilkManagementServer server;
+                    server.kind = "scheduler";
+                    server.task = taskDescriptor.name;
+                    server.index = index++;
+                    server.baseAddress = base;
+                    server.queueCapacity = taskDescriptor.getCapacityVirtualQueue("scheduler");
+                    server.entryBytes = taskDescriptor.widthTask / 8;
+                    server.rootSeed = taskDescriptor.isRoot;
+                    schedulerServers.push_back(server);
+                    queueServers.push_back(server);
+                }
+            }
+            std::vector<HardCilkManagementServer> rootSeedServers;
+            for (const auto &server : schedulerServers)
+                if (!buildDescriptor_.loaded || server.rootSeed)
+                    rootSeedServers.push_back(server);
+            const uint64_t numSchedulerServers = rootSeedServers.size();
             const uint64_t totalRootTasks =
                 (taskDescriptor.isRoot && !no_base_task)
                     ? static_cast<uint64_t>(base_task_data.size()) : 0;
@@ -97,11 +122,19 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
 
             // Allocate memory for all the scheduler servers
             uint64_t schedulerServerIndex = 0;
-            for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); ++base_address, ++schedulerServerIndex){
-                const uint64_t root_task_count = rootShareOf(schedulerServerIndex);
+            for(const auto &runtimeServer : queueServers){
+                const bool isScheduler = runtimeServer.kind == "scheduler";
+                const uint64_t root_task_count = isScheduler ? rootShareOf(schedulerServerIndex) : 0;
                 const bool is_root_scheduler = root_task_count > 0;
                 const bool is_emulation = skipQueueZeroInEmu();
-                uint64_t scheduler_capacity = taskDescriptor.getCapacityVirtualQueue("scheduler");
+                // The sidecar describes the generated server's baseline, while a
+                // benchmark may deliberately grow its virtual backing capacity
+                // for this run before calling initSystem().  Preserve that legal
+                // runtime expansion instead of silently replacing it with the
+                // descriptor baseline.
+                uint64_t scheduler_capacity = std::max<uint64_t>(
+                    runtimeServer.queueCapacity,
+                    taskDescriptor.getCapacityVirtualQueue("scheduler"));
                 if (is_emulation) {
                     uint64_t physical_capacity = getPhysicalSchedulerCapacity(taskDescriptor);
                     if (physical_capacity > 0 && physical_capacity < scheduler_capacity) {
@@ -138,8 +171,8 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 uint64_t addr = allocateDriverWriteRegion(
                     scheduler_capacity * taskDescriptor.widthTask/8, 512,
                     "scheduler backing queue",
-                    "sched:" + taskDescriptor.name + ":" +
-                        std::to_string(schedulerServerIndex));
+                    (isScheduler ? "sched:" : "spawner:") + taskDescriptor.name + ":" +
+                        std::to_string(runtimeServer.index));
                 
                 // Zero-fill the backing store. xrt-smi reset does NOT clear HBM, so
                 // a stale slot read (a slot counted in currLen but never written, or
@@ -189,25 +222,27 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Hold the server paused while programming its queue metadata.
                 // Some generated scheduler servers reset with rPause=0 and only
                 // self-pause after their FSM advances, so do not wait here.
-                memory_->writeReg64(*base_address + scheduler_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
-                memory_->writeReg64(*base_address + scheduler_server_raddr_shift, addr);
-                memory_->writeReg64(*base_address + scheduler_server_maxLength_shift, scheduler_capacity);
-                memory_->writeReg64(*base_address + scheduler_server_fifoTailReg_shift, 0x0);
-                memory_->writeReg64(*base_address + scheduler_server_fifoHeadReg_shift, 0x0);
-                memory_->writeReg64(*base_address + scheduler_server_currLen_shift, 0x0);
+                const uint64_t base_address = runtimeServer.baseAddress;
+                memory_->writeReg64(base_address + scheduler_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
+                memory_->writeReg64(base_address + scheduler_server_raddr_shift, addr);
+                memory_->writeReg64(base_address + scheduler_server_maxLength_shift, scheduler_capacity);
+                memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, 0x0);
+                memory_->writeReg64(base_address + scheduler_server_fifoHeadReg_shift, 0x0);
+                memory_->writeReg64(base_address + scheduler_server_currLen_shift, 0x0);
 
                 // Read the initialized information of the scheduler server and assert that the initialization was successful
-                assert(memory_->readReg64(*base_address + scheduler_server_raddr_shift) == addr);
-                assert(memory_->readReg64(*base_address + scheduler_server_maxLength_shift) == scheduler_capacity);
-                assert(memory_->readReg64(*base_address + scheduler_server_fifoTailReg_shift) == 0x0);
-                assert(memory_->readReg64(*base_address + scheduler_server_fifoHeadReg_shift) == 0x0);
-                assert(memory_->readReg64(*base_address + scheduler_server_currLen_shift) == 0x0);
+                assert(memory_->readReg64(base_address + scheduler_server_raddr_shift) == addr);
+                assert(memory_->readReg64(base_address + scheduler_server_maxLength_shift) == scheduler_capacity);
+                assert(memory_->readReg64(base_address + scheduler_server_fifoTailReg_shift) == 0x0);
+                assert(memory_->readReg64(base_address + scheduler_server_fifoHeadReg_shift) == 0x0);
+                assert(memory_->readReg64(base_address + scheduler_server_currLen_shift) == 0x0);
 
 
                 // Log the successful initialization information of the scheduler server with indentation
-                printf("        Initialized scheduler server at address %lx with length %lx, fifoTail %lx, fifoHead %lx,\n", *base_address, scheduler_capacity, 0x0, 0x0);
+                printf("        Initialized %s server at address %lx with length %lx, fifoTail %lx, fifoHead %lx,\n", runtimeServer.kind.c_str(), base_address, scheduler_capacity, uint64_t{0}, uint64_t{0});
                 // Log also the start and the end of the data address addr
                 printf("        Data address start: 0x%lx, end: 0x%lx\n", addr, addr + scheduler_capacity * taskDescriptor.widthTask/8);
+                if (isScheduler) ++schedulerServerIndex;
             }
             if(taskDescriptor.isRoot && !no_base_task){
                 // Seed EVERY scheduler server with its contiguous slice of the
@@ -216,10 +251,11 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // -- have work from cycle 0. Each server writes to its own backing
                 // queue (raddr) and sets its own fifoTail/currLen to its share.
                 uint64_t seedServerIndex = 0;
-                for(auto base_address = taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.end(); ++base_address, ++seedServerIndex){
+                for(const auto &runtimeServer : rootSeedServers){
                     const uint64_t share = rootShareOf(seedServerIndex);
                     const uint64_t start = rootStartOf(seedServerIndex);
-                    uint64_t data_queue_address = memory_->readReg64(*base_address + scheduler_server_raddr_shift);
+                    const uint64_t base_address = runtimeServer.baseAddress;
+                    uint64_t data_queue_address = memory_->readReg64(base_address + scheduler_server_raddr_shift);
 
                     if (share > 0) {
                         copySchedulerBackingPayload(
@@ -230,18 +266,38 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
 
                     // Set this server's live length to its share (0 for servers
                     // that got no tasks when N < server count).
-                    memory_->writeReg64(*base_address + scheduler_server_fifoTailReg_shift, share);
-                    memory_->writeReg64(*base_address + scheduler_server_currLen_shift, share);
+                    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, share);
+                    memory_->writeReg64(base_address + scheduler_server_currLen_shift, share);
 
                     printf("        Seeded root scheduler server[%lu] at 0x%lx: %lu tasks (roots [%lu, %lu)) at dataAddress 0x%lx\n",
-                           seedServerIndex, static_cast<uint64_t>(*base_address), share, start, start + share, data_queue_address);
+                           seedServerIndex, base_address, share, start, start + share, data_queue_address);
+                    ++seedServerIndex;
                 }
             }
             
             // Allocate memory for all the allocation servers
+            std::vector<HardCilkManagementServer> allocationServers;
+            if (buildDescriptor_.loaded) {
+                allocationServers = buildDescriptor_.serversFor(taskDescriptor.name, "allocator");
+            } else {
+                uint64_t index = 0;
+                for (uint64_t base : taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses) {
+                    HardCilkManagementServer server;
+                    server.kind = "allocator";
+                    server.task = taskDescriptor.name;
+                    server.index = index++;
+                    server.baseAddress = base;
+                    server.queueCapacity = taskDescriptor.getCapacityVirtualQueue("allocator");
+                    server.entryBytes = descriptor.widthAddress / 8;
+                    allocationServers.push_back(server);
+                }
+            }
             uint64_t allocationServerIndex = 0;
-            for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); ++base_address, ++allocationServerIndex){
-                const uint64_t allocator_capacity = taskDescriptor.getCapacityVirtualQueue("allocator");
+            for(const auto &runtimeServer : allocationServers){
+                const uint64_t base_address = runtimeServer.baseAddress;
+                const uint64_t allocator_capacity = std::max<uint64_t>(
+                    runtimeServer.queueCapacity,
+                    taskDescriptor.getCapacityVirtualQueue("allocator"));
                 const uint64_t continuation_entry_bytes = taskDescriptor.widthTask / 8;
 
                 // Continuations are indirect through this address list. In HBM
@@ -249,10 +305,10 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // blocks, so consecutive allocations land on different 512 MB
                 // pseudo-channel windows instead of marching through one bank.
                 std::vector<uint64_t> addresses = allocateContinuationAddressPool(
-                    taskDescriptor, *base_address, allocator_capacity,
+                    taskDescriptor, base_address, allocator_capacity,
                     continuation_entry_bytes, fpgaId);
 
-                uint64_t continuation_queue_bytes = packedAllocatorAddressBytes(taskDescriptor.getCapacityVirtualQueue("allocator"), descriptor.widthAddress);
+                uint64_t continuation_queue_bytes = packedAllocatorAddressBytes(allocator_capacity, descriptor.widthAddress);
                 // Region key pins the allocator FIFO to its own read port's bank, so
                 // the allocator's read never traverses the crossbar laterally (which
                 // is what queued it behind the closure writes in the earlier freeze).
@@ -265,42 +321,63 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 std::vector<uint8_t> packedAddresses = packAllocatorAddresses(addresses, descriptor.widthAddress);
                 memory_->copyToDevice(continuation_queue_addr, packedAddresses.data(), packedAddresses.size());
                 
-                memory_->writeReg64(*base_address + alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
-                memory_->writeReg64(*base_address + alloc_server_raddr_shift, continuation_queue_addr);
-                memory_->writeReg64(*base_address + alloc_server_availableSize_shift, taskDescriptor.getCapacityVirtualQueue("allocator"));
+                memory_->writeReg64(base_address + alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
+                memory_->writeReg64(base_address + alloc_server_raddr_shift, continuation_queue_addr);
+                memory_->writeReg64(base_address + alloc_server_availableSize_shift, allocator_capacity);
 
                 // Log the successful initialization information of the allocation server with indentation
-                printf("        Initialized allocation server at address 0x%lx with length 0x%lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("allocator"));
+                printf("        Initialized allocation server at address 0x%lx with length 0x%lx\n", base_address, allocator_capacity);
                 printf("        continuation storage: %lu bank-local block(s), %lu entries\n",
-                       taskDescriptor.mapServerAddressToClosureBaseAddress[*base_address].size(),
+                       taskDescriptor.mapServerAddressToClosureBaseAddress[base_address].size(),
                        allocator_capacity);
                 printf("        continuation_queue_addr address start: 0x%lx, end: 0x%lx\n", continuation_queue_addr, continuation_queue_addr + continuation_queue_bytes);
+                ++allocationServerIndex;
             }
 
             // Allocate memory for all the memory allocator servers
-            for(auto base_address = taskDescriptor.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.end(); base_address++){
+            std::vector<HardCilkManagementServer> memoryAllocatorServers;
+            if (buildDescriptor_.loaded) {
+                memoryAllocatorServers = buildDescriptor_.serversFor(taskDescriptor.name, "memoryAllocator");
+            } else {
+                uint64_t index = 0;
+                for (uint64_t base : taskDescriptor.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses) {
+                    HardCilkManagementServer server;
+                    server.kind = "memoryAllocator";
+                    server.task = taskDescriptor.name;
+                    server.index = index++;
+                    server.baseAddress = base;
+                    server.queueCapacity = taskDescriptor.getCapacityVirtualQueue("memoryAllocator");
+                    server.entryBytes = descriptor.widthAddress / 8;
+                    memoryAllocatorServers.push_back(server);
+                }
+            }
+            for(const auto &runtimeServer : memoryAllocatorServers){
+                const uint64_t base_address = runtimeServer.baseAddress;
+                const uint64_t memory_allocator_capacity = runtimeServer.queueCapacity != 0
+                    ? runtimeServer.queueCapacity
+                    : taskDescriptor.getCapacityVirtualQueue("memoryAllocator");
                 uint64_t byte_count = taskDescriptor.getVirtualEntryWidth("memoryAllocator")/8ull;
                 // Log the entry width of the memory allocator
-                printf("        Entry width of the memory allocator: %d Bytes\n", byte_count);
+                printf("        Entry width of the memory allocator: %lu Bytes\n", byte_count);
                 
                 
-                uint64_t memory_allocator_queue_bytes = packedAllocatorAddressBytes(taskDescriptor.getCapacityVirtualQueue("memoryAllocator"), descriptor.widthAddress);
+                uint64_t memory_allocator_queue_bytes = packedAllocatorAddressBytes(memory_allocator_capacity, descriptor.widthAddress);
 
                 uint64_t  pre_allocated_memory_queue_addr =
                     allocateDriverWriteRegion(memory_allocator_queue_bytes, 512,
                                               "memory allocator address FIFO");
                 uint64_t  pre_allocated_memory_addr = allocateDriverWriteRegion(
-                    taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count,
+                    memory_allocator_capacity * byte_count,
                     512, "memory allocator storage");
 
                 // We need to write zeros to the pre_allocated_memory_addr    
-                std::vector<uint8_t> zeros(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, 0);
+                std::vector<uint8_t> zeros(memory_allocator_capacity * byte_count, 0);
                 memory_->copyToDevice(pre_allocated_memory_addr, reinterpret_cast<const uint8_t*>(zeros.data()), zeros.size()); 
                 
 
                 // Create an array of 64 bit addresses that has the addresses of the pre-allocated memory allocated in the previous step
                 std::vector<uint64_t> addresses;
-                for(uint64_t i = 0; i < taskDescriptor.getCapacityVirtualQueue("memoryAllocator"); i++){
+                for(uint64_t i = 0; i < memory_allocator_capacity; i++){
                     uint64_t addr = pre_allocated_memory_addr + i * byte_count; 
                     addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56); // address space for the fpgaId
                     addresses.push_back(addr);
@@ -313,13 +390,13 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 std::vector<uint8_t> packedAddresses = packAllocatorAddresses(addresses, descriptor.widthAddress);
                 memory_->copyToDevice(pre_allocated_memory_queue_addr, packedAddresses.data(), packedAddresses.size());
 
-                memory_->writeReg64(*base_address + mem_alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
-                memory_->writeReg64(*base_address + mem_alloc_server_raddr_shift, pre_allocated_memory_queue_addr);
-                memory_->writeReg64(*base_address + mem_alloc_server_availableSize_shift, taskDescriptor.getCapacityVirtualQueue("memoryAllocator"));
+                memory_->writeReg64(base_address + mem_alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
+                memory_->writeReg64(base_address + mem_alloc_server_raddr_shift, pre_allocated_memory_queue_addr);
+                memory_->writeReg64(base_address + mem_alloc_server_availableSize_shift, memory_allocator_capacity);
 
                 
                 // Read back in 4KB chunks to make sure the zeros were written correctly
-                std::vector<uint8_t> read_zeros(taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count, -1);
+                std::vector<uint8_t> read_zeros(memory_allocator_capacity * byte_count, -1);
                 memory_->copyFromDevice(reinterpret_cast<uint8_t*>(read_zeros.data()), pre_allocated_memory_addr, read_zeros.size());
                 memcmp(zeros.data(), read_zeros.data(), read_zeros.size());
 
@@ -330,9 +407,9 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
 
 
                 // Log the successful initialization information of the memory allocator server with indentation
-                printf("        Initialized memory allocator server at address 0x%lx with length 0x%lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("memoryAllocator"));
+                printf("        Initialized memory allocator server at address 0x%lx with length 0x%lx\n", base_address, memory_allocator_capacity);
                 // Log also the start and the end of the data address pre_allocated_memory_addr and pre_allocated_memory_queue_addr
-                printf("        pre_allocated_memory_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_addr, pre_allocated_memory_addr + taskDescriptor.getCapacityVirtualQueue("memoryAllocator") * byte_count);
+                printf("        pre_allocated_memory_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_addr, pre_allocated_memory_addr + memory_allocator_capacity * byte_count);
                 printf("        pre_allocated_memory_queue_addr address start: 0x%lx, end: 0x%lx\n", pre_allocated_memory_queue_addr, pre_allocated_memory_queue_addr + memory_allocator_queue_bytes);
             } 
 

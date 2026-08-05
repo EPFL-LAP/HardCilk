@@ -4,6 +4,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 
 import Descriptors._
 import Descriptors.DescriptorJSON._
+import Util.GeneratorProfile
 
 class WatcherConfigTests extends AnyFlatSpec {
   behavior of "WatcherConfig generic status slots"
@@ -11,7 +12,7 @@ class WatcherConfigTests extends AnyFlatSpec {
   private def countDescriptor: FullSysGenDescriptor =
     parseJsonFile[FullSysGenDescriptor](
       "taskDescriptors/mfpga/countDecoupled.json"
-    )
+    ).resolved(GeneratorProfile.resolve("updated", None).toOption.get)
 
   private def triangleDescriptor: FullSysGenDescriptor =
     parseJsonFile[FullSysGenDescriptor](
@@ -41,8 +42,47 @@ class WatcherConfigTests extends AnyFlatSpec {
     desc.validate()
     val wc = desc.watcherConfig.get
     assert(wc.hdlPath == "../hls-kernel-output/watcher/watcher")
-    assert(wc.statusSlots.size == 4)
-    assert(wc.statusSlots.flatMap(_.fields).forall(_.target.kind == "pe"))
+    val fields = wc.statusSlots.flatMap(_.fields)
+    assert(wc.statusSlots.size == 22)
+    assert(fields.count(_.target.kind == "pe") == 32)
+    assert(fields.count(_.target.kind == "schedulerServer") == 1)
+    assert(fields.count(_.target.kind == "slowUpdateHandler") == 1)
+    assert(fields.count(_.target.kind == "evictionSaver") == 1)
+    assert(fields.count(_.target.kind == "argumentServer") == 8)
+
+    val memReader = desc.taskDescriptors.find(_.name == "memReader").get
+    assert(memReader.argumentSizeList == List(32))
+    assert(memReader.argumentOffsetWidth.contains(4))
+    assert(!memReader.injectPeIndex)
+    assert(memReader.peIndexBits == 0)
+  }
+
+  it should "number duplicated global spawns PE-major" in {
+    val connections = triangleDescriptor
+      .getSystemConnectionsDescriptor()
+      .connections
+      .filter { connection =>
+        connection.srcPort.parentName == "whileLoopMain_reentry0" &&
+        connection.srcPort.portType == "taskOutGlobal" &&
+        connection.dstPort.parentName == "memReader" &&
+        connection.dstPort.portType == "taskInGlobal"
+      }
+      .sortBy(_.dstPort.portIndex)
+
+    val observed = connections.map { connection =>
+      (
+        connection.dstPort.portIndex,
+        connection.srcPort.parentIndex,
+        connection.srcPort.portIndex
+      )
+    }
+    val expected = (0 until 4).flatMap { pe =>
+      (0 until 2).map { port =>
+        (pe * 2 + port, pe, port)
+      }
+    }
+
+    assert(observed == expected)
   }
 
   it should "validate the explicit compact argument-update packet shape" in {

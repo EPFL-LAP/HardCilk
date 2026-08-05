@@ -6,15 +6,22 @@
 # you'd otherwise do a step at a time (see LockInstallPlan.md "How To Run").
 #
 # Usage:
-#   bash scripts/rebuild_and_run.sh [benchmark] [workspaceNumber]
+#   bash scripts/rebuild_and_run.sh [benchmark] [workspaceLabel]
 #   bash scripts/rebuild_and_run.sh BFS 2
+#   bash scripts/rebuild_and_run.sh countDecoupled legacyNoCache
 #   BENCHMARK=GraphColoring RUN_ARGS="/path/graph.txt 64 1 1200" bash scripts/rebuild_and_run.sh
 #   SKIP_HLS=1 bash scripts/rebuild_and_run.sh BFS
 #   START_STEP=5 bash scripts/rebuild_and_run.sh BFS 2
 #   RAMA_MODE=striped bash scripts/rebuild_and_run.sh countDecoupled
 #   RAMA_MODE=no-striping bash scripts/rebuild_and_run.sh countDecoupled
-#   HLS_CFLAGS=-DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=1 \
-#     bash scripts/rebuild_and_run.sh countDecoupled
+#   ARGUMENT_SERVER=no-cache bash scripts/rebuild_and_run.sh countDecoupled
+#   ARGUMENT_SERVER=cached bash scripts/rebuild_and_run.sh triangleCountDecoupled
+#   ARGUMENT_SERVER=no-cache bash scripts/rebuild_and_run.sh triangleCountDecoupled
+#   ARCHITECTURE=legacy bash scripts/rebuild_and_run.sh countDecoupled
+#   ARCHITECTURE=legacy ARGUMENT_SERVER=no-cache \
+#     bash scripts/rebuild_and_run.sh countDecoupled legacyNoCache
+#   JSON=architecture-generator/taskDescriptors/experiments/countDecoupled-small.json \
+#     bash scripts/rebuild_and_run.sh countDecoupled small
 #
 # QuestaSim co-simulation instead of Vitis hw_emu:
 #   QUESTA=1 bash scripts/rebuild_and_run.sh countDecoupled
@@ -39,12 +46,26 @@ set -e
 
 ROOT=/beta/bradley/HardCilk
 LOG=$ROOT/scripts/cycle.log
+INVOCATION_DIR=$(pwd -P)
 
 BENCHMARK=${1:-${BENCHMARK:-BFS}}
-WORKSPACE_NUMBER=${2:-${WORKSPACE_NUMBER:-}}
+# WORKSPACE_NUMBER remains a compatibility alias for existing invocations.
+WORKSPACE_LABEL=${2:-${WORKSPACE_LABEL:-${WORKSPACE_NUMBER:-}}}
 WATCHDOG=${WATCHDOG:-1200}
 RUN_TIMEOUT=${RUN_TIMEOUT:-1500}
 START_STEP=${START_STEP:-1}
+ARCHITECTURE=${ARCHITECTURE:-updated}
+ARGUMENT_SERVER=${ARGUMENT_SERVER:-}
+
+if [[ -n "${JSON:-}" ]]; then
+  if [[ "$JSON" = /* ]]; then
+    DESCRIPTOR=$JSON
+  else
+    DESCRIPTOR=$INVOCATION_DIR/$JSON
+  fi
+else
+  DESCRIPTOR=$ROOT/architecture-generator/taskDescriptors/mfpga/$BENCHMARK.json
+fi
 
 declare -A HLS_KERNELS=(
   [BFS]="BFS sparse_edgemap_helper"
@@ -124,18 +145,37 @@ if [[ ! -v HLS_KERNELS["$BENCHMARK"] ]]; then
   echo "Unknown benchmark '$BENCHMARK'. Valid: ${!HLS_KERNELS[*]}" >&2
   exit 1
 fi
-if [[ -n "$WORKSPACE_NUMBER" && ! "$WORKSPACE_NUMBER" =~ ^[0-9]+$ ]]; then
-  echo "workspaceNumber must be numeric, got '$WORKSPACE_NUMBER'" >&2
+if [[ -n "$WORKSPACE_LABEL" && ! "$WORKSPACE_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "workspaceLabel must contain only letters, digits, '.', '_', or '-' and start with a letter or digit; got '$WORKSPACE_LABEL'" >&2
+  exit 1
+fi
+if [[ ! -f "$DESCRIPTOR" ]]; then
+  echo "JSON descriptor not found: $DESCRIPTOR" >&2
   exit 1
 fi
 if [[ ! "$START_STEP" =~ ^[1-6]$ ]]; then
   echo "START_STEP must be one of 1, 2, 3, 4, 5, 6; got '$START_STEP'" >&2
   exit 1
 fi
+if [[ "$ARCHITECTURE" != "updated" && "$ARCHITECTURE" != "legacy" ]]; then
+  echo "ARCHITECTURE must be 'updated' or 'legacy', got '$ARCHITECTURE'" >&2
+  exit 1
+fi
+if [[ -n "$ARGUMENT_SERVER" && "$ARGUMENT_SERVER" != "cached" && "$ARGUMENT_SERVER" != "no-cache" ]]; then
+  echo "ARGUMENT_SERVER must be 'cached', 'no-cache', or empty, got '$ARGUMENT_SERVER'" >&2
+  exit 1
+fi
+if [[ "$ARCHITECTURE" == "legacy" && "$ARGUMENT_SERVER" == "cached" ]]; then
+  echo "ARCHITECTURE=legacy is incompatible with ARGUMENT_SERVER=cached" >&2
+  exit 1
+fi
+if [[ -z "$ARGUMENT_SERVER" ]]; then
+  if [[ "$ARCHITECTURE" == "legacy" ]]; then ARGUMENT_SERVER=no-cache; else ARGUMENT_SERVER=cached; fi
+fi
 
 WORKSPACE_SUFFIX=""
-if [[ -n "$WORKSPACE_NUMBER" ]]; then
-  WORKSPACE_SUFFIX="-$WORKSPACE_NUMBER"
+if [[ -n "$WORKSPACE_LABEL" ]]; then
+  WORKSPACE_SUFFIX="-$WORKSPACE_LABEL"
 fi
 WORKSPACE_NAME="${BENCHMARK}${WORKSPACE_SUFFIX}"
 
@@ -158,7 +198,10 @@ echo "START_STEP=$START_STEP"
 echo "MODE=$( [[ "$QUESTA" == "1" ]] && echo 'QuestaSim co-simulation' || echo 'Vitis hw_emu' )"
 echo "RUN_ARGS=$RUN_ARGS"
 echo "HLS_CFLAGS=${HLS_CFLAGS:-<none>}"
+echo "ARCHITECTURE=$ARCHITECTURE"
+echo "ARGUMENT_SERVER=$ARGUMENT_SERVER"
 echo "RAMA_MODE=${RAMA_MODE:-descriptor-only}"
+echo "JSON=$DESCRIPTOR"
 
 if (( START_STEP <= 1 )); then
   echo "===== STEP1 HLS ====="
@@ -169,14 +212,28 @@ if (( START_STEP <= 1 )); then
     cd "$ROOT/scripts"
     rm -rf hls_projects
     read -ra KERNELS <<< "${HLS_KERNELS[$BENCHMARK]}"
-    bash build_hls_kernel/build_kernels.sh \
+    HLS_OUTPUT="$ROOT/hls-kernel-output/$BENCHMARK"
+    SELECTED_HLS_CFLAGS=${HLS_CFLAGS:-}
+    if [[ "$BENCHMARK" == "countDecoupled" ||
+          "$BENCHMARK" == "triangleCountDecoupled" ]]; then
+      HLS_OUTPUT="$HLS_OUTPUT/$ARGUMENT_SERVER"
+      if [[ "$SELECTED_HLS_CFLAGS" == *COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER* ]]; then
+        echo "Do not set COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER manually; use ARGUMENT_SERVER" >&2
+        exit 2
+      fi
+      if [[ "$ARGUMENT_SERVER" == "no-cache" ]]; then
+        SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=1"
+      else
+        SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=0"
+      fi
+    fi
+    HLS_CFLAGS="$SELECTED_HLS_CFLAGS" bash build_hls_kernel/build_kernels.sh \
       -d "$ROOT/hls-processing-elements/mfpga/$BENCHMARK" -f 300 -p xcu55c-fsvh2892-2L-e \
-      -o "$ROOT/hls-kernel-output/$BENCHMARK" -k "${KERNELS[@]}"
+      -o "$HLS_OUTPUT" -k "${KERNELS[@]}"
 
     # The watcher is a reusable opt-in HLS block, not a benchmark PE. Build it
     # into one shared output location whenever the selected descriptor includes
     # watcherConfig. Designs without watcherConfig are completely unchanged.
-    DESCRIPTOR="$ROOT/architecture-generator/taskDescriptors/mfpga/$BENCHMARK.json"
     if grep -q '"watcherConfig"' "$DESCRIPTOR"; then
       bash build_hls_kernel/build_kernels.sh \
         -d "$ROOT/hls-processing-elements/watcher" -f 300 -p xcu55c-fsvh2892-2L-e \
@@ -194,7 +251,13 @@ if (( START_STEP <= 2 )); then
   # watcher start gate). This script defaults it ON to match the verified build;
   # set GLOBAL_START=0 to build the pre-feature design instead. (The emitter/Chisel
   # flag itself stays default-OFF, so unit tests and other callers are unaffected.)
-  GLOBAL_START=${GLOBAL_START:-1}
+  if [[ -z "${GLOBAL_START+x}" ]]; then
+    if [[ "$ARCHITECTURE" == "legacy" ]]; then GLOBAL_START=0; else GLOBAL_START=1; fi
+  fi
+  if [[ "$ARCHITECTURE" == "legacy" && "$GLOBAL_START" != "0" ]]; then
+    echo "GLOBAL_START is not supported by ARCHITECTURE=legacy; set GLOBAL_START=0" >&2
+    exit 2
+  fi
   GLOBAL_START_FLAG=""
   if [[ "$GLOBAL_START" != "0" ]]; then
     GLOBAL_START_FLAG="--global-start"
@@ -213,15 +276,15 @@ if (( START_STEP <= 2 )); then
     no-striping) RAMA_FLAG="--rama-no-striping" ;;
     *) echo "RAMA_MODE must be 'striped', 'no-striping', or empty" >&2; exit 2 ;;
   esac
-  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p ${GLOBAL_START_FLAG} ${QUESTA_FLAG} ${RAMA_FLAG}"
+  sbt "runMain HardCilk.HardCilkEmitter \"${DESCRIPTOR}\" --benchmark-name ${BENCHMARK} -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p --architecture ${ARCHITECTURE} --argument-server ${ARGUMENT_SERVER} ${GLOBAL_START_FLAG} ${QUESTA_FLAG} ${RAMA_FLAG}"
 fi
 
 if (( START_STEP <= 3 )); then
   echo "===== STEP3 STAGE ====="
   rm -rf "$WORKSPACE_DIR/src/IP" "$WORKSPACE_DIR/src/host"
   cd "$ROOT/scripts"
-  if [[ -n "$WORKSPACE_NUMBER" ]]; then
-    bash generate_benchmark_xclbin_project.sh "$BENCHMARK" "$WORKSPACE_NUMBER"
+  if [[ -n "$WORKSPACE_LABEL" ]]; then
+    bash generate_benchmark_xclbin_project.sh "$BENCHMARK" "$WORKSPACE_LABEL"
   else
     bash generate_benchmark_xclbin_project.sh "$BENCHMARK"
   fi
@@ -304,5 +367,5 @@ source /opt/xilinx/xrt/setup.sh
 source /alpha/tools/Xilinx/Vitis/2024.1/settings64.sh
 cd "$BUILD_DIR"
 timeout "$RUN_TIMEOUT" bash -c \
-  "XCL_EMULATION_MODE=hw_emu ../src/host/build/projects/$BENCHMARK/${HOST_TARGET[$BENCHMARK]} ${XCLBIN_NAME[$BENCHMARK]} $RUN_ARGS"
+  "XCL_EMULATION_MODE=hw_emu HARDCILK_HBM_DESCRIPTOR=../${BENCHMARK}.hbmports.json ../src/host/build/projects/$BENCHMARK/${HOST_TARGET[$BENCHMARK]} ${XCLBIN_NAME[$BENCHMARK]} $RUN_ARGS"
 echo "CYCLE_DONE_EXIT=$?"

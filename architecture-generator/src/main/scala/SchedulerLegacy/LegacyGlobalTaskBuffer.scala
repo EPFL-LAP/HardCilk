@@ -1,22 +1,22 @@
-package SchedulerOG
+package SchedulerLegacy
 
 import chisel3._
 import chisel3.util._
 import Util._
 import chisel3.ChiselEnum
 
-class GlobalTaskBufferIO(taskWidth: Int) extends Bundle {
+class LegacyGlobalTaskBufferIO(taskWidth: Int) extends Bundle {
   val in = Flipped(DecoupledIO(UInt(taskWidth.W)))
   val connStealNtw = Flipped(new SchedulerNetworkClientIO(taskWidth))
 }
 
-class GlobalTaskBuffer(taskWidth: Int, peCount: Int) extends Module {
+class LegacyGlobalTaskBuffer(taskWidth: Int, peCount: Int) extends Module {
   object State extends ChiselEnum {
     val readTask = Value(0.U)
     val writeTaskNtw = Value(1.U)
   }
 
-  val io = IO(new GlobalTaskBufferIO(taskWidth))
+  val io = IO(new LegacyGlobalTaskBufferIO(taskWidth))
 
   val buffer = RegInit(0.U(taskWidth.W))
   val stateReg = RegInit(State.readTask)
@@ -45,9 +45,7 @@ class GlobalTaskBuffer(taskWidth: Int, peCount: Int) extends Module {
     }
   }
 
-  when(
-    tasksGivenAwayCount > 0.U && (stateReg =/= State.readTask || ~io.in.valid)
-  ) {
+  when(tasksGivenAwayCount > 0.U && (stateReg =/= State.readTask || ~io.in.valid)) {
     io.connStealNtw.ctrl.serveStealReq.valid := true.B
     when(io.connStealNtw.ctrl.serveStealReq.ready) {
       tasksGivenAwayCount := tasksGivenAwayCount - 1.U
@@ -55,3 +53,4 @@ class GlobalTaskBuffer(taskWidth: Int, peCount: Int) extends Module {
   }
 
 }
+

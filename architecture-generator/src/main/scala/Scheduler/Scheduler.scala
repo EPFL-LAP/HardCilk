@@ -14,6 +14,67 @@ import axi4.Ops._
 
 import axi4.full.components._
 
+case class SchedulerOutsideRingLayout(
+    spawnerIndices: Vector[Int],
+    sourceIndices: Vector[Int]
+)
+
+object SchedulerOutsideRingLayout {
+  /** Place outside-ring sources and spawners.
+    *
+    * With grouped argument lanes, sources retain their natural order and each
+    * spawner is co-located with the final lane in its striped group. Any
+    * ungrouped sources (for example, the slow argument handler) remain after
+    * the grouped fast lanes. With groupSize == 1, preserve the historical
+    * priority/co-location policy.
+    */
+  def build(
+      sourceCount: Int,
+      spawnerCount: Int,
+      groupedSourceStart: Int = 0,
+      groupedSourceCount: Int = 0,
+      groupSize: Int = 1
+  ): SchedulerOutsideRingLayout = {
+    require(sourceCount > 0)
+    require(spawnerCount > 0)
+    require(groupSize > 0)
+
+    val networkSize = max(sourceCount, spawnerCount)
+    def equallySpacedIndices(count: Int): Vector[Int] =
+      Vector.tabulate(count)(i => i * networkSize / count)
+
+    if (groupSize > 1) {
+      require(groupedSourceStart >= 0)
+      require(groupedSourceCount > 0)
+      require(groupedSourceCount % groupSize == 0)
+      require(
+        groupedSourceCount / groupSize == spawnerCount,
+        "striped argument-lane groups must match the spawn-server count"
+      )
+      require(groupedSourceStart + groupedSourceCount <= sourceCount)
+
+      val spawners = Vector.tabulate(spawnerCount) { i =>
+        groupedSourceStart + (i + 1) * groupSize - 1
+      }
+      require(spawners.distinct.size == spawners.size)
+      require(spawners.forall(_ < networkSize))
+      SchedulerOutsideRingLayout(
+        spawnerIndices = spawners,
+        sourceIndices = Vector.tabulate(sourceCount)(identity)
+      )
+    } else {
+      val spawners = equallySpacedIndices(spawnerCount)
+      val sources =
+        if (sourceCount <= spawnerCount) equallySpacedIndices(sourceCount)
+        else
+          spawners ++ Vector
+            .tabulate(networkSize)(identity)
+            .filterNot(spawners.contains)
+      SchedulerOutsideRingLayout(spawners, sources)
+    }
+  }
+}
+
 class SchedulerPEIO(
     pePortWidth: Int,
     peCount: Int,
@@ -79,9 +140,12 @@ class Scheduler(
     enableGlobalStart: Boolean = false,
     useAffinity: Boolean = false,
     affinityQueueDepth: Int = 0,
-    affinityTagBits: Int = 0
+    affinityTagBits: Int = 0,
+    fastArgumentRouteServersNumber: Int = 0,
+    newContinuationLaneStripingFactor: Int = 1
 ) extends Module
-    with SchedulerHasMfpgaSupport {
+    with SchedulerHasMfpgaSupport
+    with SchedulerModule {
 
   val vssAxiFullCfg = axi4.Config(
     wAddr = addrWidth,
@@ -104,24 +168,23 @@ class Scheduler(
   val outsideSpawnNetworkSize =
     if (outsideSpawn) max(outsideSpawnSourceCount, spawnerServerNumber) else 0
 
-  private def equallySpacedIndices(count: Int): Array[Int] =
-    if (count == 0) Array.empty[Int]
-    else Array.tabulate(count)(i => i * outsideSpawnNetworkSize / count)
+  private val outsideRingLayout =
+    if (outsideSpawn)
+      Some(
+        SchedulerOutsideRingLayout.build(
+          sourceCount = outsideSpawnSourceCount,
+          spawnerCount = spawnerServerNumber,
+          groupedSourceStart = peCountGlobalTaskIn,
+          groupedSourceCount = fastArgumentRouteServersNumber,
+          groupSize = newContinuationLaneStripingFactor
+        )
+      )
+    else None
 
   val spawnerIndices =
-    if (outsideSpawn) equallySpacedIndices(spawnerServerNumber)
-    else Array.empty[Int]
-  // Sources are ordered by priority: global task buffers, fast argument lanes,
-  // then slow argument lanes. When sources outnumber spawners, give the
-  // highest-priority sources the co-located slots first.
+    outsideRingLayout.map(_.spawnerIndices.toArray).getOrElse(Array.empty[Int])
   val sourceIndices =
-    if (!outsideSpawn) Array.empty[Int]
-    else if (outsideSpawnSourceCount <= spawnerServerNumber)
-      equallySpacedIndices(outsideSpawnSourceCount)
-    else
-      spawnerIndices ++ Array
-        .tabulate(outsideSpawnNetworkSize)(i => i)
-        .filterNot(spawnerIndices.contains)
+    outsideRingLayout.map(_.sourceIndices.toArray).getOrElse(Array.empty[Int])
   // The larger group occupies every slot; the smaller group is evenly spaced among it.
   val pairedIndices =
     if (outsideSpawnSourceCount <= spawnerServerNumber) sourceIndices.toSeq

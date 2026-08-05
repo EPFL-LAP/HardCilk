@@ -10,6 +10,17 @@ import chext.amba.axi4s
 import chext.amba.axi4.Ops._
 import chext.amba.axi4s.Casts._
 
+trait WriteBufferModule extends Module {
+  val m_axi: axi4.RawInterface
+  val s_pkg: axi4s.Interface
+  val s_allows: Seq[axi4s.Interface]
+  val m_allows: Seq[axi4s.Interface]
+  val s_releaseMetadata: Option[axi4s.Interface]
+  val fpgaId: Option[UInt]
+  val memReqToRemote: Option[DecoupledIO[MemReq]]
+  val writeRespFromRemote: Option[DecoupledIO[WriteResp]]
+}
+
 class WriteBufferConfig(
     val wAddr: Int,
     val wData: Int,
@@ -41,10 +52,9 @@ class WriteBufferConfig(
   if (releaseMetadataWidth > 0) {
     assert(!isRemoteWriteBuffer, "Release metadata is unsupported by RemoteWriteBuffer")
     assert(wAllow > 0, "Release metadata requires the counter-based write buffer")
-    assert(nAllow == 1, "Release metadata currently supports one allow stream")
     assert(
-      releaseMetadataOffset + releaseMetadataWidth <= wAllowData.head,
-      "Release metadata field must fit in the allow payload"
+      wAllowData.forall(releaseMetadataOffset + releaseMetadataWidth <= _),
+      "Release metadata field must fit in every allow payload"
     )
   }
   def nAllow = wAllowData.size
@@ -77,7 +87,7 @@ class WriteBundle(
 
 class WriteBuffer(
     cfg: WriteBufferConfig
-) extends Module {
+) extends Module with WriteBufferModule {
   import cfg._
   private val wb_t = new WriteBundle(cfg)
 

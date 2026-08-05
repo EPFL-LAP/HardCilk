@@ -2,6 +2,7 @@
 #define DRIVER_H
 
 #include "FullSysGenDescriptor.h"
+#include "hardcilk_build_descriptor.h"
 
 #include <map>
 #include <string>
@@ -99,6 +100,7 @@ public:
     
     Memory *memory_;
     FullSysGenDescriptor descriptor;
+    HardCilkBuildDescriptor buildDescriptor_;
 
 protected:
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;

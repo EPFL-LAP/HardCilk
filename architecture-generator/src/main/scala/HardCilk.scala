@@ -24,6 +24,7 @@ import chext.amba.axi4.lite.components.{Upscale, UpscaleConfig}
 
 import HardCilkBuilder.PortToExport
 import Util.WriteBuffer
+import Util.GeneratorProfile
 
 class HardCilk(
     override val fullSysGenDescriptor: FullSysGenDescriptor, // Made public for trait
@@ -37,10 +38,12 @@ class HardCilk(
     // CLI RAMA modes apply to ports whose task descriptor omits generateRAMA.
     override val enableRamaByDefault: Boolean = false,
     override val ramaStripingEnabled: Boolean = false,
+    override val generatorProfile: GeneratorProfile =
+      GeneratorProfile(Util.ArchitectureMode.Updated, Util.ArgumentServerMode.Cached),
     // Opt-in kernel-global start broadcast (default OFF -> byte-identical to the
     // pre-feature design). When ON: one host-writable register releases all
     // scheduler servers on the same cycle and anchors the watcher start gate.
-    enableGlobalStart: Boolean = false
+    override val enableGlobalStart: Boolean = false
 ) extends Module
     with HasHBMInterconnect
     with HardCilkHasMfpgaSupport { // <-- MIXIN THE TRAIT HERE
@@ -79,7 +82,7 @@ class HardCilk(
   val cfgXDMA = axi4.Config(wId = 4, wAddr = 64, wData = 512)
 
   val builder =
-    new HardCilkBuilder(fullSysGenDescriptor, debug, argumentNotifierCutCount, enableGlobalStart)
+    new HardCilkBuilder(fullSysGenDescriptor, debug, argumentNotifierCutCount, enableGlobalStart, generatorProfile)
 
   val blueprint = builder.defineBlueprint()
 
@@ -215,10 +218,10 @@ class HardCilk(
 
   private def exportMissingPEPorts(
       portsToExport: Seq[PortToExport],
-      scheds: Map[String, Scheduler],
-      allocs: Map[String, Allocator],
-      notifiers: Map[String, ArgumentNotifier],
-      memAllocs: Map[String, Allocator],
+      scheds: Map[String, SchedulerModule],
+      allocs: Map[String, AllocatorModule],
+      notifiers: Map[String, ArgumentNotifierModule],
+      memAllocs: Map[String, AllocatorModule],
       pes: Map[String, Seq[VitisWriteBufferModule]],
       spawnNextWBs: Map[String, Seq[WriteBuffer]],
       sendArgumentWBs: Map[String, Seq[WriteBuffer]]
@@ -365,10 +368,10 @@ class HardCilk(
 
   private def connectManagement(
       demux: axi4.lite.components.Demux,
-      schedulerMap: Map[String, Scheduler],
-      closureAllocatorMap: Map[String, Allocator],
-      memoryAllocatorMap: Map[String, Allocator],
-      argumentNotifierMap: Map[String, ArgumentNotifier],
+      schedulerMap: Map[String, SchedulerModule],
+      closureAllocatorMap: Map[String, AllocatorModule],
+      memoryAllocatorMap: Map[String, AllocatorModule],
+      argumentNotifierMap: Map[String, ArgumentNotifierModule],
       remoteStreamToMemMap: Map[String, RemoteStreamToMem]
   ): Unit = {
     var j = 0 // Management port index
@@ -379,6 +382,13 @@ class HardCilk(
         demux.m_axil(i) :=> taskSched.io_internal.axi_mgmt_vss(i - j)
       }
       j += task.getNumServers("scheduler")
+
+      // Commit-2469686 spawners are HBM-backed management servers. Updated
+      // spawners are on-chip and therefore expose no entries here.
+      taskSched.legacySpawnerMgmt.zipWithIndex.foreach { case (port, index) =>
+        demux.m_axil(j + index) :=> port
+      }
+      j += taskSched.legacySpawnerMgmt.size
 
       // Connect Closure Allocator Management (if any)
       if (closureAllocatorMap.contains(task.name)) {
@@ -448,10 +458,10 @@ class HardCilk(
   }
 
   private def connectGlobalSignals(
-      schedulerMap: Map[String, Scheduler],
-      closureAllocatorMap: Map[String, Allocator],
-      memoryAllocatorMap: Map[String, Allocator],
-      argumentNotifierMap: Map[String, ArgumentNotifier],
+      schedulerMap: Map[String, SchedulerModule],
+      closureAllocatorMap: Map[String, AllocatorModule],
+      memoryAllocatorMap: Map[String, AllocatorModule],
+      argumentNotifierMap: Map[String, ArgumentNotifierModule],
       newArgumentNotifierMap: Map[String, ArgumentNetworks]
   ): Unit = {
     val schedulerPaused =
@@ -513,11 +523,16 @@ class HardCilk(
         val packet = pe.getPort("argOut").asInstanceOf[chext.amba.axi4s.Interface]
         val payloadLo = 96
         val offsetLo = payloadLo + network.cfg.updatePayloadWidth
-        val expectedWidth = offsetLo + network.cfg.updateOffsetWidth
-        require(packet.cfg.wData == expectedWidth,
+        val semanticWidth = offsetLo + network.cfg.updateOffsetWidth
+        // Vitis HLS exposes AXIS TDATA in whole bytes. A compact packet whose
+        // offset ends mid-byte therefore has zero padding above its semantic
+        // fields (for example, 132 bits is emitted as a 136-bit port).
+        val physicalWidth = ((semanticWidth + 7) / 8) * 8
+        require(packet.cfg.wData == physicalWidth,
           s"$targetName argOut must be {address[64], metadata[32], " +
             s"payload[${network.cfg.updatePayloadWidth}], " +
-            s"offset[${network.cfg.updateOffsetWidth}]}; got ${packet.cfg.wData} bits")
+            s"offset[${network.cfg.updateOffsetWidth}]} padded to " +
+            s"$physicalWidth AXIS bits; got ${packet.cfg.wData} bits")
         val sink = network.s_update(index)
         sink.valid := packet.TVALID
         sink.bits.address := network.cfg.lineAddressOf(packet.TDATA(63, 0))
@@ -526,7 +541,7 @@ class HardCilk(
           .asTypeOf(network.cfg.metadataType)
         sink.bits.payload := packet.TDATA(offsetLo - 1, payloadLo)
         sink.bits.offset.foreach { offset =>
-          offset := packet.TDATA(expectedWidth - 1, offsetLo)
+          offset := packet.TDATA(semanticWidth - 1, offsetLo)
         }
         packet.TREADY := sink.ready
       }
@@ -655,7 +670,7 @@ class HardCilk(
   private def connectWatcher(
       wc: WatcherConfig,
       peMap: Map[String, Seq[VitisWriteBufferModule]],
-      schedulerMap: Map[String, Scheduler],
+      schedulerMap: Map[String, SchedulerModule],
       newArgumentNotifierMap: Map[String, ArgumentNetworks]
   ): Unit = {
     val maxStatusSlots = 22
@@ -736,18 +751,15 @@ class HardCilk(
           schedulerMap(target.taskName).io_congested(target.index).asUInt
 
         case "slowUpdateHandler" | "evictionSaver" | "argumentServer" =>
-          val network = newArgumentNotifierMap.getOrElse(
-            target.taskName,
-            throw new RuntimeException(
-              s"watcher references missing new argument notifier '${target.taskName}'"
-            )
-          )
-          target.kind match {
-            case "slowUpdateHandler" => network.watcherSlowUpdates(target.index)
-            case "evictionSaver" => network.watcherEvictions(target.index)
-            case "argumentServer" =>
-              val flatIndex = target.index * network.cfg.newLanesPerServer + target.lane
-              network.watcherFastSpawns(flatIndex)
+          newArgumentNotifierMap.get(target.taskName) match {
+            case None => 0.U(2.W)
+            case Some(network) => target.kind match {
+              case "slowUpdateHandler" => network.watcherSlowUpdates(target.index)
+              case "evictionSaver" => network.watcherEvictions(target.index)
+              case "argumentServer" =>
+                val flatIndex = target.index * network.cfg.newLanesPerServer + target.lane
+                network.watcherFastSpawns(flatIndex)
+            }
           }
 
         case other => throw new RuntimeException(

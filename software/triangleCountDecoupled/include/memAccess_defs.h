@@ -87,7 +87,5 @@ struct __attribute__((packed))whileLoopMain_reentry0_task {
   uint32_t size;
   uint32_t i;
   uint32_t j;
-  uint32_t a_i;
-  uint32_t b_j;
-  uint8_t _padding[4];
+  uint8_t _padding[12];
 };

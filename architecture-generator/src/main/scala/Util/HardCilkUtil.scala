@@ -18,10 +18,10 @@ object HardCilkUtil {
    */
   def getPhysicalSubsystemPort(
       port: PortDescriptor,
-      scheds: Map[String, Scheduler],
-      allocs: Map[String, Allocator],
-      notifiers: Map[String, ArgumentNotifier],
-      memAllocs: Map[String, Allocator]
+      scheds: Map[String, SchedulerModule],
+      allocs: Map[String, AllocatorModule],
+      notifiers: Map[String, ArgumentNotifierModule],
+      memAllocs: Map[String, AllocatorModule]
   ): chisel3.Data = {
     port.portType match {
       case "taskIn" | "taskOut" | "taskInGlobal" =>
@@ -57,10 +57,10 @@ object HardCilkUtil {
    */
   def getPhysicalPort(
       port: PortDescriptor,
-      scheds: Map[String, Scheduler],
-      allocs: Map[String, Allocator],
-      notifiers: Map[String, ArgumentNotifier],
-      memAllocs: Map[String, Allocator],
+      scheds: Map[String, SchedulerModule],
+      allocs: Map[String, AllocatorModule],
+      notifiers: Map[String, ArgumentNotifierModule],
+      memAllocs: Map[String, AllocatorModule],
       pes: Map[String, Seq[VitisWriteBufferModule]],
       spawnNextWBs: Map[String, Seq[WriteBuffer]],
       sendArgumentWBs: Map[String, Seq[WriteBuffer]]

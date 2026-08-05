@@ -35,10 +35,9 @@ class WriteBufferCounterConfig(
   assert(releaseMetadataWidth >= 0)
   if (releaseMetadataWidth > 0) {
     assert(wAllow > 0, "Release metadata requires a nonzero allow-count width")
-    assert(nAllow == 1, "Release metadata currently supports one allow stream")
     assert(
-      releaseMetadataOffset + releaseMetadataWidth <= wAllowData.head,
-      "Release metadata field must fit in the allow payload"
+      wAllowData.forall(releaseMetadataOffset + releaseMetadataWidth <= _),
+      "Release metadata field must fit in every allow payload"
     )
   }
 
@@ -203,6 +202,21 @@ class WriteBufferCounter(
       duplB.foreach(x => fork() :=> x)
   }
 
+  // NewArgumentNotifier returns one metadata token for the continuation write.
+  // Every released child stream belongs to that same continuation, so fork the
+  // token once and let each branch repeat it according to its own allow count.
+  private val releaseMetadataCopies =
+    if (releaseMetadataWidth > 0) {
+      val copies = Wire(
+        Vec(nAllow, DecoupledIO(UInt(releaseMetadataWidth.W)))
+      )
+      new elastic.Fork(s_releaseMetadata.get.asLite) {
+        protected def onFork: Unit =
+          copies.foreach(copy => fork() :=> copy)
+      }
+      Some(copies)
+    } else None
+
   for (i <- 0 until nAllow) {
     if (releaseMetadataWidth > 0) {
       val replIn = Wire(DecoupledIO(new ReleaseCountMetadata(cfg)))
@@ -210,7 +224,7 @@ class WriteBufferCounter(
         protected def onJoin: Unit = {
           join(duplB(i))
           out.count := join(numNext(i))
-          out.metadata := join(s_releaseMetadata.get.asLite)
+          out.metadata := join(releaseMetadataCopies.get(i))
         }
       }
 

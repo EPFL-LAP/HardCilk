@@ -47,6 +47,25 @@ inline bool benchmarkCheckRuntimeEnv()
   return false;
 }
 
+inline void benchmarkSelectHardCilkDescriptor(const std::string &xclbin_path)
+{
+  const char *configured = std::getenv("HARDCILK_HBM_DESCRIPTOR");
+  if (configured != nullptr && configured[0] != '\0')
+    return;
+
+  for (const std::string &candidate :
+       hardcilk_rama_detail::descriptorCandidates(xclbin_path))
+  {
+    std::ifstream input(candidate);
+    if (!input.good())
+      continue;
+    setenv("HARDCILK_HBM_DESCRIPTOR", candidate.c_str(), 1);
+    std::cout << "[Init] Auto-selected HardCilk sidecar '" << candidate
+              << "'.\n";
+    return;
+  }
+}
+
 inline std::string benchmarkTimestampNow()
 {
   char ts[32];
@@ -431,6 +450,12 @@ int runSingleFpgaBenchmark(const std::string &xclbin_path,
 {
   if (!benchmarkCheckRuntimeEnv())
     return EXIT_FAILURE;
+
+  // The schema-v2 sidecar is required for legacy spawners and allocator ABI
+  // selection.  Keep the explicit environment override, but make a direct host
+  // invocation as reliable as rebuild_and_run.sh by locating the sidecar next
+  // to the xclbin (or one directory above its build directory).
+  benchmarkSelectHardCilkDescriptor(xclbin_path);
 
   // Capture the pristine terminal so we can always restore it (the hw_emu
   // simulator can leave the tty raw / no-echo when it takes a signal).

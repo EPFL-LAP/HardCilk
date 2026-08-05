@@ -266,6 +266,7 @@ case class FullSysGenDescriptor(
 
   def getSystemConnectionsDescriptor(): SystemConnections = {
     // mutable map of aggregators from string to int initialized to zero
+    val aggregatorMapSpawn = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSendArg = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSpawnNext = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapMalloc = mutable.Map[String, Int]().withDefaultValue(0)
@@ -294,12 +295,20 @@ case class FullSysGenDescriptor(
         )
       }
 
-      val spawnedConnections = spawnedTasks.filterNot(_ == task.name).zipWithIndex.flatMap { case (spawnedTask, j) =>
-        val spawnedTaskDescriptor = taskDescriptors.find(_.name == spawnedTask).get
-        (0 until task.numProcessingElements).map { i =>
+      val globalSpawnedTasks = spawnedTasks.filterNot(_ == task.name)
+      val spawnedConnections = (0 until task.numProcessingElements).flatMap { i =>
+        globalSpawnedTasks.zipWithIndex.map { case (spawnedTask, j) =>
+          val spawnedTaskDescriptor = taskDescriptors.find(_.name == spawnedTask).get
+          aggregatorMapSpawn(spawnedTask) += 1
           ConnectionDescriptor(
             PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
-            PortDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal", i),
+            PortDescriptor(
+              f"${spawnedTask}",
+              "HardCilk",
+              0,
+              "taskInGlobal",
+              aggregatorMapSpawn(spawnedTask) - 1
+            ),
             spawnedTaskDescriptor.widthTask,
             "AXIS"
           )

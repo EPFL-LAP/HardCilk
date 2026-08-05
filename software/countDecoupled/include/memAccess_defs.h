@@ -29,13 +29,14 @@ using addr_t = uint64_t;
 struct __attribute__((packed)) taskAdder_cont0_task {
   uint32_t _counter;
   addr_t A;
+  addr_t index;
   addr_t count;       // running match count, carried in the closure (NOT a memory address)
   addr_t count_final; // memory address the initiator writes the final count to when done
   uint32_t size;
   uint32_t i;
   uint32_t _value_pad;
   uint32_t value;
-  uint8_t _padding[20];
+  uint8_t _padding[12];
 };
 
 struct taskAdder_cont0_spawn_next {

@@ -531,6 +531,10 @@
       "name": "taskAdder_cont0",
       "numProcessingElements": 8,
       "peHDLPath": "../hls-kernel-output/countDecoupled/taskAdder_cont0",
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/countDecoupled/cached/taskAdder_cont0",
+        "no-cache": "../hls-kernel-output/countDecoupled/no-cache/taskAdder_cont0"
+      },
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -543,7 +547,6 @@
           "capacityPhysicalQueue": 32,
           "capacityVirtualQueue": 128,
           "numVirtualServers": 2,
-          "useNewArgumentNotifier": true,
           "slowArgumentHandlerCount": 1,
           "cacheEvictionSaverCount": 1,
           "newContinuationLanesPerServer": 4,
@@ -555,7 +558,10 @@
           "missedUpdateExtra": 64,
           "slowRequestQueueDepth": 64,
           "portWidth": 64,
-          "sideType": "argumentNotifier"
+          "sideType": "argumentNotifier",
+          "legacyOverrides": {
+            "numVirtualServers": 1
+          }
         },
         {
           "capacityPhysicalQueue": 32,
@@ -566,6 +572,9 @@
         }
       ],
       "spawnServersCount": 8,
+      "legacyOverrides": {
+        "spawnServersCount": 1
+      },
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 512
@@ -576,6 +585,7 @@
       "argumentSizeList": [
         512
       ],
+      "argumentWriteDataWidth_NoCache": 32,
       "argumentOffsetWidth": 0,
       "generateSpawnNextWriteBuffer": false,
       "hasAXI": true,
@@ -587,6 +597,10 @@
       "injectPeIndex": true,
       "peIndexBits": 4,
       "peHDLPath": "../hls-kernel-output/countDecoupled/memReader",
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/countDecoupled/cached/memReader",
+        "no-cache": "../hls-kernel-output/countDecoupled/no-cache/memReader"
+      },
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 10,
@@ -596,11 +610,19 @@
           "affinityTagBits": 4,
           "numVirtualServers": 0,
           "portWidth": 256,
-          "sideType": "scheduler"
+          "sideType": "scheduler",
+          "legacyOverrides": {
+            "numVirtualServers": 1,
+            "capacityPhysicalQueue": 64
+          }
         }
       ],
       "spawnServersCount": 8,
       "spawnerQueueDepth": 8,
+      "legacyOverrides": {
+        "spawnServersCount": 1,
+        "spawnerQueueDepth": 16
+      },
       "variableSpawn": false,
       "widthMalloc": 0,
       "widthTask": 256
@@ -615,6 +637,10 @@
       "name": "taskInitiator_reentry0",
       "numProcessingElements": 8,
       "peHDLPath": "../hls-kernel-output/countDecoupled/taskInitiator_reentry0",
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/countDecoupled/cached/taskInitiator_reentry0",
+        "no-cache": "../hls-kernel-output/countDecoupled/no-cache/taskInitiator_reentry0"
+      },
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 32,
@@ -624,10 +650,16 @@
           "affinityTagBits": 4,
           "numVirtualServers": 1,
           "portWidth": 512,
-          "sideType": "scheduler"
+          "sideType": "scheduler",
+          "legacyOverrides": {
+            "capacityPhysicalQueue": 64
+          }
         }
       ],
       "spawnServersCount": 8,
+      "legacyOverrides": {
+        "spawnServersCount": 1
+      },
       "spawnNextWriteBufferDepth": 8,
       "variableSpawn": false,
       "widthMalloc": 0,

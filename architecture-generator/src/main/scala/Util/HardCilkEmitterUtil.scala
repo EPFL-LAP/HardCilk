@@ -207,6 +207,7 @@ object HardCilkEmitterUtil {
           argumentNotifierCutCount = 1,
           enableRamaByDefault = flags.ramaStriping || flags.ramaNoStriping,
           ramaStripingEnabled = flags.ramaStriping,
+          generatorProfile = flags.generatorProfile,
           enableGlobalStart = flags.enableGlobalStart
         )
         numHbmPortExports = module.numHbmPortExports

@@ -1,4 +1,4 @@
-package SchedulerOG
+package SchedulerLegacy
 
 import chisel3._
 import chisel3.util._
@@ -9,12 +9,7 @@ import chext.amba.axi4
 import axi4.Ops._
 import axi4.lite.components.RegisterBlock
 
-class SchedulerServerIO(
-    taskWidth: Int,
-    regBlock: RegisterBlock,
-    sysAddressWidth: Int,
-    peCount: Int
-) extends Bundle {
+class LegacySchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth: Int, peCount: Int) extends Bundle {
   val connNetwork = Flipped(new SchedulerNetworkClientIO(taskWidth))
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
   val read_address = DecoupledIO(UInt(sysAddressWidth.W))
@@ -27,20 +22,18 @@ class SchedulerServerIO(
   val write_idle = Input(Bool())
   val ntwDataUnitOccupancy = Input(Bool())
   val paused = Output(Bool())
+  // Read-only compatibility tap for the current watcher.
+  val congested = Output(Bool())
   val lengths_of_hardware_queues = Vec(peCount, Input(UInt(8.W)))
-  val serveRemote = Output(
-    Bool()
-  ) // A signal from the VSS to the RemoteTaskServer
-  val getTasksFromRemote = Output(
-    Bool()
-  ) // A signal from the VSS to the RemoteTaskServer
+  val serveRemote = Output(Bool())         // A signal from the VSS to the RemoteTaskServer
+  val getTasksFromRemote = Output(Bool())  // A signal from the VSS to the RemoteTaskServer
 }
 
 // N.B: For correct execution
 // contentionThreshold + contentionDelta <= peCount
 // contentionThreshold - contentionDelta >= 0
 
-class SchedulerServer(
+class LegacySchedulerServer(
     taskWidth: Int,
     contentionThreshold: Int,
     peCount: Int,
@@ -70,9 +63,7 @@ class SchedulerServer(
   }
 
   val regBlock = new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
-  val io = IO(
-    new SchedulerServerIO(taskWidth, regBlock, sysAddressWidth, peCount)
-  )
+  val io = IO(new LegacySchedulerServerIO(taskWidth, regBlock, sysAddressWidth, peCount))
 
   io.axi_mgmt.suggestName("S_AXI_MGMT")
 
@@ -87,6 +78,7 @@ class SchedulerServer(
   private val contentionCounter = RegInit(0.U(64.W))
   private val contentionThresh = RegInit(contentionThreshold.U(64.W))
   private val networkCongested = RegInit(false.B)
+  io.congested := networkCongested
   private val delta = RegInit((contentionDelta).U(32.W))
   private val fifoTailReg = RegInit(0.U(64.W)) // Push at tail
   private val fifoHeadReg = RegInit(0.U(64.W)) // Pop at head
@@ -101,8 +93,7 @@ class SchedulerServer(
 
   private def capBurstAtFifoEnd(requestedBeats: UInt, ptr: UInt): UInt = {
     val slotsToEnd = maxLength - ptr
-    val afterFifoCap =
-      Mux(slotsToEnd < requestedBeats, slotsToEnd(4, 0), requestedBeats)
+    val afterFifoCap = Mux(slotsToEnd < requestedBeats, slotsToEnd(4, 0), requestedBeats)
     // AXI4 forbids an INCR burst from crossing a 4KB address boundary. Ring slots
     // are (taskWidth/8) B and a burst is up to nBeats long, so a burst that starts
     // within (nBeats-1) slots of a 4KB line would straddle it -> illegal burst ->
@@ -119,64 +110,21 @@ class SchedulerServer(
     Mux(slotsToPageEnd < afterFifoCap, slotsToPageEnd(4, 0), afterFifoCap)
   }
 
-  private val pushRequestedBeats =
-    Mux(splitPushPending, taskQueueBuffer.io.count, nBeatsUInt)
-  private val pushBurstBeats =
-    capBurstAtFifoEnd(pushRequestedBeats, fifoTailReg)
-  private val popRequestedBeats =
-    Mux(currLen < nBeats.U, currLen(4, 0), nBeatsUInt)
+  private val pushRequestedBeats = Mux(splitPushPending, taskQueueBuffer.io.count, nBeatsUInt)
+  private val pushBurstBeats = capBurstAtFifoEnd(pushRequestedBeats, fifoTailReg)
+  private val popRequestedBeats = Mux(currLen < nBeats.U, currLen(4, 0), nBeatsUInt)
   private val popBurstBeats = capBurstAtFifoEnd(popRequestedBeats, fifoHeadReg)
 
   regBlock.base(0x00)
-  regBlock.reg(
-    rPause,
-    read = true,
-    write = true,
-    desc = "Register to indicate whether the FSM is paused or not."
-  )
-  regBlock.reg(
-    rAddr,
-    read = true,
-    write = true,
-    desc = "Base address of virtual FIFO"
-  )
-  regBlock.reg(
-    maxLength,
-    read = true,
-    write = true,
-    desc = "Max length currently available for the FIFO"
-  )
-  regBlock.reg(
-    fifoTailReg,
-    read = true,
-    write = true,
-    desc = "The tail register of the FIFO"
-  )
-  regBlock.reg(
-    fifoHeadReg,
-    read = true,
-    write = true,
-    desc = "The head register of the FIFO"
-  )
-  // regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
-  regBlock.reg(
-    enableMfpgaSteal,
-    read = true,
-    write = true,
-    desc = "Enables mFPGA stealing"
-  )
-  regBlock.reg(
-    currLen,
-    read = true,
-    write = true,
-    desc = "A register that holds the current length of the FIFO"
-  )
-  regBlock.reg(
-    queuesUtil,
-    read = true,
-    write = true,
-    desc = "A register that holds the lengths of different hardware queues"
-  )
+  regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
+  regBlock.reg(rAddr, read = true, write = true, desc = "Base address of virtual FIFO")
+  regBlock.reg(maxLength, read = true, write = true, desc = "Max length currently available for the FIFO")
+  regBlock.reg(fifoTailReg, read = true, write = true, desc = "The tail register of the FIFO")
+  regBlock.reg(fifoHeadReg, read = true, write = true, desc = "The head register of the FIFO")
+  //regBlock.reg(procInterrupt, read = true, write = true, desc = "A register that allows the processor to interrupt the FSM")
+  regBlock.reg(enableMfpgaSteal, read = true, write = true, desc = "Enables mFPGA stealing")
+  regBlock.reg(currLen, read = true, write = true, desc = "A register that holds the current length of the FIFO")
+  regBlock.reg(queuesUtil, read = true, write = true, desc = "A register that holds the lengths of different hardware queues")
 
   val interruptCondition = (enableMfpgaSteal(63) =/= 0.U)
 
@@ -187,18 +135,19 @@ class SchedulerServer(
     queuesUtil := newQueuesUtil
   }
 
+
   // Logic to decide whether to serve or get tasks from remote FPGAs
   when(networkCongested || currLen > 16.U) {
-    io.serveRemote := true.B && maxLength =/= 0.U && !rPause && currLen > 16.U && enableMfpgaSteal(
-      0
-    ) =/= 0.U
+    io.serveRemote := true.B && maxLength =/= 0.U && !rPause && currLen > 16.U && enableMfpgaSteal(0) =/= 0.U
     io.getTasksFromRemote := false.B
   }.otherwise {
     io.serveRemote := false.B
-    io.getTasksFromRemote := true.B && maxLength =/= 0.U && !rPause && enableMfpgaSteal(
-      0
-    ) =/= 0.U
+    io.getTasksFromRemote := true.B && maxLength =/= 0.U && !rPause && enableMfpgaSteal(0) =/= 0.U
   }
+
+
+
+
 
   io.paused := rPause
 
@@ -265,9 +214,7 @@ class SchedulerServer(
         stateReg := state.processInterruptState
         rPause := "hFFFFFFFFFFFFFFFF".U
       }
-    }.elsewhen(
-      (currLen === maxLength && networkCongested) || maxLength < (nBeats.U + currLen)
-    ) {
+    }.elsewhen((currLen === maxLength && networkCongested) || maxLength < (nBeats.U + currLen)) {
 
       when(io.write_idle) {
         stateReg := state.extendFIFO
@@ -282,9 +229,7 @@ class SchedulerServer(
 
       stateReg := state.takeInTask
 
-    }.elsewhen(
-      !networkCongested && currLen =/= 0.U && taskQueueBuffer.io.count === 0.U
-    ) {
+    }.elsewhen(!networkCongested && currLen =/= 0.U && taskQueueBuffer.io.count === 0.U) {
 
       when(io.write_idle) { stateReg := state.popTaskMemAddress }
 
@@ -296,9 +241,7 @@ class SchedulerServer(
 
   }.elsewhen(stateReg === state.takeInTask) {
 
-    when(
-      taskQueueBuffer.io.count === (nBeats - 1).U && io.connNetwork.data.availableTask.valid
-    ) {
+    when(taskQueueBuffer.io.count === (nBeats - 1).U && io.connNetwork.data.availableTask.valid) {
 
       stateReg := state.pushTaskMemAddress
 
@@ -498,6 +441,7 @@ class SchedulerServer(
 
 // object virtualStealServer extends App {
 //   emitVerilog(
-//     new SchedulerServer(256, 4, 8, 2, 1, 64, false, 16)
+//     new LegacySchedulerServer(256, 4, 8, 2, 1, 64, false, 16)
 //   )
 // }
+

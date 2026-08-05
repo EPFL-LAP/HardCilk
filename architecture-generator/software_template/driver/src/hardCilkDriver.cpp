@@ -126,6 +126,13 @@ hardCilkDriver::hardCilkDriver(Memory *memory)
 {
     installSignalHandlers();
     memory_ = memory;
+    buildDescriptor_ = HardCilkBuildDescriptor::loadFromEnvironment();
+    if (buildDescriptor_.loaded)
+        std::cout << "[HardCilk] build descriptor v"
+                  << buildDescriptor_.schemaVersion << ": architecture="
+                  << buildDescriptor_.architecture << ", argument-server="
+                  << buildDescriptor_.argumentServer << ", management-servers="
+                  << buildDescriptor_.servers.size() << "\n";
     // sanityCheck();
 }
 
@@ -516,6 +523,17 @@ std::vector<uint64_t> hardCilkDriver::allocateContinuationAddressPool(
 
 uint64_t hardCilkDriver::packedAllocatorAddressBytes(uint64_t addressCount, uint64_t widthAddress) const
 {
+    // The allocator copied from 2469686 consumes one ordinary, full-width
+    // address per FIFO entry.  The updated allocator instead consumes the
+    // compact 29-bit representation below.  This is a datapath ABI choice, so
+    // select it from the schema-v2 build descriptor rather than trying to infer
+    // it from the shared source descriptor's address widths.
+    if (buildDescriptor_.loaded && buildDescriptor_.architecture == "legacy")
+    {
+        assert(widthAddress == 64);
+        return addressCount * sizeof(uint64_t);
+    }
+
     // Continuation pointers pack at the 34-bit HBM/device address width (matches
     // the HW allocator's widthAXIAddress), not the 64-bit internal widthAddress.
     const uint64_t continuationAddressWidth = 34; // HBM/device address width
@@ -534,6 +552,15 @@ uint64_t hardCilkDriver::packedAllocatorAddressBytes(uint64_t addressCount, uint
 
 std::vector<uint8_t> hardCilkDriver::packAllocatorAddresses(const std::vector<uint64_t> &addresses, uint64_t widthAddress) const
 {
+    if (buildDescriptor_.loaded && buildDescriptor_.architecture == "legacy")
+    {
+        assert(widthAddress == 64);
+        std::vector<uint8_t> rawAddresses(addresses.size() * sizeof(uint64_t));
+        if (!addresses.empty())
+            std::memcpy(rawAddresses.data(), addresses.data(), rawAddresses.size());
+        return rawAddresses;
+    }
+
     // Continuation pointers pack at the 34-bit HBM/device address width (matches
     // the HW allocator's widthAXIAddress), not the 64-bit internal widthAddress.
     const uint64_t continuationAddressWidth = 34; // HBM/device address width
@@ -574,6 +601,8 @@ std::vector<uint8_t> hardCilkDriver::packAllocatorAddresses(const std::vector<ui
 // scheduler server's address (index 0 -> address == base).
 uint64_t hardCilkDriver::globalRunRegAddr() const
 {
+    if (buildDescriptor_.loaded && buildDescriptor_.globalStartEnabled)
+        return buildDescriptor_.globalStartAddress;
     uint64_t numConfigPorts = 0;
     uint64_t base = 0;
     bool haveBase = false;
@@ -600,27 +629,50 @@ int hardCilkDriver::startSystem()
     // rPause writes below (sequential over AXI-lite, ~hundreds of emu cycles apart)
     // only ARM the servers; none actually run yet. When the feature is off there is
     // no such register, so skip the writes and behave exactly as before.
-    const bool globalRunEnabled = descriptor.getGlobalRunEnabled();
+    const bool globalRunEnabled = buildDescriptor_.loaded
+        ? buildDescriptor_.globalStartEnabled
+        : descriptor.getGlobalRunEnabled();
     const uint64_t globalRunAddr = globalRunEnabled ? globalRunRegAddr() : 0;
     if (globalRunEnabled)
         memory_->writeReg64(globalRunAddr, 0x0);
 
-    for (auto taskDescriptor = descriptor.taskDescriptors.begin(); taskDescriptor != descriptor.taskDescriptors.end(); taskDescriptor++)
+    if (buildDescriptor_.loaded)
     {
-        for (auto base_address = taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++)
+        for (const auto &server : buildDescriptor_.servers)
         {
-            memory_->writeReg64(*base_address + scheduler_server_rpause_shift, 0x0);
-            if(!taskDescriptor->isCont)
-                memory_->writeReg64(*base_address + scheduler_server_processorInterrupt_shift,
-                                    memory_->readReg64(*base_address + scheduler_server_processorInterrupt_shift) | 0x1);
+            if (server.kind == "scheduler" || server.kind == "spawner")
+            {
+                memory_->writeReg64(server.baseAddress + scheduler_server_rpause_shift, 0x0);
+                auto task = std::find_if(
+                    descriptor.taskDescriptors.begin(), descriptor.taskDescriptors.end(),
+                    [&](const TaskDescriptor &candidate) { return candidate.name == server.task; });
+                if (server.kind == "scheduler" &&
+                    task != descriptor.taskDescriptors.end() && !task->isCont)
+                    memory_->writeReg64(
+                        server.baseAddress + scheduler_server_processorInterrupt_shift,
+                        memory_->readReg64(server.baseAddress + scheduler_server_processorInterrupt_shift) | 0x1);
+            }
+            else if (server.kind == "allocator")
+                memory_->writeReg64(server.baseAddress + alloc_server_rpause_shift, 0x0);
+            else if (server.kind == "memoryAllocator")
+                memory_->writeReg64(server.baseAddress + mem_alloc_server_rpause_shift, 0x0);
         }
-        for (auto base_address = taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++)
+    }
+    else
+    {
+        for (auto taskDescriptor = descriptor.taskDescriptors.begin(); taskDescriptor != descriptor.taskDescriptors.end(); taskDescriptor++)
         {
-            memory_->writeReg64(*base_address + alloc_server_rpause_shift, 0x0);
-        }
-        for (auto base_address = taskDescriptor->mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.end(); base_address++)
-        {
-            memory_->writeReg64(*base_address + mem_alloc_server_rpause_shift, 0x0);
+            for (auto base_address = taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++)
+            {
+                memory_->writeReg64(*base_address + scheduler_server_rpause_shift, 0x0);
+                if(!taskDescriptor->isCont)
+                    memory_->writeReg64(*base_address + scheduler_server_processorInterrupt_shift,
+                                        memory_->readReg64(*base_address + scheduler_server_processorInterrupt_shift) | 0x1);
+            }
+            for (auto base_address = taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++)
+                memory_->writeReg64(*base_address + alloc_server_rpause_shift, 0x0);
+            for (auto base_address = taskDescriptor->mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.end(); base_address++)
+                memory_->writeReg64(*base_address + mem_alloc_server_rpause_shift, 0x0);
         }
     }
 
@@ -700,6 +752,28 @@ int hardCilkDriver::managePausedServer()
 {
     // Which server of which task is paused?
     // Check the rPause registers of the different servers
+
+    if (buildDescriptor_.loaded)
+    {
+        for (const auto &server : buildDescriptor_.servers)
+        {
+            auto taskDescriptor = std::find_if(
+                descriptor.taskDescriptors.begin(), descriptor.taskDescriptors.end(),
+                [&](const TaskDescriptor &candidate) { return candidate.name == server.task; });
+            if (taskDescriptor == descriptor.taskDescriptors.end())
+                continue;
+            if ((server.kind == "scheduler" || server.kind == "spawner") &&
+                memory_->readReg64(server.baseAddress + scheduler_server_rpause_shift) != 0x0)
+                manageSchedulerServer(server.baseAddress, *taskDescriptor);
+            else if (server.kind == "allocator" &&
+                     memory_->readReg64(server.baseAddress + alloc_server_rpause_shift) != 0x0)
+                manageAllocationServer(server.baseAddress, *taskDescriptor);
+            else if (server.kind == "memoryAllocator" &&
+                     memory_->readReg64(server.baseAddress + mem_alloc_server_rpause_shift) != 0x0)
+                manageMemoryAllocatorServer(server.baseAddress, *taskDescriptor);
+        }
+        return 0;
+    }
 
     for (auto taskDescriptor = descriptor.taskDescriptors.begin(); taskDescriptor != descriptor.taskDescriptors.end(); taskDescriptor++)
     {
@@ -954,6 +1028,25 @@ int hardCilkDriver::setReturnAddr(uint64_t addr)
  */
 int hardCilkDriver::checkPaused()
 {
+    if (buildDescriptor_.loaded)
+    {
+        for (const auto &server : buildDescriptor_.servers)
+        {
+            uint64_t pauseShift = 0;
+            if (server.kind == "scheduler" || server.kind == "spawner")
+                pauseShift = scheduler_server_rpause_shift;
+            else if (server.kind == "allocator")
+                pauseShift = alloc_server_rpause_shift;
+            else if (server.kind == "memoryAllocator")
+                pauseShift = mem_alloc_server_rpause_shift;
+            else
+                continue;
+            if (memory_->readReg64(server.baseAddress + pauseShift) != 0x0)
+                return 0;
+        }
+        return -1;
+    }
+
     for (auto taskDescriptor = descriptor.taskDescriptors.begin(); taskDescriptor != descriptor.taskDescriptors.end(); taskDescriptor++)
     {
         for (auto base_address = taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++)
@@ -991,6 +1084,27 @@ int hardCilkDriver::checkPaused()
 int hardCilkDriver::sanityCheck()
 {
 
+    if (buildDescriptor_.loaded)
+    {
+        for (const auto &server : buildDescriptor_.servers)
+        {
+            uint64_t registerShift = 0;
+            if (server.kind == "scheduler" || server.kind == "spawner")
+                registerShift = scheduler_server_raddr_shift;
+            else if (server.kind == "allocator")
+                registerShift = alloc_server_raddr_shift;
+            else if (server.kind != "memoryAllocator")
+                continue;
+            memory_->writeReg64(server.baseAddress + registerShift, 0xDDDAAADDDD);
+            if (memory_->readReg64(server.baseAddress + registerShift) != 0xDDDAAADDDD)
+                throw std::runtime_error(
+                    "Sanity check failed for " + server.kind +
+                    " server at address " + std::to_string(server.baseAddress));
+        }
+    }
+    else
+    {
+
     for (auto taskDescriptor = descriptor.taskDescriptors.begin(); taskDescriptor != descriptor.taskDescriptors.end(); taskDescriptor++)
     {
         for (auto base_address = taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.begin(); base_address != taskDescriptor->mgmtBaseAddresses.schedulerServersBaseAddresses.end(); base_address++)
@@ -1017,6 +1131,7 @@ int hardCilkDriver::sanityCheck()
                 throw std::runtime_error("Sanity check failed for memory allocator server at address " + std::to_string(*base_address));
             }
         }
+    }
     }
     // Write a 100 element array of 0xDAAADDDDD to the memory and read it back
     uint64_t addr = memory_->allocateMemFPGA(100 * sizeof(uint64_t), sizeof(uint64_t));

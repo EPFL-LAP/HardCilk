@@ -49,7 +49,8 @@ class ArgumentNotifier(
     override val axisCfgTaskAndReq: axi4s.Config =
       axi4s.Config(wData = 512, wDest = 4)
 ) extends Module
-    with NotifierHasMfpgaSupport {
+    with NotifierHasMfpgaSupport
+    with ArgumentNotifierModule {
 
   print(f"ArgumentNotifier: addrWidth: ${addrWidth} \n")
   print(f"ArgumentNotifier: pePortWidth: ${pePortWidth} \n")

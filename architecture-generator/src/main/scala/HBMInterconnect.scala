@@ -19,6 +19,7 @@ import Util.AddressTransformConfig
 import io.circe.generic.auto._
 import Util.WriteBuffer
 import Util.RemoteStreamToMem
+import Util.GeneratorProfile
 
 /**
  * A trait that encapsulates the HBM AXI interconnect generation logic.
@@ -37,6 +38,8 @@ trait HasHBMInterconnect extends Module {
   // True only for --rama-striping. --rama-no-striping also enables RAMA ports,
   // but leaves the host-visible address map linear.
   val ramaStripingEnabled: Boolean
+  val generatorProfile: GeneratorProfile
+  val enableGlobalStart: Boolean
   val cfgAxi4HBM: axi4.Config
   val cfgXDMA: axi4.Config
   val interfaceBuffer: ArrayBuffer[hdlinfo.Interface]
@@ -61,11 +64,11 @@ trait HasHBMInterconnect extends Module {
    */
   def buildAndConnectHBM(
       peMap: Map[String, Seq[VitisWriteBufferModule]],
-      schedulerMap: Map[String, Scheduler],
-      closureAllocatorMap: Map[String, Allocator],
-      argumentNotifierMap: Map[String, ArgumentNotifier],
+      schedulerMap: Map[String, SchedulerModule],
+      closureAllocatorMap: Map[String, AllocatorModule],
+      argumentNotifierMap: Map[String, ArgumentNotifierModule],
       newArgumentNotifierMap: Map[String, ArgumentNetworks],
-      memoryAllocatorMap: Map[String, Allocator],
+      memoryAllocatorMap: Map[String, AllocatorModule],
       spawnNextWBMap: Map[String, Seq[WriteBuffer]],
       sendArgumentWBMap: Map[String, Seq[WriteBuffer]],
       remoteMemAccessMap: Map[String, RemoteStreamToMem]
@@ -133,14 +136,24 @@ trait HasHBMInterconnect extends Module {
     // is its own single-interface group so the port-mapping JSON keeps the true
     // per-PE owner/role. portCount is capped at the master count.
     val consolidatedTaskGroups = new ArrayBuffer[(Int, Seq[HbmInterfaceGroup])]()
+    // With RAMA disabled, legacy ignores updated-only placement knobs and feeds
+    // every PE-owned master into the historical shared allocator. A selected
+    // RAMA mode deliberately opts into the current isolation layer so each
+    // transformed ingress remains unambiguous.
+    val useHistoricalLegacyGrouping =
+      generatorProfile.isLegacy &&
+        !enableRamaByDefault &&
+        !fullSysGenDescriptor.taskDescriptors.exists(_.generateRAMA.contains(true))
 
     fullSysGenDescriptor.taskDescriptors.foreach { task =>
       peMap.get(task.name).foreach { peArray =>
         val forceRama = task.generateRAMA.contains(true)
         val forceNoRama = task.generateRAMA.contains(false)
         val isolateNoRama = enableRamaByDefault && forceNoRama && task.totalAxiPorts == 0
-        val reserveMain = task.dedicatedAxiPort || forceRama || isolateNoRama
-        val consolidateMain = !reserveMain && task.totalAxiPorts > 0
+        val reserveMain = !useHistoricalLegacyGrouping &&
+          (task.dedicatedAxiPort || forceRama || isolateNoRama)
+        val consolidateMain = !useHistoricalLegacyGrouping &&
+          !reserveMain && task.totalAxiPorts > 0
         val taskMainGroups = new ArrayBuffer[HbmInterfaceGroup]()
         peArray.zipWithIndex.foreach { case (pe, peIndex) =>
           val rolePorts = peOwnedPorts(pe, task)
@@ -230,6 +243,11 @@ trait HasHBMInterconnect extends Module {
             HbmInterfaceGroup(s"scheduler:${task.name}:vss:$portIndex", Seq(port), Seq("ring"))
           )
         }
+        scheduler.legacySpawnerAxi.zipWithIndex.foreach { case (port, portIndex) =>
+          schedulerInterfaceGroups.addOne(
+            HbmInterfaceGroup(s"spawner:${task.name}:$portIndex", Seq(port), Seq("spawner"))
+          )
+        }
       }
     }
 
@@ -278,20 +296,30 @@ trait HasHBMInterconnect extends Module {
           //  ArgumentNotifier.scala.)
           val counterPort = notifier.axi_full_argRoute(serverIndex)
           val taskPort = notifier.axi_full_argRoute(serverIndex + serverCount)
-          argumentNotifierGroups.addOne(
-            HbmInterfaceGroup(
-              s"argumentNotifier:${task.name}:$serverIndex#counter",
-              Seq(counterPort),
-              Seq("counter")
+          if (useHistoricalLegacyGrouping) {
+            argumentNotifierGroups.addOne(
+              HbmInterfaceGroup(
+                s"argumentNotifier:${task.name}:$serverIndex",
+                Seq(counterPort, taskPort),
+                Seq("counter", "task")
+              )
             )
-          )
-          argumentNotifierGroups.addOne(
-            HbmInterfaceGroup(
-              s"argumentNotifier:${task.name}:$serverIndex#task",
-              Seq(taskPort),
-              Seq("task")
+          } else {
+            argumentNotifierGroups.addOne(
+              HbmInterfaceGroup(
+                s"argumentNotifier:${task.name}:$serverIndex#counter",
+                Seq(counterPort),
+                Seq("counter")
+              )
             )
-          )
+            argumentNotifierGroups.addOne(
+              HbmInterfaceGroup(
+                s"argumentNotifier:${task.name}:$serverIndex#task",
+                Seq(taskPort),
+                Seq("task")
+              )
+            )
+          }
           interfacesArgumentNotifier.addOne(counterPort)
           interfacesArgumentNotifier.addOne(taskPort)
         }
@@ -653,6 +681,13 @@ trait HasHBMInterconnect extends Module {
         val label = if (slot.label.nonEmpty) slot.label else s"statusSlot:$slotIndex"
         val fieldsJson = slot.fields.map { field =>
           val t = field.target
+          val cachedOnly = Set("slowUpdateHandler", "evictionSaver", "argumentServer")
+            .contains(t.kind)
+          val active = !cachedOnly || fullSysGenDescriptor.taskDescriptors
+            .find(_.name == t.taskName).exists(_.usesNewArgumentNotifier)
+          val activityJson =
+            if (active) "\"active\":true"
+            else "\"active\":false,\"inactiveReason\":\"argument-server-mode\""
           val selectorJson = t.kind match {
             case "pe" | "slowUpdateHandler" | "evictionSaver" =>
               s",\"port\":\"${t.port}\""
@@ -662,7 +697,7 @@ trait HasHBMInterconnect extends Module {
               s""","port":"${t.port}","lane":${t.lane}"""
             case _ => "" // rejected by descriptor validation before elaboration
           }
-          s"""{"encoding":"${field.encoding}","target":{"kind":"${t.kind}","taskName":"${t.taskName}","index":${t.index}$selectorJson}}"""
+          s"""{"encoding":"${field.encoding}",$activityJson,"target":{"kind":"${t.kind}","taskName":"${t.taskName}","index":${t.index}$selectorJson}}"""
         }.mkString(",")
         val peTargets = slot.fields.map(_.target).filter(_.kind == "pe")
         // The host's PE conservation view interprets a canonical PE nibble as
@@ -712,6 +747,40 @@ $mastersJson
     }"""
       }.mkString(",\n")
 
+      val compactHbmSlaves = hbmSlaves.filter(_.nonEmpty)
+      def hbmPortForOwner(ownerPrefix: String): String =
+        compactHbmSlaves.zipWithIndex.collectFirst {
+          case (buf, port) if buf.exists(iface =>
+              Option(ownerOf.get(iface)).exists(_.startsWith(ownerPrefix))) => port.toString
+        }.getOrElse("null")
+
+      val managementEntries = fullSysGenDescriptor.taskDescriptors.flatMap { task =>
+        val schedulerEntries = task.mgmtBaseAddresses.schedulerServersBaseAddresses.zipWithIndex.map {
+          case (baseAddress, index) =>
+            val rootSeed = task.isRoot
+            s"""    {"kind":"scheduler","task":"${task.name}","index":$index,"baseAddress":$baseAddress,"registerLayout":"scheduler-v1","queueCapacity":${task.getCapacityVirtualQueue("scheduler")},"entryBytes":${task.widthTask / 8},"hbmPort":${hbmPortForOwner(s"scheduler:${task.name}:vss:$index")},"rootSeed":$rootSeed}"""
+        }
+        val spawnerEntries = task.mgmtBaseAddresses.spawnerServersBaseAddresses.zipWithIndex.map {
+          case (baseAddress, index) =>
+            s"""    {"kind":"spawner","task":"${task.name}","index":$index,"baseAddress":$baseAddress,"registerLayout":"spawner-v1","queueCapacity":${task.getCapacityVirtualQueue("scheduler")},"entryBytes":${task.widthTask / 8},"hbmPort":${hbmPortForOwner(s"spawner:${task.name}:$index")},"rootSeed":false}"""
+        }
+        val allocatorEntries = task.mgmtBaseAddresses.allocationServersBaseAddresses.zipWithIndex.map {
+          case (baseAddress, index) =>
+            s"""    {"kind":"allocator","task":"${task.name}","index":$index,"baseAddress":$baseAddress,"registerLayout":"allocator-v1","queueCapacity":${task.getCapacityVirtualQueue("allocator")},"entryBytes":${fullSysGenDescriptor.widthAddress / 8},"hbmPort":${hbmPortForOwner(s"closureAllocator:${task.name}:$index")},"rootSeed":false}"""
+        }
+        val memoryAllocatorEntries = task.mgmtBaseAddresses.memoryAllocatorServersBaseAddresses.zipWithIndex.map {
+          case (baseAddress, index) =>
+            s"""    {"kind":"memoryAllocator","task":"${task.name}","index":$index,"baseAddress":$baseAddress,"registerLayout":"memory-allocator-v1","queueCapacity":${task.getCapacityVirtualQueue("memoryAllocator")},"entryBytes":${fullSysGenDescriptor.widthAddress / 8},"hbmPort":${hbmPortForOwner(s"memoryAllocator:${task.name}:$index")},"rootSeed":false}"""
+        }
+        schedulerEntries ++ spawnerEntries ++ allocatorEntries ++ memoryAllocatorEntries
+      }.mkString(",\n")
+
+      val managementBase = if (fullSysGenDescriptor.isVitisProject) 0x10 else 0
+      val globalStartAddress =
+        if (enableGlobalStart)
+          ((fullSysGenDescriptor.getNumConfigPorts() << 6) + managementBase).toString
+        else "null"
+
       val stripedHostMapping = ramaStripingEnabled && ramaPortIndices.nonEmpty
       val stripeMemoryCount =
         if (fullSysGenDescriptor.watcherConfig.isDefined) 16 else 32
@@ -722,10 +791,20 @@ $mastersJson
         else
           """{"mode":"none","runtimeModes":[]}"""
 
+      val ramaMode =
+        if (ramaStripingEnabled) "striped"
+        else if (enableRamaByDefault) "non-striped"
+        else "descriptor-only"
+
       hbmPortMappingJson =
         s"""{
+  "schemaVersion": 2,
   "design": "${fullSysGenDescriptor.name}",
   "numComputePorts": ${hbmSlaves.count(_.nonEmpty)},
+  "build": {"architecture":"${generatorProfile.architecture.cliName}","argumentServer":"${generatorProfile.argumentServer.cliName}","argumentServerImplementation":"${generatorProfile.argumentServerImplementation}","referenceCommit":${if (generatorProfile.isLegacy) "\"2469686\"" else "null"},"ramaMode":"$ramaMode","globalStart":{"available":${!generatorProfile.isLegacy},"enabled":$enableGlobalStart,"registerAddress":$globalStartAddress}},
+  "management": {"registerStrideBytes":64,"servers":[
+$managementEntries
+  ]},
   "note": "'pes' is the configured physical STATUS-slot table. Each port master carries 'role' (main = the m_axi_gmem compute port; argOut/argDataOut/spawnNext = argument/continuation write-buffer ports; ring/spawner = scheduler ports) and 'peNumber' = the selected STATUS slot that owns it, or null for shared servers (scheduler/allocator/argumentNotifier). port index == watcher BW_READ/BW_WRITE tap index. owner = '<kind>:<task>:<index>[#<role>]'.",
   "rama": {"ports": [$ramaPortsJson], "hostMapping": $hostMappingJson},
   "statusSlotSchema": {"slotBits": 4, "fieldOrder": "lowToHigh", "encodings": {"boolean1": {"bits": 1}, "readyValid2": {"bits": 2, "bit0": "valid", "bit1": "ready"}}},

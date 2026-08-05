@@ -19,13 +19,22 @@ case class BuilderConfig(
   project_sc_generation: Boolean = false,
   output_dir: String = ".",
   json_path: String = "",
+  benchmarkName: Option[String] = None,
+  architecture: String = "updated",
+  argumentServer: Option[String] = None,
   // additional small flags that the HardCilk constructor sometimes uses
   argumentNotifierCutCount: Int = 1,
   addressTransformFlag: Boolean = false,
   // Opt-in kernel-global start broadcast (releases all scheduler servers on one
   // cycle + anchors the watcher start gate). Default OFF == pre-feature design.
   enableGlobalStart: Boolean = false
-)
+) {
+  def generatorProfile: GeneratorProfile =
+    GeneratorProfile.resolve(architecture, argumentServer).fold(
+      message => throw new IllegalArgumentException(message),
+      identity
+    )
+}
 
 object ArgParser {
   private val builder = OParser.builder[BuilderConfig]
@@ -41,6 +50,13 @@ object ArgParser {
       opt[String]('o', "output-dir")
         .action((x, c) => c.copy(output_dir = x))
         .text("output directory"),
+      opt[String]("benchmark-name")
+        .action((x, c) => c.copy(benchmarkName = Some(x)))
+        .validate(x =>
+          if (x.matches("[A-Za-z0-9][A-Za-z0-9._-]*")) success
+          else failure("--benchmark-name must be a safe path name")
+        )
+        .text("override the JSON basename used for output and software selection"),
       opt[Unit]('d', "debug")
         .action((_, c) => c.copy(debug = true))
         .text("enable debug hardware counters and simulation logging"),
@@ -77,6 +93,20 @@ object ArgParser {
       opt[Unit]("questa-rama-striping")
         .action((_, c) => c.copy(ramaStriping = true))
         .text("Alias for --rama-striping (kept for compatibility with Mahfouz's QuestaSim flow)"),
+      opt[String]("architecture")
+        .action((x, c) => c.copy(architecture = x))
+        .validate(x =>
+          if (ArchitectureMode.parse(x).isDefined) success
+          else failure("--architecture must be updated or legacy")
+        )
+        .text("select architecture profile: updated or legacy"),
+      opt[String]("argument-server")
+        .action((x, c) => c.copy(argumentServer = Some(x)))
+        .validate(x =>
+          if (ArgumentServerMode.parse(x).isDefined) success
+          else failure("--argument-server must be cached or no-cache")
+        )
+        .text("select argument server: cached or no-cache"),
       opt[Unit]('s', "sc-headers")
         .action((_, c) => c.copy(sc_header_generation = true))
         .text("Generates the C++ header for SystemC simulation"),
@@ -107,7 +137,13 @@ object ArgParser {
       checkConfig(c =>
         if (c.ramaStriping && c.ramaNoStriping)
           failure("--rama-striping and --rama-no-striping are mutually exclusive")
-        else success
+        else GeneratorProfile.resolve(c.architecture, c.argumentServer) match {
+          case Left(message) => failure(message)
+          case Right(profile)
+              if profile.isLegacy && c.enableGlobalStart =>
+            failure("--global-start is incompatible with --architecture legacy")
+          case Right(_) => success
+        }
       )
     )
   }
