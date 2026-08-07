@@ -55,23 +55,16 @@ object KernelXmlTemplate {
   ): Unit = {
     Files.createDirectories(Paths.get(outputDir))
 
-    // When a watcher is present it owns the last (topmost) master and is mapped to
-    // the exclusive top HBM channels HBM[16:31]; every other master is confined to
-    // HBM[0:15] and its addressable range is the lower 8 GB.
-    val hasWatcher = descriptor.watcherConfig.isDefined
-
     val xml =
       renderKernelXml(
         descriptor,
         numHbmPortExports,
         kernelName,
-        vlnvName,
-        hasWatcher
+        vlnvName
       )
     write(s"$outputDir/user_0.xml", xml)
 
-    val cfg =
-      renderConnCfg(descriptor, numHbmPortExports, kernelName, hasWatcher)
+    val cfg = renderConnCfg(descriptor, numHbmPortExports, kernelName)
     write(s"$outputDir/conn_u55c.cfg", cfg)
   }
 
@@ -112,16 +105,12 @@ object KernelXmlTemplate {
       descriptor: FullSysGenDescriptor,
       numMasters: Int,
       kernelName: String,
-      vlnvName: String,
-      hasWatcher: Boolean
+      vlnvName: String
   ): String = {
 
     val mfpga = descriptor.mFPGASynth || descriptor.mFPGASimulation
 
-    // With exclusive HBM channels every master sees only an 8 GB window
-    // (HBM[0:15] for compute, HBM[16:31] for the watcher); otherwise the full
-    // 16 GB range as before.
-    val masterRange = if (hasWatcher) "0x1FFFFFFFF" else "0x3FFFFFFFF"
+    val masterRange = "0x3FFFFFFFF"
 
     // --- ports ---
     val masterPorts = (0 until numMasters).map { i =>
@@ -212,8 +201,7 @@ ${argsBlock}
   private def renderConnCfg(
       descriptor: FullSysGenDescriptor,
       numMasters: Int,
-      kernelName: String,
-      hasWatcher: Boolean
+      kernelName: String
   ): String = {
 
     val freqHz = descriptor.targetFrequency.toLong * 1000000L
@@ -225,27 +213,15 @@ ${argsBlock}
     // The `.N` suffix is the (standard Vivado) HBM pseudo-channel the master binds
     // to within its mapped range; it need not be unique across masters.
     //
-    // Default (no watcher): every master maps to the full U55C HBM range. Keep the
-    // last master on PC0 (shortest path to HBM0) and give the others nonzero PCs.
+    // Every master maps to the full U55C HBM range. Keep the last master on PC0
+    // (shortest path to HBM0) and give the others nonzero PCs.
     val lockPortIndex = numMasters - 1
     def fullRangeSwitchIndex(i: Int): Int =
       if (i == lockPortIndex) 0 else i + 1
 
-    // With a watcher: the topmost master (index numMasters-1) is the watcher and
-    // gets the exclusive top half HBM[16:31]; every compute/server master is
-    // confined to HBM[0:15] so the watcher's traffic never crosses theirs. Each
-    // port's pseudo-channel stays inside its mapped range (compute spread across
-    // PC 0..15, watcher pinned to PC 16).
-    val watcherPortIndex = numMasters - 1
-    def spTag(i: Int): String =
-      if (hasWatcher) {
-        if (i == watcherPortIndex) "HBM[16:31].31"
-        else s"HBM[0:15].${i % 31}"
-      } else s"HBM[0:31].${fullRangeSwitchIndex(i)}"
-
     val spLines = (0 until numMasters)
       .map { i =>
-        s"sp=${kernelName}.${portName(i)}:${spTag(i)}"
+        s"sp=${kernelName}.${portName(i)}:HBM[0:31].${fullRangeSwitchIndex(i)}"
       }
       .mkString("\n")
 

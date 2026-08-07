@@ -118,7 +118,7 @@ public:
     // fresh run never reads stale data left in device memory by a previous run
     // (an xrt-smi reset does NOT clear HBM). Mirrors triangleCountDecoupled's
     // clearComputeHBM, but BellmanFord maps its masters across all 32 banks
-    // (HBM[0:31]) and has no telemetry banks to spare, so clear the whole range.
+    // (HBM[0:31]), so clear the whole range.
     clearHBM();
 
     Addr edges_base = 0;

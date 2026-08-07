@@ -111,7 +111,7 @@ struct XRTMemory : Memory{
     // A single large `normal` BO's host mapping is not reliably backed at high
     // offsets on this platform, so writing past the first ~tens of MB faults with
     // SIGBUS ("Bus error"). Instead tile the bank with several small BOs (the same
-    // 64 MB size the telemetry path writes successfully), each written only at
+    // 64 MB size used successfully by large device-side transfers), each written only at
     // offset 0. Holding them alive together forces XRT to place them at distinct,
     // adjacent device offsets so the whole bank is covered; they are released at
     // the end of each bank iteration.
@@ -160,7 +160,7 @@ struct XRTMemory : Memory{
     }
 
     // Additive, non-breaking helper (used only by the triangleCountDecoupled
-    // telemetry path): allocate a physically-contiguous span that BEGINS at a
+    // large direct-device transfers): allocate a physically-contiguous span that BEGINS at a
     // specific HBM bank. Because each U55C HBM bank has a fixed base address
     // (bank * BANK_SIZE), this lets the caller pin a region to a known device
     // address (e.g. firstBank=16 -> 0x2_0000_0000). The BOs are registered in
@@ -189,10 +189,8 @@ struct XRTMemory : Memory{
               "allocateMemFPGASpanFromBank: a bank in the requested span has insufficient free space");
         }
 
-        // Normal (host-mapped) BO rather than device_only: the telemetry watcher
-        // writes here directly (not as a kernel argument), and a host-mapped BO
-        // lets bo.read()/sync() reflect those device-side writes. device_only BOs
-        // are only safe when the kernel owns them as an argument.
+        // Use a normal host-mapped BO so callers can read and synchronize spans
+        // that are written directly by device-side logic.
         auto buffer = xrt::bo(dev_, chunk_size, xrt::bo::flags::normal, bank);
         uint64_t addr = buffer.address();
 
@@ -297,10 +295,8 @@ struct XRTMemory : Memory{
   }
 
   // Pull a device region into its host backing so a subsequent copyFromDevice
-  // reflects writes made directly by the kernel (e.g. the telemetry watcher
-  // reaches its BO by hardcoded address, not as a kernel argument, so the host
-  // side is stale until DMA'd back). Returns true if a sync was issued for the
-  // whole range.
+  // reflects writes made directly by device-side logic. Returns true if a sync
+  // was issued for the whole range.
   bool syncRegionFromDevice(uint64_t addr, uint64_t size) {
     uint64_t current_addr = addr;
     uint64_t left = size;
