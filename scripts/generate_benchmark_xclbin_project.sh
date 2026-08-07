@@ -4,9 +4,9 @@ set -euo pipefail
 VALID_BENCHMARKS=("BFS" "WP-BF" "BellmanFord" "ApproxDenseSub" "MaximalIndependentSet" "GraphColoring" "graphRandomWalk" "pageRank" "triangleCount" "triangleCountDecoupled" "countDecoupled")
 
 usage() {
-    echo "Usage: $0 <benchmarkName> [workspaceNumber]"
+    echo "Usage: $0 <benchmarkName> [workspaceVariant]"
     echo "  benchmarkName: one of ${VALID_BENCHMARKS[*]}"
-    echo "  workspaceNumber: optional numeric suffix, e.g. BFS 2 -> xclbin-workspace/BFS-2"
+    echo "  workspaceVariant: optional suffix, e.g. BFS CoolNewVersion -> xclbin-workspace/BFS-CoolNewVersion"
     exit 1
 }
 
@@ -18,8 +18,8 @@ fi
 BENCHMARK="$1"
 WORKSPACE_SUFFIX=""
 if [[ $# -eq 2 ]]; then
-    if [[ ! "$2" =~ ^[0-9]+$ ]]; then
-        echo "Error: workspaceNumber must be numeric, got '$2'"
+    if [[ ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        echo "Error: workspaceVariant must contain only letters, numbers, '.', '_' or '-' and must start with a letter or number; got '$2'"
         exit 1
     fi
     WORKSPACE_SUFFIX="-$2"
