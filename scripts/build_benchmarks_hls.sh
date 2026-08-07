@@ -62,13 +62,11 @@
 #       ├── whileLoopMain/
 #       ├── whileLoopMain_reentry0/
 #       ├── whileLoopMain_reentry0_cont0/
-#       ├── memReader/
-#       └── watcher/          ← telemetry kernel
+#       └── memReader/
 #   └── countDecoupled/
 #       ├── taskInitiator_reentry0/
 #       ├── taskAdder_cont0/
-#       ├── memReader/
-#       └── watcher/          ← telemetry kernel
+#       └── memReader/
 # =============================================================================
 
 set -euo pipefail
@@ -108,8 +106,8 @@ declare -A BENCHMARK_KERNELS=(
     [graphRandomWalk]="walker walk_gen"
     [pageRank]="page_rank_map vertex_map"
     [triangleCount]="triangle vertex_map"
-    [triangleCountDecoupled]="whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader watcher"
-    [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader watcher"
+    [triangleCountDecoupled]="whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader"
+    [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader"
 )
 
 # Ordered list so the build sequence is deterministic

@@ -16,7 +16,7 @@
 # =============================================================================
 set -e
 
-ROOT=/beta/bradley/HardCilk
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG=$ROOT/scripts/cycle.log
 
 BENCHMARK=${1:-${BENCHMARK:-BFS}}
@@ -32,8 +32,8 @@ declare -A HLS_KERNELS=(
   [ApproxDenseSub]="ApproxDenseSub vertex_subset_helper"
   [MaximalIndependentSet]="MaximalIndependentSet NGS mis_loop_helper"
   [GraphColoring]="GraphColoring color_init_helper color_loop_helper"
-  [triangleCountDecoupled]="whileLoopMain whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader watcher"
-  [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader watcher"
+  [triangleCountDecoupled]="whileLoopMain whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader"
+  [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader"
 )
 
 declare -A HOST_TARGET=(
@@ -59,7 +59,7 @@ declare -A XCLBIN_NAME=(
 )
 
 declare -A REDUCE_AXI=(
-  [BFS]=7
+  [BFS]=16
   [WP-BF]=30
   [BellmanFord]=30
   [ApproxDenseSub]=30

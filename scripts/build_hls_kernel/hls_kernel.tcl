@@ -26,15 +26,7 @@ foreach src_file { @@SOURCES@@ } {
 }
 
 # ── Solution configuration ────────────────────────────────────────────────────
-# Most kernels are standalone Vitis kernels (vitis flow). The free-running
-# telemetry "watcher" is an internal block of the HardCilk top: it needs the
-# Vivado IP flow so that ap_ctrl_none + the discrete ap_none status pins survive
-# (the vitis flow forces every scalar through an s_axilite control block).
-set flow_target "vitis"
-if { {@@KERNEL@@} eq "watcher" } {
-    set flow_target "vivado"
-}
-open_solution -reset "solution1" -flow_target $flow_target
+open_solution -reset "solution1" -flow_target vitis
 set_part {@@PART@@}
 create_clock -period @@CLOCK_PERIOD_NS@@ -name default
 
