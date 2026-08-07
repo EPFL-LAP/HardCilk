@@ -121,6 +121,18 @@ static inline addr_t roots_buffer(GraphColoring_args &task, uint32_t active)
     return active == 0 ? task.roots0 : task.roots1;
 }
 
+static inline addr_t store_and_fence_continuation_counter(
+    void *mem, addr_t cont, uint32_t counter)
+{
+#pragma HLS INLINE
+    MEM_OUT_VOLATILE(mem, cont, uint32_t, counter);
+    volatile uint32_t flush = MEM_IN_VOLATILE(mem, cont, uint32_t);
+    addr_t helper_cont = cont;
+    if (flush == 0xFFFFFFFFu)
+        helper_cont ^= (addr_t)flush;
+    return helper_cont;
+}
+
 static inline bool runs_before(uint32_t left_log_degree, uint32_t left_rank,
                                uint32_t right_log_degree, uint32_t right_rank)
 {
@@ -487,8 +499,8 @@ void GraphColoring(void *mem_0,
     MEM_OUT(mem_0, task.cont + 80, addr_t, task.nextFChar);
     MEM_OUT(mem_0, task.cont + 88, addr_t, task.colorsUsed);
     MEM_OUT(mem_0, task.cont + 96, addr_t, task.cont);
-    // Otherwise the counter would get written first.
-    MEM_OUT(mem_0, task.cont, uint32_t, task.counter);
+    addr_t helper_cont =
+        store_and_fence_continuation_counter(mem_0, task.cont, task.counter);
 
     if (task.done)
         return;
@@ -505,7 +517,7 @@ void GraphColoring(void *mem_0,
             init_task.color = task.color;
             init_task.roots = task.roots0;
             init_task.nextFChar = task.nextFChar;
-            init_task.cont = task.cont;
+            init_task.cont = helper_cont;
             init_task.index = i;
             init_task.vertex_count = task.vertex_count;
             init_task.task_vertex_count =
@@ -529,7 +541,7 @@ void GraphColoring(void *mem_0,
         loop_task.next_roots = next_roots;
         loop_task.nextFChar = task.nextFChar;
         loop_task.colorsUsed = task.colorsUsed;
-        loop_task.cont = task.cont;
+        loop_task.cont = helper_cont;
         loop_task.index = i;
         loop_task.frontier_length = task.frontier_length;
         loop_task.task_vertex_count =

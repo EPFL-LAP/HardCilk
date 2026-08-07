@@ -6,8 +6,10 @@
 # you'd otherwise do a step at a time (see LockInstallPlan.md "How To Run").
 #
 # Usage:
-#   bash scripts/rebuild_and_run.sh [benchmark] [workspaceNumber]
+#   bash scripts/rebuild_and_run.sh [benchmark] [workspaceVariant]
 #   bash scripts/rebuild_and_run.sh BFS 2
+#   bash scripts/rebuild_and_run.sh BFS CoolNewVersion
+#   REDUCE_AXI=7 bash scripts/rebuild_and_run.sh BFS 2
 #   BENCHMARK=GraphColoring RUN_ARGS="/path/graph.txt 64 1 1200" bash scripts/rebuild_and_run.sh
 #   SKIP_HLS=1 bash scripts/rebuild_and_run.sh BFS
 #   START_STEP=5 bash scripts/rebuild_and_run.sh BFS 2
@@ -20,7 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG=$ROOT/scripts/cycle.log
 
 BENCHMARK=${1:-${BENCHMARK:-BFS}}
-WORKSPACE_NUMBER=${2:-${WORKSPACE_NUMBER:-}}
+WORKSPACE_VARIANT=${2:-${WORKSPACE_VARIANT:-${WORKSPACE_NUMBER:-}}}
 WATCHDOG=${WATCHDOG:-1200}
 RUN_TIMEOUT=${RUN_TIMEOUT:-1500}
 START_STEP=${START_STEP:-1}
@@ -58,7 +60,7 @@ declare -A XCLBIN_NAME=(
   [countDecoupled]="countDecoupled.xclbin"
 )
 
-declare -A REDUCE_AXI=(
+declare -A DEFAULT_REDUCE_AXI=(
   [BFS]=16
   [WP-BF]=30
   [BellmanFord]=30
@@ -103,8 +105,8 @@ if [[ ! -v HLS_KERNELS["$BENCHMARK"] ]]; then
   echo "Unknown benchmark '$BENCHMARK'. Valid: ${!HLS_KERNELS[*]}" >&2
   exit 1
 fi
-if [[ -n "$WORKSPACE_NUMBER" && ! "$WORKSPACE_NUMBER" =~ ^[0-9]+$ ]]; then
-  echo "workspaceNumber must be numeric, got '$WORKSPACE_NUMBER'" >&2
+if [[ -n "$WORKSPACE_VARIANT" && ! "$WORKSPACE_VARIANT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "workspaceVariant must contain only letters, numbers, '.', '_' or '-' and must start with a letter or number; got '$WORKSPACE_VARIANT'" >&2
   exit 1
 fi
 if [[ ! "$START_STEP" =~ ^[1-6]$ ]]; then
@@ -113,10 +115,16 @@ if [[ ! "$START_STEP" =~ ^[1-6]$ ]]; then
 fi
 
 WORKSPACE_SUFFIX=""
-if [[ -n "$WORKSPACE_NUMBER" ]]; then
-  WORKSPACE_SUFFIX="-$WORKSPACE_NUMBER"
+if [[ -n "$WORKSPACE_VARIANT" ]]; then
+  WORKSPACE_SUFFIX="-$WORKSPACE_VARIANT"
 fi
 WORKSPACE_NAME="${BENCHMARK}${WORKSPACE_SUFFIX}"
+
+REDUCE_AXI_VALUE=${REDUCE_AXI:-${DEFAULT_REDUCE_AXI[$BENCHMARK]}}
+if [[ ! "$REDUCE_AXI_VALUE" =~ ^[1-9][0-9]*$ ]] || (( 10#$REDUCE_AXI_VALUE > 32 )); then
+  echo "REDUCE_AXI must be an integer from 1 to 32, got '$REDUCE_AXI_VALUE'" >&2
+  exit 1
+fi
 
 RUN_ARGS=${RUN_ARGS:-$(default_run_args)}
 
@@ -129,6 +137,7 @@ BUILD_DIR=$WORKSPACE_DIR/build_dir.hw_emu.$PLATFORM
 
 echo "===== BENCHMARK $BENCHMARK ====="
 echo "WORKSPACE=$WORKSPACE_NAME"
+echo "REDUCE_AXI=$REDUCE_AXI_VALUE"
 echo "START_STEP=$START_STEP"
 echo "RUN_ARGS=$RUN_ARGS"
 
@@ -152,15 +161,15 @@ if (( START_STEP <= 2 )); then
   source ~/.local/opt/hdlstuff/bin/activate-hdlstuff.sh
   rm -rf "$ROOT/HardCilk-output/${BENCHMARK}_hardcilk_output"
   cd "$ROOT/architecture-generator"
-  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p"
+  sbt "runMain HardCilk.HardCilkEmitter taskDescriptors/mfpga/${BENCHMARK}.json -o ../HardCilk-output/ -g -c -r $REDUCE_AXI_VALUE -p"
 fi
 
 if (( START_STEP <= 3 )); then
   echo "===== STEP3 STAGE ====="
   rm -rf "$WORKSPACE_DIR/src/IP" "$WORKSPACE_DIR/src/host"
   cd "$ROOT/scripts"
-  if [[ -n "$WORKSPACE_NUMBER" ]]; then
-    bash generate_benchmark_xclbin_project.sh "$BENCHMARK" "$WORKSPACE_NUMBER"
+  if [[ -n "$WORKSPACE_VARIANT" ]]; then
+    bash generate_benchmark_xclbin_project.sh "$BENCHMARK" "$WORKSPACE_VARIANT"
   else
     bash generate_benchmark_xclbin_project.sh "$BENCHMARK"
   fi
