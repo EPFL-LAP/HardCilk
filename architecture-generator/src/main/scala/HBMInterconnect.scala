@@ -425,6 +425,12 @@ trait HasHBMInterconnect extends Module {
       }
     }
 
+    // The U55C HBM SAXI preserves at most six AXI ID bits. Server allocation
+    // accounts for the mux-select bits up front so a legal native ID is not
+    // needlessly collapsed later by PATH 3.
+    val hbmIdCap = 6
+    var unfairServerPackingDetails = Seq.empty[String]
+
     // Pack each consolidating task's main masters onto its reserved port block,
     // split as evenly as possible. Each reserved port becomes a flat, shape-
     // uniform mux -> PATH 2 (native ids, no ProtocolConverter), and is never
@@ -503,39 +509,105 @@ trait HasHBMInterconnect extends Module {
         // PATH 3 (and warn) rather than silently corrupting ids.
         assignGroupsToHbmPorts(peInterfaceGroups.toSeq, numReserved, peMux)
       }
-      // Shape-aware server allocation: group by wData (not (wData, wId))
-      // since different wId values can be harmonized by zero-extension (PATH 2b).
-      // This clusters same-data-width servers onto the same HBM ports.
-      val serverByDataWidth: Seq[(Int, Seq[HbmInterfaceGroup])] =
+      // Shape-aware server allocation. ID widths may differ because PATH 2b can
+      // zero-extend them, and user fields are yanked before the mux. Everything
+      // else must agree, especially read/write direction: ProtocolConverter
+      // preserves those capabilities and cannot connect a write-only allocator
+      // to a read/write mux port.
+      def muxCompatibleServerShape(cfg: axi4.Config): axi4.Config =
+        cfg.copy(
+          wId = 0,
+          wUserAR = 0,
+          wUserR = 0,
+          wUserAW = 0,
+          wUserW = 0,
+          wUserB = 0
+        )
+      val serverByShape: Seq[(axi4.Config, Seq[HbmInterfaceGroup])] =
         serverGroups.toSeq
-          .groupBy(g => g.interfaces.head.cfg.wData)
+          .groupBy(g => muxCompatibleServerShape(g.interfaces.head.cfg))
           .toSeq
-          .sortBy { case (dw, gs) => (-gs.map(_.size).sum, dw) }
-      val totalServerIfaces = math.max(1, serverGroups.map(_.size).sum)
-
-      if (serverByDataWidth.length <= serverMux && serverGroups.nonEmpty) {
-        // Enough server ports to give every data-width class its own
-        // contiguous, proportional block.
+          .sortBy { case (shape, gs) =>
+            (-gs.map(_.size).sum, shape.wData, shape.wId)
+          }
+      if (serverByShape.length <= serverMux && serverGroups.nonEmpty) {
+        // First give every shape enough ports to keep maxNativeId + muxSelect
+        // within the HBM ID cap. Low-ID masters can therefore share aggressively,
+        // while an ID-6 master must remain private. Spend any ports left over on
+        // the currently busiest shape to avoid gratuitous traffic imbalance.
         val serverFirst = numReserved + peMux
-        var portCursor = serverFirst
-        serverByDataWidth.zipWithIndex.foreach { case ((_, groups), idx) =>
-          val classesLeft = serverByDataWidth.length - idx
-          val portsLeft   = serverMux - (portCursor - serverFirst)
-          val share =
-            if (idx == serverByDataWidth.length - 1) portsLeft
-            else math.max(
-              1,
-              math.min(
-                portsLeft - (classesLeft - 1),
-                math.round(serverMux.toDouble * groups.map(_.size).sum / totalServerIfaces).toInt
-              )
-            )
-          assignGroupsToHbmPorts(groups, portCursor, share)
-          portCursor += share
+        final case class ServerShapeAllocation(
+            shape: axi4.Config,
+            groups: Seq[HbmInterfaceGroup],
+            maxNativeId: Int,
+            var ports: Int
+        ) {
+          val interfaceCount: Int = groups.map(_.size).sum
+          val maxPerPort: Int =
+            if (maxNativeId >= hbmIdCap) 1 else 1 << (hbmIdCap - maxNativeId)
+          def load: Int = (interfaceCount + ports - 1) / ports
+          def canUseAnotherPort: Boolean = ports < interfaceCount
+        }
+
+        val allocations = serverByShape.map { case (shape, groups) =>
+          val count = groups.map(_.size).sum
+          val maxId = groups.flatMap(_.interfaces.map(_.cfg.wId)).max
+          val maxPerPort = if (maxId >= hbmIdCap) 1 else 1 << (hbmIdCap - maxId)
+          ServerShapeAllocation(
+            shape,
+            groups,
+            maxId,
+            ports = math.max(1, (count + maxPerPort - 1) / maxPerPort)
+          )
+        }
+
+        val minimumPorts = allocations.map(_.ports).sum
+        if (minimumPorts <= serverMux) {
+          var portsLeft = serverMux - minimumPorts
+          while (portsLeft > 0 && allocations.exists(_.canUseAnotherPort)) {
+            val chosen = allocations.filter(_.canUseAnotherPort).maxBy { a =>
+              // Highest current fan-in first. Ties favor more total traffic,
+              // then lower IDs (which remain the preferred sharing class).
+              (a.load, a.interfaceCount, -a.maxNativeId)
+            }
+            chosen.ports += 1
+            portsLeft -= 1
+          }
+
+          var portCursor = serverFirst
+          // Place the most shareable (smallest-ID) classes first. This ordering
+          // is cosmetic for HBM, but makes the allocation summary intuitive.
+          allocations.sortBy(a => (a.maxNativeId, -a.interfaceCount)).foreach { a =>
+            assignGroupsToHbmPorts(a.groups, portCursor, a.ports)
+            portCursor += a.ports
+          }
+        } else {
+          // There are not enough physical ports for an ID-safe allocation.
+          // Keep the generic balanced placement; PATH 3 will identify every
+          // actual overflow with its existing red correctness/performance warning.
+          assignGroupsToHbmPorts(serverGroups.toSeq, serverFirst, serverMux)
         }
       } else {
         assignGroupsToHbmPorts(serverGroups.toSeq, numReserved + peMux, serverMux)
       }
+
+      val serverFirst = numReserved + peMux
+      val occupiedServerPorts =
+        (serverFirst until (serverFirst + serverMux)).filter(hbmSlaves(_).nonEmpty)
+      val crowded = occupiedServerPorts.filter(hbmSlaves(_).size >= 3)
+      val idForcedPrivate = occupiedServerPorts.filter { p =>
+        hbmSlaves(p).size == 1 && hbmSlaves(p).head.cfg.wId >= hbmIdCap
+      }
+      unfairServerPackingDetails = crowded.flatMap { crowdedPort =>
+        val crowdedMaxId = hbmSlaves(crowdedPort).map(_.cfg.wId).max
+        idForcedPrivate.collect {
+          case privatePort if hbmSlaves(privatePort).head.cfg.wId > crowdedMaxId =>
+            val crowdedName = f"m_axi_$crowdedPort%02d"
+            val privateName = f"m_axi_$privatePort%02d"
+            s"$crowdedName has ${hbmSlaves(crowdedPort).size} masters (max id=$crowdedMaxId) " +
+              s"while $privateName is private for id=${hbmSlaves(privatePort).head.cfg.wId}"
+        }
+      }.distinct
 
       // ---- Port allocation summary ------------------------------------
       if (numDedicated > 0)
@@ -544,9 +616,13 @@ trait HasHBMInterconnect extends Module {
       peByShape.foreach { case ((dw, id), gs) =>
         println(s"[HBM:Interconnect]   PE shape (wData=$dw, wId=$id): ${gs.map(_.size).sum} interfaces")
       }
-      serverByDataWidth.foreach { case (dw, gs) =>
+      serverByShape.foreach { case (shape, gs) =>
         val idWidths = gs.flatMap(_.interfaces.map(_.cfg.wId)).distinct.sorted
-        println(s"[HBM:Interconnect]   Server wData=$dw: ${gs.map(_.size).sum} interfaces (wId=${idWidths.mkString(",")})")
+        println(
+          s"[HBM:Interconnect]   Server wData=${shape.wData}, " +
+            s"read=${shape.read}, write=${shape.write}: ${gs.map(_.size).sum} " +
+            s"interfaces (wId=${idWidths.mkString(",")})"
+        )
       }
       println("[HBM:Interconnect]   Per-port mapping:")
       hbmSlaves.zipWithIndex.foreach { case (buf, idx) =>
@@ -632,7 +708,6 @@ trait HasHBMInterconnect extends Module {
     // what wrecks timing. PATH 3 is forced to collapse the id back to 2 bits and
     // cannot close at a high Fmax, hence the loud warning so the user knows.
     // ------------------------------------------------------------------
-    val hbmIdCap         = 6
     val collapsedIdWidth = 2
 
     def bigRedWarning(title: String, lines: Seq[String]): Unit = {
@@ -644,6 +719,17 @@ trait HasHBMInterconnect extends Module {
       println(red + bar + reset)
       body.foreach(l => println(red + "# " + l.padTo(w, ' ') + " #" + reset))
       println(red + bar + reset)
+    }
+
+    if (unfairServerPackingDetails.nonEmpty) {
+      bigRedWarning(
+        "HBM server allocation is ID-safe but traffic-imbalanced",
+        unfairServerPackingDetails ++ Seq(
+          "effect : a crowded low-ID port may become a throughput bottleneck",
+          "reason : the private high-ID master cannot share without exceeding the HBM ID cap",
+          "fix    : add HBM ports, reduce the high native ID width, or accept PATH 3 ID collapse"
+        )
+      )
     }
 
     // ---- HBM port -> owner descriptor (for the telemetry viewer) ------------
@@ -824,7 +910,18 @@ $portsJson
         val interfaceCount = hbmSlave.length
         val dataWidths     = hbmSlave.map(_.cfg.wData).distinct
         val idWidths       = hbmSlave.map(_.cfg.wId).distinct
-        val uniformShape   = dataWidths.length == 1 && idWidths.length == 1
+        def muxCompatibleShape(cfg: axi4.Config): axi4.Config =
+          cfg.copy(
+            wId = 0,
+            wUserAR = 0,
+            wUserR = 0,
+            wUserAW = 0,
+            wUserW = 0,
+            wUserB = 0
+          )
+        val compatibleShapes = hbmSlave.map(i => muxCompatibleShape(i.cfg)).distinct
+        val uniformShape = compatibleShapes.length == 1 && idWidths.length == 1
+        val uniformNonIdShape = compatibleShapes.length == 1
         val selBits        = if (interfaceCount > 1) log2Ceil(interfaceCount) else 0
         val nativeMuxId    = hbmSlave.map(_.cfg.wId).max + selBits
         // The HBM controller port is natively 256b, but Vitis inserts a width
@@ -889,7 +986,7 @@ $portsJson
           }
           exportFrom(mux.m_axi)
 
-        } else if (interfaceCount > 1 && dataWidths.length == 1 && nativeMuxId <= hbmIdCap && vitisCanConvert) {
+        } else if (interfaceCount > 1 && uniformNonIdShape && nativeMuxId <= hbmIdCap && vitisCanConvert) {
           // ===== PATH 2b: MUX WITH ID ZERO-EXTENSION ====================
           // Same data width but mixed id widths. Zero-extend all interfaces
           // to the widest id, then use a plain Mux.  This is free in
@@ -942,30 +1039,85 @@ $portsJson
               s"fix    : $fix"
             )
           )
-          val outputCfg = cfgAxi4HBM.copy(axi3Compat = axi3CompatFlag, wId = collapsedIdWidth)
+          require(
+            uniformNonIdShape,
+            s"$portName fallback cannot mux incompatible AXI capabilities: " +
+              compatibleShapes.mkString(", ")
+          )
+          val sourceShape = hbmSlave.head.cfg
+          val outputCfg = cfgAxi4HBM.copy(
+            axi3Compat = axi3CompatFlag,
+            wId = collapsedIdWidth,
+            read = sourceShape.read,
+            write = sourceShape.write
+          )
 
           // Per-slave: yank user bits, collapse/convert to `sinkCfg`, widen if needed.
           def collapseConvert(slavePort: axi4.full.Interface, sinkCfg: axi4.Config): axi4.full.Interface = {
-            val protocolConverter = Module(
-              new axi4.full.components.ProtocolConverter(
-                new axi4.full.components.ProtocolConverterConfig(
-                  axiSlaveCfg  = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
-                  axiMasterCfg = sinkCfg
-                )
-              )
+            val source = axi4.full.SlaveBuffer(
+              AxiUserYanker(slavePort),
+              axi4.BufferConfig.all(2)
             )
-            axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(2)) :=> protocolConverter.s_axi
-            val protocolConverted = hbmSkidBuffer(protocolConverter.m_axi)
-            if (slavePort.cfg.wData < sinkCfg.wData) {
-              val widen_mod = Module(
-                new chext.amba.axi4.full.components.Widen(
-                  chext.amba.axi4.full.components.WidenConfig(sinkCfg)
+
+            // chext's ProtocolConverter unconditionally touches both its master
+            // read and write channels while wiring its internal stages, so it
+            // cannot elaborate a unidirectional AXI configuration. Closure
+            // allocators are write-only; compose the same required operations
+            // explicitly for them: serialize IDs, downscale the wide beat, then
+            // zero-extend the collapsed ID to the shared mux width.
+            if (!source.cfg.read && source.cfg.write) {
+              val serialized =
+                if (source.cfg.wId > 0) {
+                  val idSerialize = Module(
+                    new axi4.full.components.IdSerialize(
+                      axi4.full.components.IdSerializeConfig(source.cfg)
+                    )
+                  )
+                  source :=> idSerialize.s_axi
+                  idSerialize.m_axi
+                } else source
+
+              val widthConverted =
+                if (serialized.cfg.wData > sinkCfg.wData) {
+                  val downscale = Module(
+                    new axi4.full.components.Downscale(
+                      axi4.full.components.DownscaleConfig(
+                        serialized.cfg,
+                        sinkCfg.wData
+                      )
+                    )
+                  )
+                  serialized :=> downscale.s_axi
+                  downscale.m_axi
+                } else serialized
+
+              hbmSkidBuffer(AxiIdZeroExtend(widthConverted, sinkCfg.wId))
+            } else {
+              require(
+                source.cfg.read && source.cfg.write,
+                s"$portName fallback currently supports read/write or write-only masters"
+              )
+              val protocolConverter = Module(
+                new axi4.full.components.ProtocolConverter(
+                  new axi4.full.components.ProtocolConverterConfig(
+                    axiSlaveCfg = source.cfg,
+                    axiMasterCfg = sinkCfg
+                  )
                 )
               )
-              connectThroughHbmSkidBuffer(protocolConverted, widen_mod.s_axi)
-              widen_mod.m_axi
-            } else {
-              protocolConverted
+              source :=> protocolConverter.s_axi
+              val protocolConverted = hbmSkidBuffer(protocolConverter.m_axi)
+              if (slavePort.cfg.wData < sinkCfg.wData) {
+                val widen_mod = Module(
+                  new chext.amba.axi4.full.components.Widen(
+                    chext.amba.axi4.full.components.WidenConfig(sinkCfg)
+                  )
+                )
+                connectThroughHbmSkidBuffer(protocolConverted, widen_mod.s_axi)
+                widen_mod.m_axi
+              } else {
+                protocolConverted
+              }
             }
           }
 

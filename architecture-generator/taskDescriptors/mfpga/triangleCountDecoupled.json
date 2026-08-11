@@ -72,6 +72,7 @@
           "capacityVirtualQueue": 4096,
           "numVirtualServers": 1,
           "portWidth": 64,
+          "enableContinuationRecycling": true,
           "sideType": "allocator"
         }
       ],

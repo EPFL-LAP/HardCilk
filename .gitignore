@@ -151,3 +151,5 @@ hls-processing-elements/**/Test/*_proj/
 hls-processing-elements/mfpga/*/Test/logs
 hls-processing-elements/mfpga/*/Test/*_csynth*
 hls-processing-elements/mfpga/*/Test/tester
+hls-processing-elements/mfpga/*/Test/*.o
+hls-processing-elements/mfpga/*/Test/*.out

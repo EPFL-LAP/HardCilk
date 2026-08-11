@@ -110,6 +110,13 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
               c.newContinuationLaneStripingFactor
             case _ => 1
           },
+        // The scheduler side's portWidth is the HBM ring's data width. It is
+        // normally equal to widthTask; when the task is wider, the server splits
+        // each task over several beats of this port.
+        ringPortWidth = task
+          .getSideConfig("scheduler")
+          .map(_.portWidth)
+          .getOrElse(task.widthTask),
         // A continuation (isCont) re-injects its own task via the argument
         // notifier when the join counter hits 0. With mFPGA on, that loops back
         // through the network; single-FPGA needs the *local* outsideSpawn path,
@@ -129,6 +136,22 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     val allocatorFactories = desc.taskDescriptors
       .filter(t => desc.getPortCount("spawnNext", t.name) > 0)
       .map { task =>
+        // One recycle source per resolution branch, in the same order
+        // ArgumentNetworks exports them: every cache lane of every server, then
+        // every slow handler. Zero leaves the allocator exactly as it was.
+        val recycleSources =
+          if (task.getSideConfig("allocator")
+                .exists(_.enableContinuationRecycling)) {
+            val argSide = task.getSideConfig("argumentNotifier")
+            require(
+              argSide.exists(_.useNewArgumentNotifier),
+              s"${task.name}: enableContinuationRecycling needs the cached " +
+                "argument notifier on this task; there are no resolutions to observe"
+            )
+            val c = argSide.get
+            c.numVirtualServers * c.newContinuationLanesPerServer +
+              c.slowArgumentHandlerCount
+          } else 0
         task.name -> (() => (if (generatorProfile.isLegacy) new LegacyAllocator(
           addrWidth = desc.widthAddress,
           peCount = desc.getPortCount("spawnNext", task.name),
@@ -140,7 +163,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           peCount = desc.getPortCount("spawnNext", task.name),
           vcasCount = task.getNumServers("allocator"),
           queueDepth = task.getCapacityPhysicalQueue("allocator"),
-          pePortWidth = 64 // <-- HARDCODED
+          pePortWidth = 64, // <-- HARDCODED
+          recycleSourceCount = recycleSources
         )))
       }.toMap
 
@@ -237,6 +261,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
             sysAddressWidth = desc.widthAddress,
             realAddressWidth = desc.widthAXIAddress,
             serverIDWidth = c.argumentServerIdWidth,
+            slowAxiIdWidth = c.slowAxiIdWidth,
             cacheDelayCycles = c.cacheDelayCycles,
             missedUpdateExtra = c.missedUpdateExtra,
             continuationSize = task.widthTask,
@@ -244,7 +269,10 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
             updateOffsetWidth = updateOffsetWidth.head,
             slowCutCount = c.argumentNotifierCutCount,
             evictCutCount = c.evictionCutCount,
-            slowRequestQueueDepth = c.slowRequestQueueDepth
+            slowRequestQueueDepth = c.slowRequestQueueDepth,
+            enableRecycling = task
+              .getSideConfig("allocator")
+              .exists(_.enableContinuationRecycling)
           )
         ))
       }.toMap

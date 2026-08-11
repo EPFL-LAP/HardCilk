@@ -78,6 +78,43 @@ public:
     static void clearStopRequested();
     static void requestStop(int signal);
 
+    // Arm Ctrl-C handling. Call this ONCE, as early as possible and in particular
+    // BEFORE the xrt::device / load_xclbin that forks the hw_emu simulator; the
+    // driver constructor also calls it, so a late arm still works. Idempotent.
+    //
+    // Why this is not just signal(SIGINT, ...): a terminal Ctrl-C is delivered to
+    // the whole FOREGROUND PROCESS GROUP, and the Vivado simulator XRT forks lives
+    // in ours. xsim's Tcl shell installs its own SIGINT handler (the SIG_IGN we set
+    // before spawning it does NOT survive its launcher scripts), so the Ctrl-C
+    // cancelled `run all` -- "INFO: [Common 17-41] Interrupt caught" / "'run' was
+    // cancelled" in simulate.log -- and dropped the simulator to its `xsim%`
+    // prompt. Simulated time then stops advancing, so the register read the host
+    // happened to be inside never completes and the poll loop never gets back to
+    // its stopRequested() check. That is exactly the reported symptom: the first
+    // Ctrl-C printed the "stopping gracefully" banner and then hung forever, and a
+    // second, forced one was needed -- which of course loses the telemetry and the
+    // waveform we wanted.
+    //
+    // So we stop the TERMINAL from generating the signal at all: disable the VINTR
+    // character on the controlling tty and read the raw ^C byte (0x03) ourselves
+    // from a reader thread. No SIGINT is sent to anyone, the simulator keeps
+    // running, and the graceful path (poll loop returns -> telemetry dump ->
+    // waveform finalize during teardown) completes. Only VINTR is disabled, so ^Z
+    // and ^\ keep working, and the saved termios is restored on every exit path.
+    // When stdin is not a tty (or we are not the foreground group) this is a no-op
+    // and the plain SIGINT/SIGTERM handlers below remain the mechanism.
+    static void armInterruptHandling();
+
+    // Tell the interrupt supervisor that the benchmark body has finished and
+    // device teardown has begun. Under hw_emu that is where the waveform is
+    // finalized, which legitimately takes minutes, so from this point the
+    // supervisor stops enforcing its own deadline and leaves the backstop to the
+    // teardown watchdog. Before this point the supervisor DOES enforce one: a
+    // driver whose poll loop forgets to check stopRequested() would otherwise run
+    // to its own multi-minute watchdog with nothing on screen, which reads as
+    // "Ctrl-C printed a message and then hung".
+    static void noteTeardownStarted();
+
     // Kill the hw_emu emulator's ENTIRE descendant process tree (launcher, bash
     // wrappers, loader, xsim, xsimk -- everything below this host), so a forced
     // exit never leaves survivors that pin deleted /tmp .vcd files or hold our
@@ -131,6 +168,30 @@ protected:
     std::vector<uint8_t> packAllocatorAddresses(const std::vector<uint64_t> &addresses, uint64_t widthAddress) const;
 
     int waitPaused(uint64_t addr);
+
+public:
+    /** Per-allocator-server continuation pool telemetry. Only meaningful for
+      * tasks built with recycling; `lowWater` is the point of it -- on a run that
+      * finished, capacity minus lowWater is how much of the pool was never
+      * needed, which is the only empirical way to size it (peak live closures
+      * cannot be derived up front). `leaked` must be zero.
+      */
+    struct ContinuationPoolStats
+    {
+        std::string task;
+        uint64_t serverIndex;
+        uint64_t baseAddress;
+        uint64_t capacity;
+        uint64_t available;
+        uint64_t lowWater;
+        uint64_t leaked;
+        uint64_t handedOut;
+    };
+    std::vector<ContinuationPoolStats> continuationPoolStats();
+    /** One line per recycling pool, for the end of a successful run. */
+    void reportContinuationPools(const std::string &prefix);
+
+protected:
     static void installSignalHandlers();
     // Detached thread armed by installSignalHandlers(). The FIRST Ctrl-C is a
     // graceful stop: the run unwinds normally so it still dumps telemetry and lets
@@ -139,15 +200,35 @@ protected:
     // killing the simulator so the shell returns without an orphaned xsim.
     static void startInterruptSupervisor();
 
+    // Put the controlling tty into "^C is just a byte" mode and spawn the reader
+    // thread that turns that byte into requestStop(). Returns false (and changes
+    // nothing) when stdin is not a foreground tty. See armInterruptHandling().
+    static bool startConsoleInterruptReader();
+
     static volatile std::sig_atomic_t stop_requested_;
     // Set by a second interrupt; polled by the supervisor to force a hard exit.
     static volatile std::sig_atomic_t force_requested_;
+    // Set by noteTeardownStarted(); tells the supervisor to stand down.
+    static volatile std::sig_atomic_t teardown_started_;
 
     
 
     const uint8_t alloc_server_rpause_shift = 0x0;
     const uint8_t alloc_server_raddr_shift = 0x8;
     const uint8_t alloc_server_availableSize_shift = 0x10;
+    // Continuation recycling only. capacity turns the pool into a circular FIFO
+    // (0 = walk it once, the original behaviour); lowWater is the smallest
+    // occupancy seen while running, i.e. how much of the pool went unused; leaked
+    // counts addresses the resolution collectors had to drop and must stay 0.
+    const uint8_t alloc_server_capacity_shift = 0x18;
+    const uint8_t alloc_server_lowWater_shift = 0x20;
+    const uint8_t alloc_server_leaked_shift = 0x28;
+    // Continuations issued from the pool since reset. Only `capacity` distinct
+    // addresses exist, so handedOut > capacity proves the pool recycled.
+    const uint8_t alloc_server_handedOut_shift = 0x30;
+    // Every allocator access is a full burst of this many packed continuations,
+    // so the pool must be a whole number of them for the FIFO to wrap correctly.
+    static constexpr uint64_t alloc_conts_per_burst = 128;
 
     const uint8_t mem_alloc_server_rpause_shift = 0x0;
     const uint8_t mem_alloc_server_raddr_shift = 0x8;

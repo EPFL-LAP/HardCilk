@@ -21,16 +21,23 @@ import chext.amba.axi4
 // All channels are in-order combinational passthroughs gated by a single
 // outstanding-write counter. The bundle TYPE is chext axi4 (it is just the port
 // struct); none of chext's elastic LOGIC is used.
-class SchedulerAXIAdapter(taskWidth: Int, addrWidth: Int) extends Module {
+// portWidth is the HBM data-channel width. It defaults to taskWidth (one beat per
+// task); a narrower port carries a task as taskWidth/portWidth consecutive beats,
+// which the SchedulerServer serialises and reassembles. Nothing in the ordering
+// contract below depends on which of the two it is.
+class SchedulerAXIAdapter(taskWidth: Int, addrWidth: Int, portWidth: Int = 0)
+    extends Module {
 
-  val cfg = axi4.Config(wAddr = addrWidth, wData = taskWidth, lite = false)
+  private val dataWidth = if (portWidth > 0) portWidth else taskWidth
+
+  val cfg = axi4.Config(wAddr = addrWidth, wData = dataWidth, lite = false)
 
   val io = IO(new Bundle {
     val read_address  = Flipped(DecoupledIO(UInt(addrWidth.W)))
-    val read_data     = DecoupledIO(UInt(taskWidth.W))
+    val read_data     = DecoupledIO(UInt(dataWidth.W))
     val read_burst_len  = Input(UInt(4.W))
     val write_address = Flipped(DecoupledIO(UInt(addrWidth.W)))
-    val write_data    = Flipped(DecoupledIO(UInt(taskWidth.W)))
+    val write_data    = Flipped(DecoupledIO(UInt(dataWidth.W)))
     val write_burst_len = Input(UInt(4.W))
     val write_last    = Input(UInt(1.W))
     val write_idle    = Output(Bool())
@@ -45,7 +52,7 @@ class SchedulerAXIAdapter(taskWidth: Int, addrWidth: Int) extends Module {
   connectZeros(axi.ar.bits)
   connectZeros(axi.w.bits)
 
-  private val sizeEnc = log2Ceil(taskWidth / 8).U
+  private val sizeEnc = log2Ceil(dataWidth / 8).U
   private val burstIncr = 1.U
 
   // Outstanding write bursts = AW accepted − B returned. The FSM keeps this <= 1.

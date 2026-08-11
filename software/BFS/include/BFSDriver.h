@@ -58,9 +58,7 @@ static constexpr int32_t BFS_UNREACHED_DISTANCE = -1;
 static const uint64_t BFS_GUARD_BYTES = 4ull * 1024 * 1024; // 4 MiB per buffer
 static const uint8_t BFS_GUARD_FILL = 0xAB;
 
-// Mirror of hls-processing-elements/mfpga/BFS/util.h (128 bytes). The PE writes
-// its continuation closure here field-by-field via store_continuation(); the
-// host seeds the root copy and later polls the `done` field of this struct.
+// Mirror of hls-processing-elements/mfpga/BFS/util.h (128 bytes).
 struct BFS_args
 {
   uint32_t counter;         // 0   join counter / done sentinel
@@ -77,14 +75,24 @@ struct BFS_args
   Addr frontier0;           // 56  uint32[vertex_count]
   Addr frontier1;           // 64  uint32[vertex_count]
   Addr nextFChar;           // 72  uint64 atomic counter (next-frontier length)
-  Addr cont;                // 80  continuation closure base (== &this on device)
-  uint8_t _padding[40];     // 88..127
+  Addr cont;                // 80  continuation closure base
+  Addr status;              // 88  host-visible bfs_status
+  uint8_t _padding[32];     // 96..127
 };
 static_assert(sizeof(BFS_args) == 128,
               "BFS_args must match util.h (128 bytes)");
 
-// Byte offset of the `done` field inside the continuation closure.
-static const Addr BFS_DONE_OFFSET = offsetof(BFS_args, done);
+// Cached mode assigns a new continuation address every level, so completion
+// and progress live in a stable host-allocated word instead of in the closure.
+struct BFS_status
+{
+  uint32_t done;
+  uint32_t currentDistance;
+  uint32_t frontier_length;
+  uint32_t reserved;
+};
+static_assert(sizeof(BFS_status) == 16, "BFS status ABI");
+static const Addr BFS_DONE_OFFSET = offsetof(BFS_status, done);
 
 class BFSDriver : public BenchmarkDriverBase
 {
@@ -209,7 +217,15 @@ public:
     // nextFChar is now a single 64-bit atomic counter (the AMU ADD_ONE handout
     // for next-frontier slots), not a per-vertex flag array. 8 bytes suffice.
     Addr nextFChar_base = memory_->allocateMemFPGA(sizeof(uint64_t), 512);
-    Addr cont_base = memory_->allocateMemFPGA(sizeof(BFS_args), 512);
+    Addr status_base = memory_->allocateMemFPGA(sizeof(BFS_status), 512);
+    const bool cachedNotifier =
+        !buildDescriptor_.loaded || buildDescriptor_.argumentServer == "cached";
+    // The no-cache ABI deliberately preserves BFS's old one-address
+    // continuation model. Cached mode seeds no closure; BFS claims its first
+    // address from closureIn just like every later level.
+    Addr legacy_cont_base = cachedNotifier
+                                ? 0
+                                : memory_->allocateMemFPGA(sizeof(BFS_args), 512);
 
     // Required host-side init. The PE no longer has an init loop (BFS_new.cpp
     // dropped it), so the host is solely responsible for pre-initializing
@@ -241,6 +257,10 @@ public:
       memory_->copyToDevice(nextFChar_base,
                             reinterpret_cast<const uint8_t *>(&nextFCharInit),
                             sizeof(uint64_t));
+      BFS_status statusInit{};
+      memory_->copyToDevice(status_base,
+                            reinterpret_cast<const uint8_t *>(&statusInit),
+                            sizeof(statusInit));
 
       // Lay down the guard sentinel just past each kernel-written buffer.
       std::vector<uint8_t> guard(BFS_GUARD_BYTES, BFS_GUARD_FILL);
@@ -259,7 +279,10 @@ public:
               << distance_base << " visited=0x" << visited_base
               << " frontier0=0x" << frontier0_base << " frontier1=0x"
               << frontier1_base << " nextFChar=0x" << nextFChar_base
-              << " cont=0x" << cont_base << std::dec << "\n";
+              << " status=0x" << status_base;
+    if (!cachedNotifier)
+      std::cout << " legacy_cont=0x" << legacy_cont_base;
+    std::cout << std::dec << "\n";
 
     // ── Build the root BFS task ─────────────────────────────────────────────
     // currentDistance==0 && frontier_length==0 makes the PE take the init()
@@ -282,21 +305,25 @@ public:
     root.frontier0 = frontier0_base;
     root.frontier1 = frontier1_base;
     root.nextFChar = nextFChar_base;
-    root.cont = cont_base;
+    root.cont = legacy_cont_base;
+    root.status = status_base;
 
-    // Initialize the continuation closure in HBM with the same state.
-    memory_->copyToDevice(cont_base, reinterpret_cast<const uint8_t *>(&root),
-                          sizeof(root));
+    if (!cachedNotifier)
+      memory_->copyToDevice(legacy_cont_base,
+                            reinterpret_cast<const uint8_t *>(&root),
+                            sizeof(root));
 
     std::vector<BFS_args> base_task_data = {root};
 
     tuneSchedulerQueueCapacities("BFS", n);
+    configureInitialQueueCapacities(max_depth);
 
     // ── Program management registers and seed the root task ─────────────────
     auto t_init = std::chrono::high_resolution_clock::now();
     initSystem(base_task_data, &hardcilkDoneConditionStub, /*fpgaId=*/0,
                /*taskId=*/0,
                /*no_base_task=*/false);
+    clearContinuationPools();
     auto t_started = std::chrono::high_resolution_clock::now();
     std::cout << "[BFS] init took "
               << std::chrono::duration<double>(t_started - t_init).count()
@@ -324,7 +351,8 @@ public:
     startSystem();
 
     // ── Watchdog-bounded management loop ────────────────────────────────────
-    int rc = managementLoopBFS(cont_base, visited_base, distance_base, n, true_max_dist);
+    int rc = managementLoopBFS(status_base, visited_base, nextFChar_base,
+                               distance_base, n, true_max_dist);
     auto t_kernel_done = t_kernel_done_;
     if (rc != 0)
     {
@@ -414,6 +442,53 @@ public:
   }
 
 private:
+  void configureInitialQueueCapacities(int max_depth)
+  {
+    // Cached BFS consumes one fresh closure for each non-terminal level and does
+    // not recycle them. Size the allocator for the requested depth plus a small
+    // safety margin; retain the descriptor's few-thousand-entry floor.
+    const uint64_t allocatorNeeded =
+        std::max<uint64_t>(4096, (uint64_t)std::max(0, max_depth) + 64);
+    for (auto &task : descriptor.taskDescriptors)
+      for (auto &config : task.sidesConfigs)
+        if (task.name == "BFS" && config.sideType == "allocator")
+          config.capacityVirtualQueue = std::max<uint64_t>(
+              config.capacityVirtualQueue, allocatorNeeded);
+
+    std::cout << "[BFS] continuation allocator capacity=" << allocatorNeeded
+              << " entries (monotonic, no recycling)\n";
+  }
+
+  void clearContinuationPools()
+  {
+    // initSystem has now allocated the pool and populated its address FIFO.
+    // Zero the closure storage itself: card resets do not clear HBM, and cached
+    // updates are OR-merged with the stored line.
+    std::vector<uint8_t> zeros(64 * 1024, 0);
+    uint64_t cleared = 0;
+    for (const auto &task : descriptor.taskDescriptors)
+    {
+      const uint64_t entryBytes = task.widthTask / 8;
+      for (const auto &serverBlocks :
+           task.mapServerAddressToClosureBaseAddress)
+      {
+        for (const auto &block : serverBlocks.second)
+        {
+          const uint64_t blockBytes = (uint64_t)block.second * entryBytes;
+          for (uint64_t off = 0; off < blockBytes; off += zeros.size())
+          {
+            const uint64_t bytes =
+                std::min<uint64_t>(zeros.size(), blockBytes - off);
+            memory_->copyToDevice(block.first + off, zeros.data(), bytes);
+          }
+          cleared += blockBytes;
+        }
+      }
+    }
+    std::cout << "[BFS] zeroed " << cleared
+              << " bytes of continuation storage\n";
+  }
+
   static Graph loadBenchmarkGraph(const std::string &graph_file, int source,
                                   std::string &synthetic_name,
                                   int &effective_source)
@@ -894,19 +969,20 @@ private:
     return count;
   }
 
-  BFS_args readContinuation(Addr cont_base)
+  BFS_status readStatus(Addr status_base)
   {
-    BFS_args cont{};
-    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&cont), cont_base,
-                            sizeof(cont));
-    return cont;
+    BFS_status status{};
+    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&status), status_base,
+                            sizeof(status));
+    return status;
   }
 
-  void printProgress(Addr cont_base, Addr visited_base, int vertex_count,
+  void printProgress(Addr status_base, Addr visited_base, Addr nextFChar_base,
+                     int vertex_count,
                      std::chrono::high_resolution_clock::time_point start)
   {
     size_t visited = countVisited(visited_base, vertex_count);
-    BFS_args cont = readContinuation(cont_base);
+    BFS_status status = readStatus(status_base);
     double percent = vertex_count == 0
                          ? 0.0
                          : (100.0 * (double)visited / (double)vertex_count);
@@ -915,42 +991,17 @@ private:
                          .count();
     std::cout << "[BFS] progress: visited=" << visited << "/" << vertex_count
               << " (" << percent << "%)"
-              << " cont.counter=" << cont.counter
-              << " dist=" << cont.currentDistance
-              << " frontier=" << cont.frontier_length
-              << " active=" << cont.active << " done=" << cont.done
+              << " dist=" << status.currentDistance
+              << " frontier=" << status.frontier_length
+              << " done=" << status.done
               << " elapsed=" << elapsed << "s\n";
-
-    // DEBUG: the source helper stashes diagnostics into cont._padding (which
-    // starts at byte 88 of BFS_args). Layout written by BFS.cpp:
-    //   +88 u  +92 degree  +96 path  +100 locks  +104 winners
-    //   +108 appends  +112 first_success  +116 first_current  +120
-    //   first_neighbor
-    const uint8_t *pad = reinterpret_cast<const uint8_t *>(&cont) + 88;
-    auto dbg = [&](int byteOff)
-    {
-      uint32_t v;
-      std::memcpy(&v, pad + (byteOff - 88), sizeof(v));
-      return v;
-    };
-    uint32_t path = dbg(96);
-    const char *pathStr = path == 0xE1   ? "over-max-depth"
-                          : path == 0xE2 ? "u-out-of-range"
-                          : path == 0xE3 ? "degree==0"
-                          : path == 0xA0 ? "ran-lock-loop"
-                                         : "(unset)";
     // DEBUG: read the atomic counter straight from HBM. If this is nonzero
     // while the BFS PE saw next_length==0, the AMU write landed but the PE read
     // it stale/early; if it's 0, the ADD_ONE write never persisted.
     uint64_t nextfchar_hbm = 0;
     memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&nextfchar_hbm),
-                            cont.nextFChar, sizeof(nextfchar_hbm));
-    std::cout << "[BFS-DBG] u=" << dbg(88) << " degree=" << dbg(92)
-              << " path=0x" << std::hex << path << std::dec << "(" << pathStr
-              << ") locks=" << dbg(100) << " winners=" << dbg(104)
-              << " appends=" << dbg(108) << " first_success=" << dbg(112)
-              << " first_current=" << dbg(116) << " first_neighbor=" << dbg(120)
-              << " nextFChar_hbm=" << nextfchar_hbm << "\n";
+                            nextFChar_base, sizeof(nextfchar_hbm));
+    std::cout << "[BFS-DBG] nextFChar_hbm=" << nextfchar_hbm << "\n";
 
     // A correct BFS level discovers each vertex at most once, so the
     // next-frontier length can never exceed the vertex count. If it does, the
@@ -997,7 +1048,9 @@ private:
     }
   }
 
-  int managementLoopBFS(Addr cont_base, Addr visited_base, Addr distance_base, int vertex_count, int true_max_dist)
+  int managementLoopBFS(Addr status_base, Addr visited_base,
+                        Addr nextFChar_base, Addr distance_base,
+                        int vertex_count, int true_max_dist)
   {
     const auto start = std::chrono::high_resolution_clock::now();
     const auto deadline = start + std::chrono::duration<double>(watchdog_s_);
@@ -1005,8 +1058,8 @@ private:
 
     // Stall detection mirrors BellmanFord: if the kernel makes no observable
     // forward progress for STALL_WINDOW seconds, bail out before the full
-    // watchdog. "Progress" is any change in the continuation counters, BFS
-    // level/frontier state, or finalized visited count. Keep this out of
+    // watchdog. "Progress" is any change in the stable BFS status word or
+    // finalized visited count. Keep this out of
     // fast_mode, and relax it heavily under emulation where wall-clock time is
     // much less meaningful.
     const double stall_window_s = is_emulation ? 120.0 : 1.0;
@@ -1014,26 +1067,36 @@ private:
     auto next_sample = start;
     auto last_change = start;
     bool have_signature = false;
-    uint32_t last_counter = 0;
     uint32_t last_distance = 0;
     uint32_t last_frontier = 0;
-    uint32_t last_active = 0;
     size_t last_visited = 0;
 
     uint32_t done = 0;
     uint64_t iters = 0;
     while (true)
     {
+      // Cooperative stop point. Without it the Ctrl-C flag is set but nothing
+      // reads it, so the loop polls on to watchdog_s_ and the host looks hung
+      // after printing "stopping gracefully". Returning takes the same path the
+      // watchdog takes: readback, telemetry dump, exit.
+      if (stopRequested())
+      {
+        std::cerr << "[BFS] interrupted by user; aborting after " << iters
+                  << " polls\n";
+        return -1;
+      }
+
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 
       memory_->copyFromDevice(reinterpret_cast<uint8_t *>(&done),
-                              cont_base + BFS_DONE_OFFSET, sizeof(done));
+                              status_base + BFS_DONE_OFFSET, sizeof(done));
       if (done != 0)
       {
         t_kernel_done_ = std::chrono::high_resolution_clock::now();
         if (!fast_mode_)
-          printProgress(cont_base, visited_base, vertex_count, start);
+          printProgress(status_base, visited_base, nextFChar_base,
+                        vertex_count, start);
         std::cout << "[BFS] done flag set after " << iters
                   << " poll iterations";
         if (fast_mode_)
@@ -1047,21 +1110,20 @@ private:
       {
         next_sample = now + sample_period;
 
-        BFS_args cont = readContinuation(cont_base);
+        BFS_status status = readStatus(status_base);
         size_t visited = countVisited(visited_base, vertex_count);
-        printProgress(cont_base, visited_base, vertex_count, start);
+        printProgress(status_base, visited_base, nextFChar_base, vertex_count,
+                      start);
 
-        bool changed = !have_signature || cont.counter != last_counter ||
-                       cont.currentDistance != last_distance ||
-                       cont.frontier_length != last_frontier ||
-                       cont.active != last_active || visited != last_visited;
+        bool changed = !have_signature ||
+                       status.currentDistance != last_distance ||
+                       status.frontier_length != last_frontier ||
+                       visited != last_visited;
         if (changed)
         {
           have_signature = true;
-          last_counter = cont.counter;
-          last_distance = cont.currentDistance;
-          last_frontier = cont.frontier_length;
-          last_active = cont.active;
+          last_distance = status.currentDistance;
+          last_frontier = status.frontier_length;
           last_visited = visited;
           last_change = now;
         }
@@ -1070,9 +1132,9 @@ private:
         {
           t_kernel_done_ = now;
           std::cerr << "[BFS] STALL: no progress for " << stall_window_s
-                    << "s (dist=" << cont.currentDistance
-                    << " frontier=" << cont.frontier_length
-                    << " active=" << cont.active << " visited=" << visited
+                    << "s (dist=" << status.currentDistance
+                    << " frontier=" << status.frontier_length
+                    << " visited=" << visited
                     << "/" << vertex_count
                     << "). Exiting early for debug.\n";
           return -1;

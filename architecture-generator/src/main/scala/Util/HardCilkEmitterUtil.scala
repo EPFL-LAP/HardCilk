@@ -115,6 +115,52 @@ object HardCilkEmitterUtil {
     Files.writeString(Path.of(path), data, StandardCharsets.UTF_8)
   }
 
+  /** Undo firtool's single-file packing of blackbox sources.
+    *
+    * When the design is emitted to one .sv, every blackbox that supplies its own
+    * Verilog is appended to the end of it behind a
+    * `// ----- 8< ----- FILE "name" ----- 8< -----` banner, and the run finishes
+    * with a `.f` filelist section whose body is a bare list of file names. That
+    * last section is not Verilog, so anything that parses the whole file (sv2v,
+    * here) fails on it.
+    *
+    * Rewrites `svPath` in place with only the design, and drops each appended
+    * section next to it under its own name. The filelist itself is discarded --
+    * nothing downstream consumes it, and its contents are exactly the files
+    * being written out here.
+    */
+  def splitEmittedBlackBoxFiles(svPath: String, outputDirPath: String): Unit = {
+    val banner = """^// -+ 8< -+ FILE "(.*)" -+ 8< -+$""".r
+    val lines = readFile(svPath).split("\n", -1).toSeq
+
+    // Nothing to do for a design with no self-describing blackboxes, which is
+    // every design that predates Util.UramDelayMem.
+    if (!lines.exists(banner.matches(_))) return
+
+    var current: Option[String] = None // None = still in the design itself
+    val sections = scala.collection.mutable.LinkedHashMap
+      .empty[Option[String], scala.collection.mutable.ArrayBuffer[String]]
+    sections(None) = scala.collection.mutable.ArrayBuffer.empty[String]
+
+    lines.foreach {
+      case banner(name) =>
+        current = Some(name)
+        sections.getOrElseUpdate(
+          current,
+          scala.collection.mutable.ArrayBuffer.empty[String]
+        )
+      case line =>
+        sections(current) += line
+    }
+
+    writeFile(svPath, sections(None).mkString("\n"))
+    sections.foreach {
+      case (Some(name), body) if !name.endsWith(".f") =>
+        writeFile(s"$outputDirPath/$name", body.mkString("\n").trim + "\n")
+      case _ => ()
+    }
+  }
+
   /**
   * A method to generate RTL called by HardCilk Emitter
   */
@@ -186,6 +232,12 @@ object HardCilkEmitterUtil {
         ) {
           writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
         }
+      } else if (fileName == "UramDelayMem.v") {
+        // Backs Util.DelayLine's deep variant. One body for both flows: it is a
+        // plain inferred array, so simulators read it as written and Vivado maps
+        // it to URAM off the ram_style attribute. Staged next to the kernel RTL
+        // rather than under synth/ because it is instantiated by the design.
+        writeFile(s"$outputDirPathRTL/$fileName", fileContent)
       } else if (listOfFilesForQuesta.contains(fileName)) {
         writeFile(s"$questaDirectory/$fileName", fileContent)
       } else {
@@ -217,6 +269,18 @@ object HardCilkEmitterUtil {
       Array(f"--target-dir=${outputDirPathRTL}"),
       Array("--disable-all-randomization")
     )
+
+    // A blackbox that carries its own Verilog (HasBlackBoxResource/Inline, e.g.
+    // Util.UramDelayMem) gets no output file of its own here: firtool appends
+    // every such body to the END of the single emitted .sv, each behind a
+    //   // ----- 8< ----- FILE "name" ----- 8< -----
+    // banner, and closes with a "*.f" filelist section that is a bare list of
+    // names rather than Verilog. sv2v parses the whole file and dies on that
+    // filelist with "unexpected end of file". Split the sections back out first:
+    // real sources become their own files next to the kernel (where the build
+    // already expects UramDelayMem.v to be staged), the filelist is dropped, and
+    // sv2v sees only the design.
+    splitEmittedBlackBoxFiles(s"$outputDirPathRTL/${systemDescriptor.name}.sv", outputDirPathRTL)
 
     // For the file in the outputDirRTL with the name of the systemDescriptor.name run sv2v on it using os.system, then remove the original file
     import sys.process._

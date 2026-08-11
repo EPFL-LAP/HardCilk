@@ -457,19 +457,27 @@ int runSingleFpgaBenchmark(const std::string &xclbin_path,
   // to the xclbin (or one directory above its build directory).
   benchmarkSelectHardCilkDescriptor(xclbin_path);
 
-  // Capture the pristine terminal so we can always restore it (the hw_emu
-  // simulator can leave the tty raw / no-echo when it takes a signal).
-  hardCilkDriver::saveTerminalState();
+  // Arm Ctrl-C handling BEFORE the xrt::device / load_xclbin below, which forks
+  // the hw_emu simulator into our foreground process group. This captures the
+  // pristine terminal (so we can always restore it) and, when stdin is a
+  // foreground tty, disables the tty's VINTR character and reads the raw ^C byte
+  // from a helper thread instead.
+  //
+  // That indirection is the whole fix: a terminal-generated SIGINT goes to the
+  // entire foreground process group, and xsim's Tcl shell installs its own SIGINT
+  // handler regardless of the SIG_IGN we hand it at spawn time. It therefore
+  // cancelled `run all` and dropped to its `xsim%` prompt ("[Common 17-41]
+  // Interrupt caught" in simulate.log), simulated time stopped, and the register
+  // read the host was inside never returned -- so the poll loop never reached its
+  // stopRequested() check and the first Ctrl-C hung instead of dumping telemetry
+  // and saving the waveform. With VINTR disabled no signal is generated at all,
+  // the simulator keeps running, and the graceful stop actually works.
+  hardCilkDriver::armInterruptHandling();
 
-  // Make the emulator child inherit SIG_IGN for SIGINT. The xrt::device
-  // constructor below spawns xsim INTO our foreground process group, so a terminal
-  // Ctrl-C would otherwise be delivered to xsim too -- pausing the simulator at its
-  // interactive prompt (which then hangs every telemetry read and holds the tty).
-  // With SIGINT ignored at spawn time, xsim keeps running; the host installs its
-  // own handler later (driver ctor) so Ctrl-C still triggers a graceful HOST stop
-  // while the simulator stays alive to service the telemetry readback and waveform
-  // save. Cancelling during xclbin load is intentionally disabled for that short
-  // window (no host handler yet); it is restored once the driver is constructed.
+  // Belt and braces for the non-tty case (stdin redirected: nothing above could be
+  // armed): keep the emulator child inheriting SIG_IGN for SIGINT so a
+  // group-directed signal still cannot pause it. The host installs its own handler
+  // later (driver ctor), so `kill -INT <hostpid>` still triggers a graceful stop.
   std::signal(SIGINT, SIG_IGN);
 
   if (wave.enabled)
@@ -555,6 +563,12 @@ int runSingleFpgaBenchmark(const std::string &xclbin_path,
   // grace after an interrupt (teardown will hang) and a generous safety-net
   // otherwise. Deliberately thread-based, not SIGALRM, to avoid perturbing any
   // signal handling XRT relies on during close.
+  // The benchmark body is done; everything from here is teardown (and, with a
+  // waveform, the multi-minute post_sim finalize). Tell the interrupt supervisor
+  // to stand down so it cannot cut that short -- the watchdog below owns the
+  // backstop from now on.
+  hardCilkDriver::noteTeardownStarted();
+
   const bool interrupted = hardCilkDriver::stopRequested();
   // Grace before the watchdog force-kills teardown. When capturing a waveform,
   // teardown must run post_sim.tcl to finalize/save the VCD and copy the WDB,

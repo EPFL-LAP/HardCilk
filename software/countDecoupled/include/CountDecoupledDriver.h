@@ -72,7 +72,8 @@ public:
                                std::string xclbin_path = std::string(),
                                bool legacy_single_port_watcher = false,
                                bool hbm_strided_writes = false,
-                               uint64_t hbm_continuation_bank_run_entries = 1)
+                               uint64_t hbm_continuation_bank_run_entries = 1,
+                               uint64_t closure_pool_override = 0)
       : hardCilkDriver(memory), size_(std::max<uint32_t>(1, size)),
         num_instances_(std::max<uint32_t>(1, num_instances)),
         watchdog_s_(watchdog_s), fast_mode_(fast_mode),
@@ -80,6 +81,7 @@ public:
         hbm_strided_writes_(hbm_strided_writes),
         hbm_continuation_bank_run_entries_(
             std::max<uint64_t>(1, hbm_continuation_bank_run_entries)),
+        closure_pool_override_(closure_pool_override),
         xclbin_path_(std::move(xclbin_path)) {}
 
   static int run_cpu_test_bench(uint32_t size)
@@ -311,6 +313,10 @@ public:
 
     if (rc == 0 && passed == N)
     {
+      // capacity - low_water is the peak number of simultaneously live closures
+      // this run actually needed. It is the number to size the pool from next
+      // time; nothing computes it up front.
+      reportContinuationPools("[countDecoupled]");
       std::cout << "[countDecoupled] PASS\n";
       return 0;
     }
@@ -562,9 +568,11 @@ private:
 
   void configureInitialQueueCapacities()
   {
-    // Each loop iteration allocates one continuation. Those slots are reclaimed
-    // only by host management, so provision the whole run up front to keep the
-    // timed execution independent of the management/refill path.
+    // Each loop iteration allocates one continuation. With recycling on, a
+    // continuation's address returns to the free list as soon as it resolves, so
+    // this whole-run figure is an upper bound, not a requirement -- the pool only
+    // has to cover the closures alive at one instant. It stays the default
+    // because it is guaranteed sufficient; use --closure-pool=N to go smaller.
     const uint64_t continuationsNeeded =
         ((uint64_t)size_ * 2 + 1) * num_instances_;
     // On HW the queues are provisioned generously up front (cheap, and it keeps
@@ -605,6 +613,50 @@ private:
       }
     }
 
+    // Explicit pool size for exercising the recycler. Unlike the CAP above this
+    // is authoritative: it overrides the descriptor's capacityVirtualQueue floor
+    // too, which is the only way to get a pool smaller than the JSON's value.
+    // Rounded down to whole allocator bursts, since the circular FIFO wraps a
+    // burst at a time.
+    uint64_t forcedCapacity = closure_pool_override_;
+    if (forcedCapacity == 0)
+      if (const char *v = std::getenv("COUNTDECOUPLED_CLOSURE_POOL"); v && *v)
+        forcedCapacity = std::strtoull(v, nullptr, 0);
+    if (forcedCapacity != 0)
+    {
+      const uint64_t rounded =
+          (forcedCapacity / alloc_conts_per_burst) * alloc_conts_per_burst;
+      if (rounded == 0)
+      {
+        std::cerr << "[countDecoupled] --closure-pool=" << forcedCapacity
+                  << " is below one allocator burst ("
+                  << alloc_conts_per_burst << "); using "
+                  << alloc_conts_per_burst << "\n";
+        forcedCapacity = alloc_conts_per_burst;
+      }
+      else
+      {
+        if (rounded != forcedCapacity)
+          std::cout << "[countDecoupled] closure pool " << forcedCapacity
+                    << " -> " << rounded << " (whole bursts of "
+                    << alloc_conts_per_burst << ")\n";
+        forcedCapacity = rounded;
+      }
+      std::cout << "[countDecoupled] FORCING continuation pool to "
+                << forcedCapacity << " closures (whole-run demand is "
+                << continuationsNeeded << "); the run can only pass if "
+                << "recycling keeps returning addresses\n";
+      // The allocator's read-ahead alone parks ~1024 closures in its local FIFO
+      // before any reach a PE, so a pool near that size will report exhaustion
+      // even though recycling is working correctly.
+      if (forcedCapacity < 2048 && forcedCapacity < continuationsNeeded)
+        std::cout << "[countDecoupled] note: pools below ~2048 sit inside the "
+                     "allocator's own read-ahead window; if this run reports "
+                     "exhaustion, try a larger pool before suspecting the "
+                     "recycler\n";
+      allocatorCapacity = forcedCapacity;
+    }
+
     for (auto &task : descriptor.taskDescriptors)
     {
       for (auto &config : task.sidesConfigs)
@@ -618,8 +670,13 @@ private:
           config.capacityVirtualQueue = std::max<uint64_t>(
               config.capacityVirtualQueue, schedulerFloor);
         else if (config.sideType == "allocator")
-          config.capacityVirtualQueue = std::max<uint64_t>(
-              config.capacityVirtualQueue, allocatorCapacity);
+          // A forced pool is set exactly; otherwise the descriptor value acts as
+          // a floor, as before.
+          config.capacityVirtualQueue =
+              forcedCapacity != 0
+                  ? allocatorCapacity
+                  : std::max<uint64_t>(config.capacityVirtualQueue,
+                                       allocatorCapacity);
       }
     }
     // initSystem doubles capacityVirtualQueue when allocating the backing BO.
@@ -1515,6 +1572,46 @@ private:
     return 0;
   }
 
+  // Monotonic count of continuations issued from the pool. With recycling,
+  // `capacity - available` is NOT a progress measure: the pool settles into an
+  // equilibrium and that difference goes constant while the machine runs at full
+  // speed, which makes a healthy run look frozen and trips the stagnation
+  // detector. This register only ever increases.
+  uint64_t allocatorHandedOut() const
+  {
+    for (const auto &task : descriptor.taskDescriptors)
+      if (task.name == "taskAdder_cont0" &&
+          !task.mgmtBaseAddresses.allocationServersBaseAddresses.empty())
+        return memory_->readReg64(
+            task.mgmtBaseAddresses.allocationServersBaseAddresses.front() +
+            alloc_server_handedOut_shift);
+    return 0;
+  }
+
+  // Loud, unconditional check: an allocator that has latched rPause is out of
+  // continuations, and with recycling that is terminal. Never gate this on
+  // fast_mode -- a silently paused allocator looks exactly like a deadlock.
+  bool reportAllocatorExhausted()
+  {
+    for (const auto &task : descriptor.taskDescriptors)
+      for (uint64_t base : task.mgmtBaseAddresses.allocationServersBaseAddresses)
+        if (memory_->readReg64(base + alloc_server_rpause_shift) != 0)
+        {
+          std::cerr << "[countDecoupled] ALLOCATOR EXHAUSTED for '" << task.name
+                    << "': the continuation pool ran dry (capacity="
+                    << memory_->readReg64(base + alloc_server_capacity_shift)
+                    << ", handed_out="
+                    << memory_->readReg64(base + alloc_server_handedOut_shift)
+                    << ", leaked="
+                    << memory_->readReg64(base + alloc_server_leaked_shift)
+                    << "). Recycling cannot refill a pool smaller than the peak "
+                       "number of simultaneously live closures; re-run with a "
+                       "larger --closure-pool.\n";
+          return true;
+        }
+    return false;
+  }
+
   void dumpStallState(const std::vector<char> &done,
                       const std::vector<int32_t> &states)
   {
@@ -1637,7 +1734,14 @@ private:
       if (now >= nextProgress)
       {
         uint64_t available = allocatorAvailable();
-        uint64_t issued = initialAllocatorCapacity > available
+        // Prefer the monotonic hardware counter. Under recycling the pool
+        // reaches equilibrium, so capacity-available stops growing while the
+        // machine is still running flat out -- using it as the progress proxy
+        // reports a healthy run as stagnant.
+        uint64_t handedOut = allocatorHandedOut();
+        uint64_t issued = handedOut != 0
+                              ? handedOut
+                          : initialAllocatorCapacity > available
                               ? initialAllocatorCapacity - available
                               : 0;
         double avgIterations = count_addrs.empty()
@@ -1660,8 +1764,18 @@ private:
                   << avgIterations << "/" << size_ << " (" << progress
                   << "%) avg_matches=" << avgMatches
                   << " allocator_available=" << available << "/"
-                  << initialAllocatorCapacity << " elapsed=" << elapsed
-                  << "s\n";
+                  << initialAllocatorCapacity;
+        // A steady allocator_available is what a WORKING recycler looks like
+        // (issue rate == return rate); handed_out is the number that must keep
+        // climbing. Print both so the two are never confused.
+        if (handedOut != 0)
+          std::cout << " handed_out=" << handedOut
+                    << (handedOut > initialAllocatorCapacity ? " (recycling)" : "");
+        std::cout << " elapsed=" << elapsed << "s\n";
+        // Terminal and unconditional: never let an exhausted pool masquerade as
+        // a deadlock.
+        if (reportAllocatorExhausted())
+          return -1;
         if (issued == lastIssued && remaining == lastRemaining)
         {
           ++stagnantReports;
@@ -1723,6 +1837,8 @@ private:
   bool legacy_single_port_watcher_;
   bool hbm_strided_writes_;
   uint64_t hbm_continuation_bank_run_entries_;
+  // --closure-pool=N / COUNTDECOUPLED_CLOSURE_POOL. 0 = size from demand.
+  uint64_t closure_pool_override_ = 0;
   std::string xclbin_path_;
 
   static bool endsWith(const std::string &s, const std::string &suffix)

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VALID_BENCHMARKS=("BFS" "WP-BF" "BellmanFord" "ApproxDenseSub" "MaximalIndependentSet" "GraphColoring" "graphRandomWalk" "pageRank" "triangleCount" "triangleCountDecoupled" "countDecoupled")
+VALID_BENCHMARKS=("BFS" "WP-BF" "BellmanFord" "ApproxDenseSub" "MaximalIndependentSet" "GraphColoring" "graphRandomWalk" "pageRank" "triangleCount" "triangleCountDecoupled" "countDecoupled" "fullTriangleCountDecoupled")
 
 usage() {
     echo "Usage: $0 <benchmarkName> [workspaceLabel]"
@@ -109,8 +109,18 @@ rm -rf "$XCLBIN_WORKSPACE_DIR/src/IP"
 mkdir -p "$XCLBIN_WORKSPACE_DIR/src/IP"
 
 find "$RTL_DIR" -maxdepth 1 -type f -exec cp {} "$XCLBIN_WORKSPACE_DIR/src/IP/" \;
-if [[ -f "$RTL_DIR/${BENCHMARK}.hbmports.json" ]]; then
-    cp "$RTL_DIR/${BENCHMARK}.hbmports.json" "$XCLBIN_WORKSPACE_DIR/"
+SIDECAR="$RTL_DIR/${BENCHMARK}.hbmports.json"
+if [[ ! -f "$SIDECAR" ]]; then
+    mapfile -t GENERATED_SIDECARS < <(find "$RTL_DIR" -maxdepth 1 -type f -name '*.hbmports.json' -print)
+    if [[ ${#GENERATED_SIDECARS[@]} -eq 1 ]]; then
+        SIDECAR="${GENERATED_SIDECARS[0]}"
+    fi
+fi
+if [[ -f "$SIDECAR" ]]; then
+    # The generated system name may differ from the benchmark name (BFS_Main
+    # versus BFS). The runner and auto-discovery use the benchmark/xclbin stem,
+    # so always stage a canonical alias at the workspace root.
+    cp "$SIDECAR" "$XCLBIN_WORKSPACE_DIR/${BENCHMARK}.hbmports.json"
 fi
 
 # --- Step 3: Copy software folder into xclbin-workspace/<benchmark>/host/ ---
@@ -173,6 +183,17 @@ if [[ -d "$XRT_GEN_DIR" ]]; then
             !skip { print }
         ' "$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c.cfg" > "$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c_hw_emu.cfg"
     fi
+fi
+
+KERNEL_XML="$XCLBIN_WORKSPACE_DIR/src/xml/user_0.xml"
+CONNECTIVITY_CFG="$XCLBIN_WORKSPACE_DIR/src/cfg/conn_u55c.cfg"
+if [[ ! -f "$KERNEL_XML" ]]; then
+    echo "Error: required kernel XML was not generated or supplied: $KERNEL_XML" >&2
+    exit 1
+fi
+if [[ ! -f "$CONNECTIVITY_CFG" ]]; then
+    echo "Error: required connectivity configuration was not generated or supplied: $CONNECTIVITY_CFG" >&2
+    exit 1
 fi
 
 echo "Done. Workspace ready at: $XCLBIN_WORKSPACE_DIR"

@@ -109,7 +109,22 @@ class SpawnerServer(
   // nothing: at the watermark we take one in and hand one out every cycle, occupancy holds, and
   // both sides run at II=1.
   val drainingThisCycle = Wire(Bool())
-  val letFlowBy = peerDemand && hasSurplus && !drainingThisCycle
+  // The intake gate uses its own "draining" term, and the difference is not
+  // cosmetic. drainingThisCycle counts handingToPeer, which is gated on the
+  // outside ring's qOutTask.ready -- fine while that ring was rigid, because a
+  // rigid hop drives qOutTask.ready from validIn alone. An ELASTIC hop derives
+  // it from availableTask.ready instead (a hop that is emptying is injectable
+  // now, not a cycle later), so feeding that ready back into availableTask.ready
+  // here closes a combinational cycle straight through the hop.
+  //
+  // Offering to a peer is enough for this gate. Intake stays bounded by
+  // taskQueue.io.enq.ready, so treating an offer the ring did not accept as a
+  // drain can only make us keep a task we could have passed on -- never
+  // overflow. It also preserves what drainingThisCycle was introduced for: at
+  // the watermark we still take one in and hand one out on the same cycle
+  // rather than alternating at II=2.
+  val drainingForIntake = Wire(Bool())
+  val letFlowBy = peerDemand && hasSurplus && !drainingForIntake
 
   taskQueue.io.enq.valid :=
     io.connNetwork_slave.data.availableTask.valid && !letFlowBy
@@ -222,6 +237,9 @@ class SpawnerServer(
     canServePeer && io.connNetwork_slave.data.qOutTask.ready
 
   drainingThisCycle := pushedTask || handingToPeer
+  // Same signal minus the outside ring's ready, so the intake gate stays clear
+  // of the elastic hop's ready-from-ready path. See drainingForIntake above.
+  drainingForIntake := pushedTask || canServePeer
 
   io.connNetwork_slave.data.qOutTask.valid := canServePeer
   io.connNetwork_slave.data.qOutTask.bits := taskQueue.io.deq.bits

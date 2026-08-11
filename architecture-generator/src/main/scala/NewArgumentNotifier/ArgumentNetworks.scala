@@ -82,7 +82,11 @@ case class ArgumentNetworksConfig(
       * continuation source. One preserves the historical one-source/one-lane
       * mapping.
       */
-    newLaneStripingFactor: Int = 1
+    newLaneStripingFactor: Int = 1,
+    /** Expose every resolution's continuation address so the allocator's
+      * recycler can return it to the free list.
+      */
+    enableRecycling: Boolean = false
 ) {
   require(nServers >= 1)
   require(newLanesPerServer >= 1 && updateLanesPerServer >= 1)
@@ -129,6 +133,9 @@ case class ArgumentNetworksConfig(
   val lineShift = log2Ceil(lineBytes)
   val lineAddressWidth = realAddressWidth - lineShift
   require(lineAddressWidth >= 1)
+
+  /** The 2048-bit continuation case is transferred as two 1024-bit beats. */
+  val memoryAxiDataWidth = if (continuationSize == 2048) 1024 else continuationSize
 
   def metadataType =
     new ContinuationMetadata(serverTagWidth, serverIDWidth, laneWidth)
@@ -477,7 +484,7 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       axi4.full.Master(
         axi4.Config(
           wAddr = realAddressWidth,
-          wData = continuationSize,
+          wData = memoryAxiDataWidth,
           wId = slowAxiIdWidth
         )
       )
@@ -489,7 +496,7 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       axi4.full.Master(
         axi4.Config(
           wAddr = realAddressWidth,
-          wData = continuationSize,
+          wData = memoryAxiDataWidth,
           wId = 1,
           read = false
         )
@@ -510,6 +517,24 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
   )
 
   val done = IO(Output(Bool()))
+
+  /** Continuation addresses as they resolve, for the allocator's recycler. Same
+    * index convention as `connStealNtw`: fast lanes first, then slow handlers.
+    * Byte addresses, so the allocator needs none of this module's line-address
+    * geometry. Valid-only -- the recycler observes resolutions, never gates
+    * them, because backpressuring a spawn would stall the resolution credits
+    * and wedge the server.
+    */
+  val resolvedAddresses =
+    if (enableRecycling)
+      Some(
+        IO(
+          Output(
+            Vec(nFastSpawnLegs + nSlowHandlers, Valid(UInt(realAddressWidth.W)))
+          )
+        )
+      )
+    else None
 
   /** Observational ready/valid taps for the telemetry watcher. Each UInt is
     * packed as {ready, valid}; these outputs never participate in flow control.
@@ -532,6 +557,7 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
         updateLanesPerServer + 1, // +1: lane fed from the redirect ring
         serverIndex = serverIndex,
         cacheDelayCycles = cacheDelayCycles,
+        enableRecycling = enableRecycling,
         missedUpdateExtra = missedUpdateExtra,
         updatePayloadWidth = updatePayloadWidth,
         updateOffsetWidth = updateOffsetWidth
@@ -663,7 +689,9 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     continuationSize,
     serverTagWidth,
     serverIDWidth,
-    laneWidth
+    laneWidth,
+    updatePayloadWidth,
+    updateOffsetWidth
   )
   private val evictType = new TaggedEvictedContinuation(
     lineAddressWidth,
@@ -672,7 +700,12 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     serverIDWidth,
     laneWidth
   )
-  private val slowType = new SlowUpdate(lineAddressWidth, continuationSize)
+  private val slowType = new SlowUpdate(
+    lineAddressWidth,
+    continuationSize,
+    updatePayloadWidth,
+    updateOffsetWidth
+  )
 
   // Address -> eviction-saver-lane function. MUST be the same function the
   // eviction network below uses to physically route a write, so each gater's
@@ -695,7 +728,9 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
         nEvictionSaverLanes = nEvictionSavers,
         saverOf = evictionSaverOf,
         slowRequestDepth = slowRequestQueueDepth,
-        counterWidth = 64
+        counterWidth = 64,
+        payloadWidth = updatePayloadWidth,
+        offsetWidth = updateOffsetWidth
       )
     )
   )
@@ -776,7 +811,10 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
         lineAddressWidth,
         lineShift,
         continuationSize,
-        axiIdWidth = slowAxiIdWidth
+        axiIdWidth = slowAxiIdWidth,
+        enableRecycling = enableRecycling,
+        payloadWidth = updatePayloadWidth,
+        offsetWidth = updateOffsetWidth
       )
     )
     handler.m_axi :=> m_axi_slow(k)
@@ -850,6 +888,11 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       }
       when(sp.fire) { doneReg := true.B }
       adapter.io.connStealNtw <> connStealNtw(leg)
+      resolvedAddresses.foreach { out =>
+        val tap = servers(s).io.resolvedAddressOut.get(j)
+        out(leg).valid := tap.valid
+        out(leg).bits := memoryAddressOf(tap.bits)
+      }
     }
   }
 
@@ -858,6 +901,11 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     slowHandlers(k).io.spawnOut :=> adapter.io.spawnIn
     when(slowHandlers(k).io.spawnOut.fire) { doneReg := true.B }
     adapter.io.connStealNtw <> connStealNtw(nFastSpawnLegs + k)
+    resolvedAddresses.foreach { out =>
+      val tap = slowHandlers(k).io.resolvedAddressOut.get
+      out(nFastSpawnLegs + k).valid := tap.valid
+      out(nFastSpawnLegs + k).bits := memoryAddressOf(tap.bits)
+    }
   }
 
   // ---- Ring plumbing helpers --------------------------------------------------

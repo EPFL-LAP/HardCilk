@@ -1,8 +1,7 @@
 package Allocator
 
 import chisel3._
-
-import Util._
+import chisel3.util.Valid
 
 import chext.amba.axi4
 import chext.amba.axi4s
@@ -57,7 +56,12 @@ class Allocator(
     peCount: Int,
     vcasCount: Int,
     queueDepth: Int,
-    pePortWidth: Int  // output pointer width to the PE (e.g. 64); addresses zero-extended to it
+    pePortWidth: Int, // output pointer width to the PE (e.g. 64); addresses zero-extended to it
+    // Number of resolution branches feeding freed addresses back in (every
+    // ArgumentServer spawn lane plus every SlowArgumentHandler). Zero disables
+    // recycling entirely and the allocator is exactly as it was: a one-shot
+    // pool the host refills on pause.
+    recycleSourceCount: Int = 0
 ) extends Module with AllocatorModule {
 
   require(vcasCount >= 1 && peCount >= 1)
@@ -78,20 +82,33 @@ class Allocator(
     )
   )
 
+  private val enableRecycling = recycleSourceCount > 0
+
   val vcas =
     Seq.fill(vcasCount)(
       Module(
         new AllocatorServer(
           dataWidth = memDataWidth,
           sysAddressWidth = addrWidth,
-          burstLength = 15
+          burstLength = 15,
+          enableRecycling = enableRecycling
         )
       )
     )
 
+  // One AXI master per server, split at the port into an independent read half
+  // (allocation) and write half (recycling). They run concurrently on their own
+  // channels: the free list keeps a head/tail gap and a recycled beat only
+  // becomes readable on its B response, so no read-after-write ordering is
+  // needed between them.
   val vcasRvmRO = Seq.fill(vcasCount)(
     Module(
-      new RVtoAXIBridge(memDataWidth, addrWidth, write = false, burstLength = 15)
+      new AllocatorAXIAdapter(
+        dataWidth = memDataWidth,
+        addrWidth = addrWidth,
+        burstLength = 15,
+        enableWrite = enableRecycling
+      )
     )
   )
 
@@ -113,9 +130,50 @@ class Allocator(
   for (i <- 0 until vcasCount) {
     io_internal.axi_mgmt_vcas(i) :=> vcas(i).io.axi_mgmt
 
-    vcasRvmRO(i).io.read.get.address <> vcas(i).io.read_address
-    vcasRvmRO(i).io.read.get.data <> vcas(i).io.read_data
+    vcasRvmRO(i).io.read_address <> vcas(i).io.read_address
+    vcasRvmRO(i).io.read_data <> vcas(i).io.read_data
     vcas(i).io.dataOut <> continuationNetwork.io.connVCAS(i)
+  }
+
+  // ---- Continuation recycling -------------------------------------------------
+  // Freed addresses are packed into beats at each resolution branch, ride a
+  // closed ring, and are written back into a server's own region through the
+  // write half of that server's port. No extra AXI ports.
+  override val io_recycle =
+    if (enableRecycling)
+      Some(IO(Vec(recycleSourceCount, Flipped(Valid(UInt(addrWidth.W))))))
+    else None
+  // Aggregate addresses dropped by the collectors. Should read zero; a nonzero
+  // value means a collector queue is undersized and the pool is shrinking.
+  val io_leaked = if (enableRecycling) Some(IO(Output(UInt(64.W)))) else None
+
+  if (enableRecycling) {
+    val collectors = Seq.fill(recycleSourceCount)(
+      Module(new ResolutionCollector(memDataWidth, addrWidth))
+    )
+    val recycleNetwork = Module(
+      new RecycleNetwork(memDataWidth, recycleSourceCount, vcasCount)
+    )
+    val writers = Seq.fill(vcasCount)(
+      Module(new RecycleWriter(memDataWidth, addrWidth, burstLength = 15))
+    )
+
+    for (i <- 0 until recycleSourceCount) {
+      collectors(i).io.in <> io_recycle.get(i)
+      collectors(i).io.beatOut <> recycleNetwork.io.collectorIn(i)
+    }
+    for (i <- 0 until vcasCount) {
+      writers(i).io.beatIn <> recycleNetwork.io.writerOut(i)
+      writers(i).io.server <> vcas(i).io.recycle.get
+      writers(i).io.write_address <> vcasRvmRO(i).io.write_address.get
+      writers(i).io.write_data <> vcasRvmRO(i).io.write_data.get
+      vcasRvmRO(i).io.write_last.get := writers(i).io.write_last
+      writers(i).io.write_done := vcasRvmRO(i).io.write_done.get
+    }
+
+    val totalLeaked = collectors.map(_.io.leaked).reduce(_ +& _)
+    io_leaked.get := totalLeaked
+    vcas.foreach(_.io.leakedIn.get := totalLeaked)
   }
 
   axiFullPorts.zip(io_internal.vcas_axi_full).foreach { case (port, s_axi) =>

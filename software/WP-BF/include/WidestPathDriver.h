@@ -266,6 +266,17 @@ private:
 
     while (true)
     {
+      // Cooperative stop point. Without it the Ctrl-C flag is set but nothing
+      // reads it, so the loop polls on to watchdog_s_ and the host looks hung
+      // after printing "stopping gracefully". Returning takes the same path the
+      // watchdog takes: readback, telemetry dump, exit.
+      if (stopRequested())
+      {
+        std::cerr << "[WP-BF] interrupted by user; aborting after "
+                  << iters << " polls\n";
+        return -1;
+      }
+
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 

@@ -14,7 +14,7 @@
     ]
   },
   "spawnNextList": {},
-  "targetFrequency": 300,
+  "targetFrequency": 100,
   "taskDescriptors": [
     {
       "spawnServersCount": 1,

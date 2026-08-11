@@ -295,9 +295,38 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             uint64_t allocationServerIndex = 0;
             for(const auto &runtimeServer : allocationServers){
                 const uint64_t base_address = runtimeServer.baseAddress;
-                const uint64_t allocator_capacity = std::max<uint64_t>(
-                    runtimeServer.queueCapacity,
-                    taskDescriptor.getCapacityVirtualQueue("allocator"));
+                const bool recycling = taskDescriptor.recyclesContinuations();
+                // The runtime descriptor wins. The sidecar's queueCapacity is
+                // frozen from the JSON at build time, so taking max() of the two
+                // silently floors the pool at the JSON value -- which defeats a
+                // host that deliberately sized it DOWN (e.g. countDecoupled's
+                // --closure-pool, used to prove recycling actually recycles). In
+                // normal operation the runtime value is already the larger of the
+                // two, so this changes nothing.
+                uint64_t allocator_capacity =
+                    taskDescriptor.getCapacityVirtualQueue("allocator") != 0
+                        ? taskDescriptor.getCapacityVirtualQueue("allocator")
+                        : runtimeServer.queueCapacity;
+                // A recycling pool is circular, and the read pointer moves a whole
+                // burst at a time, so the region has to be an exact number of
+                // bursts or the wrap would land mid-burst. Round down: the few
+                // spare closures are cheaper than a misaligned FIFO.
+                if (recycling)
+                {
+                    const uint64_t rounded =
+                        (allocator_capacity / alloc_conts_per_burst) * alloc_conts_per_burst;
+                    if (rounded != allocator_capacity)
+                        std::cout << "[recycle] " << taskDescriptor.name
+                                  << " pool " << allocator_capacity << " -> " << rounded
+                                  << " entries (whole bursts of "
+                                  << alloc_conts_per_burst << ")\n";
+                    allocator_capacity = rounded;
+                    if (allocator_capacity == 0)
+                        throw std::runtime_error(
+                            "Continuation recycling needs a pool of at least " +
+                            std::to_string(alloc_conts_per_burst) + " entries for " +
+                            taskDescriptor.name);
+                }
                 const uint64_t continuation_entry_bytes = taskDescriptor.widthTask / 8;
 
                 // Continuations are indirect through this address list. In HBM
@@ -323,6 +352,11 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 
                 memory_->writeReg64(base_address + alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(base_address + alloc_server_raddr_shift, continuation_queue_addr);
+                // Capacity must be programmed before the pause is released. Left at
+                // zero the pool is walked once and never wraps, which is exactly the
+                // non-recycling behaviour every other benchmark relies on.
+                memory_->writeReg64(base_address + alloc_server_capacity_shift,
+                                    recycling ? allocator_capacity : 0);
                 memory_->writeReg64(base_address + alloc_server_availableSize_shift, allocator_capacity);
 
                 // Log the successful initialization information of the allocation server with indentation

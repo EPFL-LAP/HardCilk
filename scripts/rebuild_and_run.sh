@@ -17,6 +17,11 @@
 #   ARGUMENT_SERVER=no-cache bash scripts/rebuild_and_run.sh countDecoupled
 #   ARGUMENT_SERVER=cached bash scripts/rebuild_and_run.sh triangleCountDecoupled
 #   ARGUMENT_SERVER=no-cache bash scripts/rebuild_and_run.sh triangleCountDecoupled
+#   bash scripts/rebuild_and_run.sh triangleCount
+#   ARCHITECTURE=updated ARGUMENT_SERVER=no-cache \
+#     bash scripts/rebuild_and_run.sh triangleCount updatedNoCache
+#   bash scripts/rebuild_and_run.sh fullTriangleCountDecoupled
+#   GRAPH=/beta/shahawy/graphs/congress.txt bash scripts/rebuild_and_run.sh fullTriangleCountDecoupled
 #   ARCHITECTURE=legacy bash scripts/rebuild_and_run.sh countDecoupled
 #   ARCHITECTURE=legacy ARGUMENT_SERVER=no-cache \
 #     bash scripts/rebuild_and_run.sh countDecoupled legacyNoCache
@@ -54,7 +59,15 @@ WORKSPACE_LABEL=${2:-${WORKSPACE_LABEL:-${WORKSPACE_NUMBER:-}}}
 WATCHDOG=${WATCHDOG:-1200}
 RUN_TIMEOUT=${RUN_TIMEOUT:-1500}
 START_STEP=${START_STEP:-1}
-ARCHITECTURE=${ARCHITECTURE:-updated}
+if [[ -z "${ARCHITECTURE+x}" ]]; then
+  # regular triangleCount's unchanged HLS speaks the historical no-cache
+  # argDataOut/argOut ABI, so restore its original architecture by default.
+  if [[ "$BENCHMARK" == "triangleCount" ]]; then
+    ARCHITECTURE=legacy
+  else
+    ARCHITECTURE=updated
+  fi
+fi
 ARGUMENT_SERVER=${ARGUMENT_SERVER:-}
 
 if [[ -n "${JSON:-}" ]]; then
@@ -74,7 +87,9 @@ declare -A HLS_KERNELS=(
   [ApproxDenseSub]="ApproxDenseSub vertex_subset_helper"
   [MaximalIndependentSet]="MaximalIndependentSet NGS mis_loop_helper"
   [GraphColoring]="GraphColoring color_init_helper color_loop_helper"
+  [triangleCount]="triangle vertex_map"
   [triangleCountDecoupled]="whileLoopMain whileLoopMain_reentry0 whileLoopMain_reentry0_cont0 memReader"
+  [fullTriangleCountDecoupled]="triangle adder_unit_launcher adder memReader"
   [countDecoupled]="taskInitiator_reentry0 taskAdder_cont0 memReader"
 )
 
@@ -85,7 +100,9 @@ declare -A HOST_TARGET=(
   [ApproxDenseSub]="ApproxDenseSub_xrt"
   [MaximalIndependentSet]="MaximalIndependentSet_xrt"
   [GraphColoring]="GraphColoring_xrt"
+  [triangleCount]="triangleCount_xrt"
   [triangleCountDecoupled]="triangleCountDecoupled_xrt"
+  [fullTriangleCountDecoupled]="fullTriangleCountDecoupled_xrt"
   [countDecoupled]="countDecoupled_xrt"
 )
 
@@ -96,19 +113,23 @@ declare -A XCLBIN_NAME=(
   [ApproxDenseSub]="ApproxDenseSub.xclbin"
   [MaximalIndependentSet]="MaximalIndependentSet.xclbin"
   [GraphColoring]="GraphColoring.xclbin"
+  [triangleCount]="triangleCount.xclbin"
   [triangleCountDecoupled]="triangleCountDecoupled.xclbin"
+  [fullTriangleCountDecoupled]="fullTriangleCountDecoupled.xclbin"
   [countDecoupled]="countDecoupled.xclbin"
 )
 
 declare -A REDUCE_AXI=(
-  [BFS]=7
+  [BFS]=16
   [WP-BF]=30
   [BellmanFord]=30
   [ApproxDenseSub]=30
   [MaximalIndependentSet]=30
   [GraphColoring]=30
+  [triangleCount]=16
   [triangleCountDecoupled]=16
   [countDecoupled]=16
+  [fullTriangleCountDecoupled]=16
 )
 
 default_run_args() {
@@ -128,8 +149,19 @@ default_run_args() {
     GraphColoring)
       echo "${GRAPH:-/beta/bradley/Graphs/tinyGraph.txt} ${MAX_COLORS:-64} ${SEED:-1} ${WATCHDOG}"
       ;;
+    triangleCount)
+      echo "${GRAPH:-/beta/bradley/Graphs/tinyGraph.txt} ${WATCHDOG}"
+      ;;
     triangleCountDecoupled)
       echo "${SIZE:-10} ${INSTANCES:-10} ${WATCHDOG}"
+      ;;
+    fullTriangleCountDecoupled)
+      # Real graph in, triangle count out. graph_64_tri is the default because it
+      # is small enough for hw_emu and still has 64 triangles to get wrong --
+      # tinyGraph has none, so it would pass without proving anything. Large
+      # graphs are limited by the closure pool, not by time: see the driver's
+      # closure budget line and its sliced-execution banner.
+      echo "${GRAPH:-/beta/shahawy/graphs/graph_64_tri.txt} ${WATCHDOG}"
       ;;
     countDecoupled)
       echo "${SIZE:-10} ${INSTANCES:-10} ${WATCHDOG}"
@@ -171,6 +203,10 @@ if [[ "$ARCHITECTURE" == "legacy" && "$ARGUMENT_SERVER" == "cached" ]]; then
 fi
 if [[ -z "$ARGUMENT_SERVER" ]]; then
   if [[ "$ARCHITECTURE" == "legacy" ]]; then ARGUMENT_SERVER=no-cache; else ARGUMENT_SERVER=cached; fi
+fi
+if [[ "$BENCHMARK" == "triangleCount" && "$ARGUMENT_SERVER" != "no-cache" ]]; then
+  echo "triangleCount's existing HLS requires ARGUMENT_SERVER=no-cache; use ARCHITECTURE=legacy (default) or ARCHITECTURE=updated ARGUMENT_SERVER=no-cache" >&2
+  exit 2
 fi
 
 WORKSPACE_SUFFIX=""
@@ -214,17 +250,37 @@ if (( START_STEP <= 1 )); then
     read -ra KERNELS <<< "${HLS_KERNELS[$BENCHMARK]}"
     HLS_OUTPUT="$ROOT/hls-kernel-output/$BENCHMARK"
     SELECTED_HLS_CFLAGS=${HLS_CFLAGS:-}
+    # triangleCount and fullTriangleCountDecoupled are deliberately not in this
+    # list: triangleCount already has the legacy argDataOut/argOut interface and
+    # needs no compile-time HLS variant; fullTriangleCountDecoupled has only
+    # the cached-notifier ABI (no COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER path in
+    # its util.h), and its descriptor names one peHDLPath per task rather than
+    # cached/no-cache variants, so its kernels build straight into
+    # hls-kernel-output/<benchmark>/<kernel>.
     if [[ "$BENCHMARK" == "countDecoupled" ||
-          "$BENCHMARK" == "triangleCountDecoupled" ]]; then
+          "$BENCHMARK" == "triangleCountDecoupled" ||
+          "$BENCHMARK" == "BFS" ]]; then
       HLS_OUTPUT="$HLS_OUTPUT/$ARGUMENT_SERVER"
-      if [[ "$SELECTED_HLS_CFLAGS" == *COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER* ]]; then
-        echo "Do not set COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER manually; use ARGUMENT_SERVER" >&2
-        exit 2
-      fi
-      if [[ "$ARGUMENT_SERVER" == "no-cache" ]]; then
-        SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=1"
+      if [[ "$BENCHMARK" == "BFS" ]]; then
+        if [[ "$SELECTED_HLS_CFLAGS" == *BFS_LEGACY_ARGUMENT_NOTIFIER* ]]; then
+          echo "Do not set BFS_LEGACY_ARGUMENT_NOTIFIER manually; use ARGUMENT_SERVER" >&2
+          exit 2
+        fi
+        if [[ "$ARGUMENT_SERVER" == "no-cache" ]]; then
+          SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DBFS_LEGACY_ARGUMENT_NOTIFIER=1"
+        else
+          SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DBFS_LEGACY_ARGUMENT_NOTIFIER=0"
+        fi
       else
-        SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=0"
+        if [[ "$SELECTED_HLS_CFLAGS" == *COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER* ]]; then
+          echo "Do not set COUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER manually; use ARGUMENT_SERVER" >&2
+          exit 2
+        fi
+        if [[ "$ARGUMENT_SERVER" == "no-cache" ]]; then
+          SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=1"
+        else
+          SELECTED_HLS_CFLAGS="$SELECTED_HLS_CFLAGS -DCOUNTDECOUPLED_LEGACY_ARGUMENT_NOTIFIER=0"
+        fi
       fi
     fi
     HLS_CFLAGS="$SELECTED_HLS_CFLAGS" bash build_hls_kernel/build_kernels.sh \
@@ -366,6 +422,15 @@ echo "===== STEP6 RUN ====="
 source /opt/xilinx/xrt/setup.sh
 source /alpha/tools/Xilinx/Vitis/2024.1/settings64.sh
 cd "$BUILD_DIR"
-timeout "$RUN_TIMEOUT" bash -c \
+# --foreground keeps the host in THIS shell's foreground process group. Without it
+# `timeout` puts the host in a fresh background group, and the driver's Ctrl-C
+# takeover (which disables the tty's VINTR so the interrupt never reaches xsim)
+# refuses to arm from a background group -- a Ctrl-C would then fall back to a
+# group-wide SIGINT, cancel the simulator's `run all`, and hang the host on its
+# next register read. The cost is that a RUN_TIMEOUT expiry now SIGTERMs only the
+# host instead of the whole group; the host's own handler treats that as a
+# graceful stop and tears the simulator down itself, which also keeps the
+# telemetry dump a hard group-kill used to throw away.
+timeout --foreground "$RUN_TIMEOUT" bash -c \
   "XCL_EMULATION_MODE=hw_emu HARDCILK_HBM_DESCRIPTOR=../${BENCHMARK}.hbmports.json ../src/host/build/projects/$BENCHMARK/${HOST_TARGET[$BENCHMARK]} ${XCLBIN_NAME[$BENCHMARK]} $RUN_ARGS"
 echo "CYCLE_DONE_EXIT=$?"

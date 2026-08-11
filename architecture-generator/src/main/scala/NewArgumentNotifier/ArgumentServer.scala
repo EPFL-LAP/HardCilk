@@ -78,15 +78,17 @@ class NewContinuationPort(
     Decoupled(new NewContinuationReq(lineAddressWidth, continuationSize))
   )
 
-  // We assign an ID inside the LUTRAM
+  // We assign an ID (the cache slot) as the request is accepted
   val assignedId = Output(UInt(serverIDWidth.W))
   val assignedLane = Output(UInt(laneWidth.W))
 }
 
-/** A compact continuation update: one child finished, ORs its payload into one
-  * aligned payload-sized slot, and implicitly decrements the join counter by
-  * one.  Full-line payloads omit `offset` and may contain sparse set bits.
-  * Assumes exactly ONE update write per child.
+/** A compact continuation update: one child finished, writes its payload into
+  * one aligned payload-sized slot of the continuation, and implicitly
+  * decrements the join counter by one.  Full-line payloads omit `offset`.
+  * Assumes exactly ONE update write per child, and one child per slot: the slot
+  * is WRITTEN, not OR-accumulated, so two children sharing a slot are
+  * last-write-wins.
   */
 class ContinuationUpdate(
     val lineAddressWidth: Int,
@@ -121,11 +123,43 @@ class EvictedContinuation(val lineAddressWidth: Int, val continuationSize: Int)
 
 /** An update that missed the cache (line already evicted); handled in memory
   * by a SlowArgumentHandler.
+  *
+  * This stays COMPACT -- payload plus slot offset, exactly as it arrived -- for
+  * the whole journey from the cache to the handler. Nothing in between reads the
+  * data (the slow-path demux keys on `address`), so carrying a 2048-bit line to
+  * express a 32-bit payload only inflates every queue on the path: the coupled
+  * FIFO alone was 58 RAMB36 per lane, of which half was this field's zeroes.
+  * `expanded` does the placement once, at the single point of use inside
+  * SlowArgumentHandler.
   */
-class SlowUpdate(val lineAddressWidth: Int, val continuationSize: Int)
-    extends Bundle {
+class SlowUpdate(
+    val lineAddressWidth: Int,
+    val continuationSize: Int,
+    val payloadWidth: Int = 0,
+    val offsetWidth: Int = 0
+) extends Bundle {
+  // A full-line payload has one slot and therefore no offset, which is also the
+  // shape this bundle had before it was made compact.
+  val effectivePayloadWidth =
+    if (payloadWidth == 0) continuationSize else payloadWidth
+  require(effectivePayloadWidth <= continuationSize)
+  require(continuationSize % effectivePayloadWidth == 0)
+
   val address = UInt(lineAddressWidth.W)
-  val dataWrite = UInt(continuationSize.W)
+  val payload = UInt(effectivePayloadWidth.W)
+  val offset = if (offsetWidth > 0) Some(UInt(offsetWidth.W)) else None
+
+  /** The payload shifted into its aligned slot of a full continuation line,
+    * zero everywhere else -- what used to be stored in `dataWrite`.
+    */
+  def expanded: UInt = {
+    if (effectivePayloadWidth == continuationSize) {
+      payload
+    } else {
+      val bitShift = offset.get << log2Ceil(effectivePayloadWidth)
+      (payload.pad(continuationSize) << bitShift)(continuationSize - 1, 0)
+    }
+  }
 }
 
 /** An eviction plus the cache slot that produced it.  The compact metadata is
@@ -150,9 +184,12 @@ class TaggedSlowUpdate(
     val continuationSize: Int,
     val serverTagWidth: Int,
     val serverIDWidth: Int,
-    val laneWidth: Int
+    val laneWidth: Int,
+    val payloadWidth: Int = 0,
+    val offsetWidth: Int = 0
 ) extends Bundle {
-  val update = new SlowUpdate(lineAddressWidth, continuationSize)
+  val update =
+    new SlowUpdate(lineAddressWidth, continuationSize, payloadWidth, offsetWidth)
   val metadata =
     new ContinuationMetadata(serverTagWidth, serverIDWidth, laneWidth)
 }
@@ -166,10 +203,15 @@ class CoupledSlowPathEntry(
     val continuationSize: Int,
     val serverTagWidth: Int,
     val serverIDWidth: Int,
-    val laneWidth: Int
+    val laneWidth: Int,
+    val payloadWidth: Int = 0,
+    val offsetWidth: Int = 0
 ) extends Bundle {
   val spawnValid = Bool()
   val evictionValid = Bool()
+  // The evicted line is real data on its way to HBM (or the spawned task's
+  // payload -- the two cases share this field), so it stays continuation-wide.
+  // The update beside it does not: see SlowUpdate.
   val eviction = new TaggedEvictedContinuation(
     lineAddressWidth,
     continuationSize,
@@ -183,7 +225,9 @@ class CoupledSlowPathEntry(
     continuationSize,
     serverTagWidth,
     serverIDWidth,
-    laneWidth
+    laneWidth,
+    payloadWidth,
+    offsetWidth
   )
 }
 
@@ -208,7 +252,8 @@ class ArgumentServerIO(
     NParallelNew: Int,
     NParallelUpdate: Int,
     updatePayloadWidth: Int,
-    updateOffsetWidth: Int
+    updateOffsetWidth: Int,
+    enableRecycling: Boolean
 ) extends Bundle {
   private val laneW = ArgumentNotifierHelpers.laneWidth(NParallelNew)
 
@@ -240,6 +285,15 @@ class ArgumentServerIO(
   val spawnTaskOutputs =
     Vec(NParallelNew, Decoupled(new SpawnedTask(continuationSize)))
 
+  // Address of each continuation as it resolves, for the recycler. A resolved
+  // line's data has already been merged into the spawned task, so its storage is
+  // dead from this moment and the address can go back on the free list. Valid,
+  // never Decoupled: the recycler observes the spawn, it must never gate it.
+  val resolvedAddressOut =
+    if (enableRecycling)
+      Some(Vec(NParallelNew, Valid(UInt(lineAddressWidth.W))))
+    else None
+
   val coupledSlowPath = Vec(
     NParallelNew,
     Decoupled(
@@ -248,7 +302,9 @@ class ArgumentServerIO(
         continuationSize,
         serverTagWidth,
         serverIDWidth,
-        laneW
+        laneW,
+        updatePayloadWidth,
+        updateOffsetWidth
       )
     )
   )
@@ -273,7 +329,14 @@ class ArgumentServer(
     // it resolves to a full-continuation payload.  Descriptor/config paths pass
     // the validated physical width explicitly.
     updatePayloadWidth: Int = 0,
-    updateOffsetWidth: Int = 0
+    updateOffsetWidth: Int = 0,
+    // Expose each resolution's line address so the recycler can return it to the
+    // allocator's free list.
+    enableRecycling: Boolean = false,
+    // Depth at which the front porch switches from a shift register to URAM.
+    // Effectively off by default -- see Util.DelayLine.defaultUramThreshold for
+    // the measurement that disabled it. Exposed so the URAM path stays testable.
+    porchUramThreshold: Int = Util.DelayLine.defaultUramThreshold
 ) extends Module {
 
   require(cacheDelayCycles >= 0)
@@ -299,7 +362,8 @@ class ArgumentServer(
       NParallelNew,
       NParallelUpdate,
       effectiveUpdatePayloadWidth,
-      updateOffsetWidth
+      updateOffsetWidth,
+      enableRecycling
     )
   )
 
@@ -350,12 +414,16 @@ class ArgumentServer(
   // point between the insertion head and the far-end resolution: at most
   // (cacheDepth-1) continuations are resident simultaneously.
   private val residentCapacity = cacheDepth - 1
-  // A resolved cache line remains charged to inFlight for three cycles after
-  // its slot is freed: issue the synchronous read, classify/enqueue its result,
-  // then dequeue the registered coupledQ. Keep those three pipeline stages from
+  // A resolved cache line remains charged to inFlight for four cycles after its
+  // slot is freed: issue the synchronous read, classify/enqueue its result,
+  // then the two stages of the BRAM-backed coupledQ (memory write -> memory
+  // read, then the output stage handshake). Keep those pipeline stages from
   // stealing capacity from an otherwise-full cache + porch, or steady-state
-  // admission bubbles and II=1 is lost.
-  private val resolutionTailCredits = 3
+  // admission bubbles and II=1 is lost. This also keeps
+  //   resolutionInCq <= admitCap - residentCapacity
+  // exact: the credit count and the reserved coupledQ share are the same
+  // number, so lengthening the drain pipeline by a cycle must widen both.
+  private val resolutionTailCredits = 4
   private val admitCap =
     residentCapacity + resolutionPoolDepth + resolutionTailCredits
   // Admission alone must bound the undrained resolution backlog, because the porch
@@ -432,28 +500,76 @@ class ArgumentServer(
     continuationSize,
     serverTagWidth,
     serverIDWidth,
-    laneW
+    laneW,
+    effectiveUpdatePayloadWidth,
+    updateOffsetWidth
+  )
+  private def taggedSlowType = new TaggedSlowUpdate(
+    lineAddressWidth,
+    continuationSize,
+    serverTagWidth,
+    serverIDWidth,
+    laneW,
+    effectiveUpdatePayloadWidth,
+    updateOffsetWidth
   )
 
-  // Base stores use SyncReadMem (BRAM) to save area, updates use Mem (LUTRAM) for the async RMW
+  // Both large per-lane payload stores are synchronous-read memories so they
+  // infer BRAM rather than LUTRAM. Each has one read port (tail resolution) and
+  // one write port (insertion / update), which is exactly a simple dual-port
+  // block RAM.
   val cacheBaseStores = Seq.fill(NParallelNew)(
     SyncReadMem(cacheDepth, UInt(continuationSize.W))
   )
   val cacheIDStores =
     Seq.fill(NParallelNew)(Mem(cacheDepth, UInt(lineAddressWidth.W)))
-  val updateLUTRAMs =
-    Seq.fill(NParallelNew)(Mem(cacheDepth, UInt(continuationSize.W)))
 
-  // updateLUTRAMs must infer as LUTRAM, which allows exactly ONE write port. An
-  // insert and an update are independently sourced (porch vs perLaneFIFO) and
-  // routinely land in the same cycle on DIFFERENT slots, so both cannot own that
-  // port. The insert's write was only ever a clear of the recycled slot's stale
-  // delta, so it is replaced by this per-slot bit: false means "the delta record
-  // for this slot is stale, read it as zero". Insert clears it, the first update
-  // to the slot sets it and simultaneously overwrites the stale contents. Both
-  // read sites substitute zero while it is false, so no stale OR-mask or update
-  // count can survive into the resolution merge. The RMW is now the memory's only
-  // writer, and the bit lives in registers, which have no write-port limit.
+  // The update store is a row of `updateSlotCount` payload-sized elements per
+  // cache slot, written with a per-element mask.  A masked element write is a
+  // BRAM write-enable lane, so an update no longer has to READ the row first:
+  // the old read-modify-write is what forced this memory into LUTRAM (a
+  // synchronous read cannot close a same-cycle RMW loop).  One update payload
+  // corresponds to exactly one element, so distinct children never collide and
+  // repeated writes to one element are last-write-wins.
+  //
+  // The row is split across several memories because Vivado's RAM inference
+  // gives up past a certain number of mask lanes. Measured on xcu55c/2024.1:
+  // sixteen lanes infers a clean simple-dual-port BRAM, but a 2048-bit row with
+  // sixty-four 32-bit lanes reports "[Synth 8-7186] not inferred as ram due to
+  // incorrect usage" and drops the WHOLE array into flip-flops -- 76,759 LUTs
+  // and 258,138 registers for one 128x2048 store, against 28 RAMB36 for the
+  // shape that infers. Splitting keeps every store at or below the lane count
+  // that is known to work; an update still writes exactly one element of
+  // exactly one store, so the semantics are unchanged.
+  private val maxSlotsPerStore = 16
+  private val slotsPerStore = math.min(updateSlotCount, maxSlotsPerStore)
+  private val updateStoreCount = updateSlotCount / slotsPerStore
+  require(
+    updateStoreCount * slotsPerStore == updateSlotCount,
+    "update slots must divide evenly across the payload stores"
+  )
+  // Store s holds slots [s*slotsPerStore, (s+1)*slotsPerStore); concatenating
+  // the stores in order reproduces the original flat row exactly.
+  val updateStores = Seq.fill(NParallelNew)(
+    Seq.fill(updateStoreCount)(
+      SyncReadMem(
+        cacheDepth,
+        Vec(slotsPerStore, UInt(effectiveUpdatePayloadWidth.W))
+      )
+    )
+  )
+
+  // The update store has exactly ONE write port. An insert and an update are
+  // independently sourced (porch vs perLaneFIFO) and routinely land in the same
+  // cycle on DIFFERENT slots, so both cannot own that port. The insert's write
+  // was only ever a clear of the recycled slot's stale payloads, so it is
+  // replaced by this per-slot bit: false means "the update row for this slot is
+  // stale, read it as zero". Insert clears it; the first update to the slot sets
+  // it and, in the same access, writes every element (its own payload plus zeros
+  // elsewhere), which IS the deferred clear. Both read sites substitute zero
+  // while it is false, so no stale payload can survive into the resolution
+  // merge. The update is now the memory's only writer, and the bit lives in
+  // registers, which have no write-port limit.
   val deltaValid = Seq.fill(NParallelNew)(
     RegInit(VecInit(Seq.fill(cacheDepth)(false.B)))
   )
@@ -461,6 +577,8 @@ class ArgumentServer(
   // decremented by the update. As a Mem those are two writers; as a register file
   // they are independent writes to different indices. It is only cacheDepth x
   // counterWidth bits, the same shape as the cacheValid/cacheDone vectors above.
+  // With the RMW gone this register file is also the ONLY join-counter record:
+  // the update store holds payload slices only, never an accumulated delta.
   val remainingCounterRegs = Seq.fill(NParallelNew)(
     RegInit(VecInit(Seq.fill(cacheDepth)(0.U(counterWidth.W))))
   )
@@ -518,12 +636,43 @@ class ArgumentServer(
         io.newContInput(i).req.bits.taskBaseData
       io.newContInput(i).req.ready := cacheInsertReadies(i) && admitOk
     } else {
-      val porchValid = RegInit(
-        VecInit(Seq.fill(cacheDelayCycles)(false.B))
+      // The porch is a fixed-latency delay line, so it is spelled as one:
+      // Util.DelayLine picks a shift register or a URAM circular buffer from the
+      // depth. At the 72- and 75-cycle depths this design uses, 12 lanes of 1058
+      // bits is ~38k SLICEM LUTs of SRL -- 74% of every LUT-as-shift-register
+      // cell in the kernel -- competing for CLBM sites that came back 99.94%
+      // occupied in SLR1 on the build that missed timing. The same storage is
+      // 180 URAMs, in a resource the design does not otherwise touch.
+      val porch = Module(
+        new Util.DelayLine(delayedNewType, cacheDelayCycles, porchUramThreshold)
       )
-      val porchData = Reg(Vec(cacheDelayCycles, delayedNewType))
-      val porchCanAdvance =
-        !porchValid(cacheDelayCycles - 1) || cacheInsertReadies(i)
+
+      val porchIn = Wire(delayedNewType)
+      porchIn.id := cacheBaseStoresHead(i)
+      porchIn.address := io.newContInput(i).req.bits.address
+      porchIn.taskBaseData := io.newContInput(i).req.bits.taskBaseData
+      porch.io.in := porchIn
+
+      // MUST be req.fire, not req.valid. req.ready adds the admission gate on
+      // top of porchCanAdvance, so shifting in on `valid` alone lets a
+      // continuation enter the porch while admission is REFUSING it: inFlight
+      // and cacheBaseStoresHead (both advanced on `fire`) never see it. The
+      // gate then throttles only the handshake, never the porch, so up to
+      // cacheDelayCycles uncharged continuations march into the cache and
+      // become resolutions -- breaking
+      //   resolutionInCq <= admitCap - residentCapacity
+      // and overflowing the coupledQ, which silently drops a resolution (a lost
+      // release). It also re-used the same assignedId, since the source retries
+      // the request it never saw accepted.
+      //
+      // Only the VALID is qualified. The payload rides in unconditionally, which
+      // it could not do when the porch held its own storage under an enable, and
+      // which is what lets the payload path carry neither an enable nor a reset
+      // and so become an SRL or a URAM. It is safe because the tail payload is
+      // read only through cacheInsertBits, and every consumer of that qualifies
+      // on cacheInsertFires -- which, since cacheInsertReadies is unconditionally
+      // true below, is exactly this valid chain.
+      porch.io.inValid := io.newContInput(i).req.fire
 
       // A bubble advances just like a valid entry.  Only a blocked valid tail
       // freezes the clock-enabled shift register and backpressures its source.
@@ -531,35 +680,23 @@ class ArgumentServer(
       // continuation never sits in the porch longer than cacheDelayCycles and stays
       // time-aligned with its memReader update. porchCanAdvance must stay ~always
       // true (cacheInsertReadies no longer depends on coupledQ occupancy).
+      val porchCanAdvance = !porch.io.outValid || cacheInsertReadies(i)
       io.newContInput(i).req.ready := porchCanAdvance &&
         ((inFlight(i) +& cacheDeficit(i)) < admitCap.U)
-      when(porchCanAdvance) {
-        for (stage <- (1 until cacheDelayCycles).reverse) {
-          porchValid(stage) := porchValid(stage - 1)
-          porchData(stage) := porchData(stage - 1)
-        }
-        // MUST be req.fire, not req.valid. req.ready adds the admission gate on
-        // top of porchCanAdvance, so shifting in on `valid` alone lets a
-        // continuation enter the porch while admission is REFUSING it: inFlight
-        // and cacheBaseStoresHead (both advanced on `fire`) never see it. The
-        // gate then throttles only the handshake, never the porch, so up to
-        // cacheDelayCycles uncharged continuations march into the cache and
-        // become resolutions -- breaking
-        //   resolutionInCq <= admitCap - residentCapacity
-        // and overflowing the coupledQ, which silently drops a resolution (a lost
-        // release). It also re-used the same assignedId, since the source retries
-        // the request it never saw accepted.
-        porchValid(0) := io.newContInput(i).req.fire
-        when(io.newContInput(i).req.fire) {
-          porchData(0).id := cacheBaseStoresHead(i)
-          porchData(0).address := io.newContInput(i).req.bits.address
-          porchData(0).taskBaseData :=
-            io.newContInput(i).req.bits.taskBaseData
-        }
-      }
 
-      cacheInsertValids(i) := porchValid(cacheDelayCycles - 1)
-      cacheInsertBits(i) := porchData(cacheDelayCycles - 1)
+      // "~always true" is now load-bearing rather than merely intended: a
+      // DelayLine has no enable and cannot be held. The condition is structural
+      // today (cacheInsertReadies is tied high), so this is here to fail loudly
+      // in simulation if that ever stops being the case, rather than silently
+      // dropping a porch entry.
+      assert(
+        porchCanAdvance,
+        "ArgumentServer front porch was asked to stall, but a DelayLine " +
+          "cannot be held: a porch entry would be lost."
+      )
+
+      cacheInsertValids(i) := porch.io.outValid
+      cacheInsertBits(i) := porch.io.out
     }
 
     when(io.newContInput(i).req.fire) {
@@ -567,7 +704,7 @@ class ArgumentServer(
     }
   }
 
-  // These wires also protect the update RMW below from a same-cycle cache
+  // These wires also protect the update write below from a same-cycle cache
   // insertion or resolution. Unlike the old head/head-1 exclusion, the
   // protection lasts only for the cycle in which there is a real collision.
   val resolutionIssued = Wire(Vec(NParallelNew, Bool()))
@@ -575,12 +712,17 @@ class ArgumentServer(
   val resolutionRemovesDone = Wire(Vec(NParallelNew, Bool()))
   val updateMakesDone = Wire(Vec(NParallelNew, Bool()))
   val updateTargetIds = Wire(Vec(NParallelNew, UInt(serverIDWidth.W)))
-  // High on the cycle a hitting update commits its RMW. Named so that the
-  // insert/update coincidence -- the case that used to contend for a single
-  // store write port -- is observable from a testbench.
+  // High on the cycle a hitting update commits its masked write. Named so that
+  // the insert/update and resolution/update coincidences -- the cases that used
+  // to contend for a single store write port -- are observable from a testbench.
   val updateApplied = Wire(Vec(NParallelNew, Bool()))
+  // High while an update at the cache lookup targets the very slot being
+  // inserted this cycle, so it is held rather than treated as a miss. Exposed
+  // for the same reason as updateApplied.
+  val insertCollisions = Wire(Vec(NParallelNew, Bool()))
   for (i <- 0 until NParallelNew) {
     updateApplied(i) := false.B
+    insertCollisions(i) := false.B
     resolutionIssued(i) := false.B
     resolutionAddresses(i) := 0.U
     resolutionRemovesDone(i) := false.B
@@ -600,12 +742,12 @@ class ArgumentServer(
         cacheInsertBits(i).id,
         cacheInsertBits(i).address
       )
-      // Retire the recycled slot's delta instead of zeroing updateLUTRAMs, and
-      // seed the countdown. Both are registers, so neither contends with an
+      // Retire the recycled slot's update row instead of zeroing updateStores,
+      // and seed the countdown. Both are registers, so neither contends with an
       // update landing on another slot this cycle. cacheValid for this slot is
       // set in the same cycle (see the done-count block), so the slot becomes
-      // matchable exactly when its delta is declared stale -- an update can
-      // never observe the previous tenant's accumulation.
+      // matchable exactly when its row is declared stale -- an update can
+      // never observe the previous tenant's payloads.
       deltaValid(i)(cacheInsertBits(i).id) := false.B
       remainingCounterRegs(i)(cacheInsertBits(i).id) := insertedLine.counter
     }
@@ -616,22 +758,25 @@ class ArgumentServer(
   // is detected in the issue cycle, while SyncReadMem produces its eviction in
   // the following cycle. Staging aligns the two so the resolution and update can
   // occupy one atomic coupled entry.
+  //
+  // This is the one deep, continuation-wide FIFO in the lane, so it is a normal
+  // wide queue backed by SyncReadMem (BRAM) rather than a width-banked LUTRAM
+  // queue. The banking existed to keep a LUTRAM address/enable cone off a
+  // thousand payload bits; a block RAM already has exactly one such cone, so
+  // splitting it into 64-bit banks would only multiply the number of BRAMs.
+  //
+  // BramQueue rather than Queue(useSyncReadMem = true): the stock Chisel queue
+  // reads the slot it writes in the same cycle and so needs cross-port
+  // write-first read-under-write, which a Xilinx BRAM does not provide (see
+  // BramQueue's header for the measured Vivado inference). It costs one extra
+  // cycle of latency on an empty -> nonempty transition -- covered by the
+  // resolutionTailCredits above -- and is otherwise depth-, throughput- and
+  // Decoupled-identical to the BankedQueue it replaces.
   val coupledQs = Seq.fill(NParallelNew)(
-    Module(new BankedQueue(coupledType, coupledQueueDepth))
+    Module(new BramQueue(coupledType, coupledQueueDepth))
   )
   val delayedMissQs = Seq.fill(NParallelNew)(
-    Module(
-      new BankedQueue(
-        new TaggedSlowUpdate(
-          lineAddressWidth,
-          continuationSize,
-          serverTagWidth,
-          serverIDWidth,
-          laneW
-        ),
-        2
-      )
-    )
+    Module(new BankedQueue(taggedSlowType, 2))
   )
   val spawnValids = Wire(Vec(NParallelNew, Bool()))
   val evictionValids = Wire(Vec(NParallelNew, Bool()))
@@ -747,18 +892,31 @@ class ArgumentServer(
     // If it is new AND valid, we read the continuation
     val completedBase =
       cacheBaseStores(i).read(readAddr).asTypeOf(lineType)
-    // A slot whose delta is stale (inserted, never updated) contributes nothing
-    // to the merge below. deltaValid is sampled with readAddr inside the RegNext
-    // so it stays aligned with the SyncReadMem base read.
-    val completedOthers = RegNext(
-      Mux(deltaValid(i)(readAddr), updateLUTRAMs(i).read(readAddr), 0.U)
-        .asTypeOf(lineType)
+    // Both payload memories are synchronous, so they are read with the SAME
+    // address in the SAME cycle and their outputs are already aligned one cycle
+    // later. A slot whose row is stale (inserted, never updated) contributes
+    // nothing to the merge below; deltaValid is a register, so it is sampled
+    // through a RegNext to line it up with the two memory outputs.
+    // Every store is read with the same address in the same cycle; their
+    // outputs concatenate back into the flat row in store order.
+    val completedUpdateRow = VecInit(
+      updateStores(i).flatMap(store => store.read(readAddr))
     )
+    val completedRowValid = RegNext(deltaValid(i)(readAddr), false.B)
+    val completedOthers =
+      Mux(completedRowValid, completedUpdateRow.asUInt, 0.U).asTypeOf(lineType)
+    // The join counter no longer lives in the update memory at all: it is the
+    // register file's countdown, sampled alongside the two synchronous reads.
+    // Reading the register at `readAddr` in the issue cycle is exactly the value
+    // the removed base-minus-delta subtraction used to reconstruct -- an update
+    // to this same slot in this same cycle is excluded by the resolution-
+    // collision guard in `matches` below, so nothing can slip past the sample.
+    val completedRemaining = RegNext(remainingCounterRegs(i)(readAddr))
 
-    // Need to OR all the arguments, and ADD the counter decremenets
+    // Need to OR all the arguments; the counter comes from the countdown.
     val completedFull = Wire(lineType)
     completedFull.remainder := completedBase.remainder | completedOthers.remainder
-    completedFull.counter := completedBase.counter - completedOthers.counter
+    completedFull.counter := completedRemaining
 
     // If the counter is 0, it goes to the spawn queue. If not, it is evicted
     // toward the CacheEvictionSaver ring.
@@ -783,6 +941,12 @@ class ArgumentServer(
     coupledHead.ready := spawnAccepted && slowAccepted
 
     spawnQ.io.enq.valid := coupledHead.valid && headNeedsSpawn && slowAccepted
+    // The merged line IS the spawned task now, so the HBM storage behind this
+    // address is dead and can go straight back to the allocator's free list.
+    io.resolvedAddressOut.foreach { out =>
+      out(i).valid := coupledHead.fire && coupledHead.bits.spawnValid
+      out(i).bits := coupledHead.bits.eviction.eviction.address
+    }
     spawnQ.io.enq.bits.taskData := coupledHead.bits.eviction.eviction.taskData
     io.coupledSlowPath(i).valid :=
       coupledHead.valid && headNeedsSlow && spawnAccepted
@@ -955,32 +1119,24 @@ class ArgumentServer(
     }
   }
 
-  // Expand only after routing and arbitration.  A one-entry pipelined queue per
-  // cache lane registers the aligned shift, keeping it off the cache lookup and
-  // LUTRAM-write timing path.  Everything upstream remains compact.
-  val expandedUpdatePipes = Seq.fill(NParallelNew)(
+  // Updates stay COMPACT all the way through routing, buffering and the cache
+  // lookup: the cache write is a masked element write, so the payload only ever
+  // has to reach one `effectiveUpdatePayloadWidth`-wide element. A one-entry
+  // pipelined queue per cache lane registers the arbitration result, keeping it
+  // off the cache lookup and BRAM-write timing path. Expansion to a full
+  // continuation width happens exactly once, on the miss path below, where the
+  // slow-path entry genuinely needs a line-shaped write mask.
+  val stagedUpdatePipes = Seq.fill(NParallelNew)(
     Module(
       new BankedQueue(
-        new TaggedSlowUpdate(
-          lineAddressWidth,
-          continuationSize,
-          serverTagWidth,
-          serverIDWidth,
-          ArgumentNotifierHelpers.laneWidth(NParallelNew)
-        ),
+        chiselTypeOf(io.contUpdateInput(0).bits),
         1,
         pipe = true
       )
     )
   )
   for (i <- 0 until NParallelNew) {
-    val compact = perLaneFIFOs(i).io.deq
-    val expanded = expandedUpdatePipes(i).io.enq
-    expanded.valid := compact.valid
-    expanded.bits.update.address := compact.bits.address
-    expanded.bits.update.dataWrite := expandPayload(compact.bits)
-    expanded.bits.metadata := compact.bits.metadata
-    compact.ready := expanded.ready
+    stagedUpdatePipes(i).io.enq <> perLaneFIFOs(i).io.deq
   }
 
   val matches = Wire(Vec(NParallelNew, Bool()))
@@ -993,7 +1149,7 @@ class ArgumentServer(
   // recently inserted line. That line must remain updateable when producers
   // go idle, otherwise it could never become eligible for the fallback flush.
   for (i <- 0 until NParallelNew) {
-    val update = expandedUpdatePipes(i).io.deq
+    val update = stagedUpdatePipes(i).io.deq
     val targetId = update.bits.metadata.id
     updateTargetIds(i) := targetId
     // An update that lands on the exact cycle its own line is inserted must not
@@ -1003,8 +1159,9 @@ class ArgumentServer(
     // holding the update one cycle turns it into a hit.
     val insertCollision =
       cacheInsertFires(i) && targetId === cacheInsertBits(i).id
+    insertCollisions(i) := update.valid && insertCollision
     matches(i) := cacheValid(i)(targetId) &&
-      cacheIDStores(i).read(targetId) === update.bits.update.address &&
+      cacheIDStores(i).read(targetId) === update.bits.address &&
       !insertCollision &&
       !(resolutionIssued(i) && targetId === resolutionAddresses(i))
 
@@ -1019,7 +1176,13 @@ class ArgumentServer(
     // cache, and the one-cycle staging couples the update to its own eviction so
     // the gater fences it behind that eviction's HBM write.
     delayedMissQs(i).io.enq.valid := valids(i) && !matches(i) && !insertCollision
-    delayedMissQs(i).io.enq.bits.update := update.bits.update
+    // A missed update stays compact all the way to the SlowArgumentHandler,
+    // which is the only thing that reads the data; it expands there.
+    delayedMissQs(i).io.enq.bits.update.address := update.bits.address
+    delayedMissQs(i).io.enq.bits.update.payload := update.bits.payload
+    delayedMissQs(i).io.enq.bits.update.offset.zip(update.bits.offset).foreach {
+      case (out, in) => out := in
+    }
     delayedMissQs(i).io.enq.bits.metadata := update.bits.metadata
 
     update.ready :=
@@ -1027,25 +1190,43 @@ class ArgumentServer(
 
     val fireUpdate = matches(i) && valids(i)
 
+    // Which element of the row this payload owns. A full-line payload has a
+    // single element and therefore no offset field.
+    val targetSlot =
+      if (updateSlotCount == 1) 0.U
+      else update.bits.offset.get
+
+    // A stale row contributes zero, so the first update to a recycled slot must
+    // rewrite the WHOLE row: its own element plus zeros everywhere else. That
+    // full-row write IS the deferred clear the insert skipped. Afterwards only
+    // the addressed element is enabled, so sibling payloads already merged into
+    // the row survive untouched.
+    val rowIsStale = !deltaValid(i)(targetId)
+    // Per-store slices of the same logical row write. Only the store that owns
+    // `targetSlot` sees a set mask bit, unless the row is stale, in which case
+    // every store rewrites its whole slice with the payload-or-zero pattern.
+    val updateWriteData = Seq.tabulate(updateStoreCount) { s =>
+      val data = Wire(Vec(slotsPerStore, UInt(effectiveUpdatePayloadWidth.W)))
+      val mask = Wire(Vec(slotsPerStore, Bool()))
+      for (k <- 0 until slotsPerStore) {
+        val selected = targetSlot === (s * slotsPerStore + k).U
+        data(k) := Mux(selected, update.bits.payload, 0.U)
+        mask(k) := selected || rowIsStale
+      }
+      (data, mask)
+    }
+
     // If it matches, we apply the update
     when(fireUpdate) {
-      // A stale delta reads as zero, so the first update to a recycled slot
-      // starts the OR from a clean line and writes the slot's fresh contents in
-      // the same access -- this write IS the deferred clear the insert skipped.
-      val currentVal =
-        Mux(deltaValid(i)(targetId), updateLUTRAMs(i).read(targetId), 0.U)
-          .asTypeOf(lineType)
       val currentRemaining = remainingCounterRegs(i)(targetId)
-      val incomingVal = update.bits.update.dataWrite.asTypeOf(lineType)
 
-      val newVal = Wire(lineType)
-      // OR the payload, but ADD to the counter so it subtracts out later
-      newVal.remainder := currentVal.remainder | incomingVal.remainder
-      newVal.counter := currentVal.counter + 1.U
-
-      // Sole writer of updateLUTRAMs: one write port, LUTRAM inference intact.
+      // Sole writer of updateStores: one masked write port, so each memory
+      // stays a simple dual-port BRAM. No read, hence no read-modify-write.
       updateApplied(i) := true.B
-      updateLUTRAMs(i).write(targetId, newVal.asUInt)
+      for (s <- 0 until updateStoreCount) {
+        val (data, mask) = updateWriteData(s)
+        updateStores(i)(s).write(targetId, data, mask)
+      }
       deltaValid(i)(targetId) := true.B
       remainingCounterRegs(i)(targetId) := currentRemaining - 1.U
       updateMakesDone(i) := currentRemaining === 1.U

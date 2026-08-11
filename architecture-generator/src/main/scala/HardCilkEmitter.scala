@@ -114,7 +114,9 @@ object HardCilkEmitter extends App {
           "ApproxDenseSub",
           "MaximalIndependentSet",
           "GraphColoring",
+          "triangleCount",
           "triangleCountDecoupled",
+          "fullTriangleCountDecoupled",
           "countDecoupled"
         )
         if (emitGeneratedXrt.contains(jsonName)) {

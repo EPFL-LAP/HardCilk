@@ -186,8 +186,29 @@ class VitisWriteBufferModule(
   private val peTaskOutGlobal = pe.io.elements
     .filter(_._1.startsWith("taskOutGlobal"))
     .map(x => (x._1, Some(x._2)))
+  // Every one of these is released by its own allow count in a spawnNext packet.
+  // `spawnNextLocal` is deliberately not among them: it is the re-entry path for
+  // a PE that allocates no closure, so there would be no packet to release it.
   private val taskOuts =
     (Seq(peTaskOut) ++ peTaskOutGlobal.toSeq).filterNot(_._2.isEmpty)
+
+  private val usesSpawnNextLocal = fullSysGenDescriptor.taskDescriptors
+    .find(_.name == taskName)
+    .exists(_.spawnNextLocal)
+  require(
+    !(usesSpawnNextLocal && pe.io.elements.get("spawnNextLocal").isEmpty),
+    s"Task '$taskName': spawnNextLocal is set but the PE exposes no such port"
+  )
+  require(
+    !(usesSpawnNextLocal && peTaskOut._2.isDefined),
+    s"Task '$taskName': a PE cannot expose both taskOut and spawnNextLocal, " +
+      "because the scheduler has exactly one taskIn port per PE " +
+      "(Scheduler.io_export.taskIn(i) -> connPE(i).push) and both are self-spawn " +
+      "sources for it. Supporting both would need an arbiter that does not exist. " +
+      "Use taskOut when the re-entry carries a closure this PE just allocated, so " +
+      "the spawnNext write buffer holds it until that write lands; use " +
+      "spawnNextLocal when it allocates nothing and needs no buffer."
+  )
 
   private val spawnNextBufferDepth = fullSysGenDescriptor.taskDescriptors
     .find(_.name == taskName)

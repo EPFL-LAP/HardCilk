@@ -39,8 +39,6 @@ foreach busif [ipx::get_bus_interfaces -of_objects $core] {
   }
 }
 
-ipx::associate_bus_interfaces -busif m_axis_mFPGA -clock clock [ipx::current_core]
-ipx::associate_bus_interfaces -busif s_axis_mFPGA -clock clock [ipx::current_core]
 ipx::associate_bus_interfaces -busif s_axil_mgmt_hardcilk -clock clock [ipx::current_core]
 ipx::associate_bus_interfaces -clock clock -reset reset_n [ipx::current_core]
 

@@ -10,9 +10,12 @@ class SequencedSlowUpdate(
     val lineAddressWidth: Int,
     val continuationSize: Int,
     val counterWidth: Int,
-    val saverWidth: Int
+    val saverWidth: Int,
+    val payloadWidth: Int = 0,
+    val offsetWidth: Int = 0
 ) extends Bundle {
-  val update = new SlowUpdate(lineAddressWidth, continuationSize)
+  val update =
+    new SlowUpdate(lineAddressWidth, continuationSize, payloadWidth, offsetWidth)
   val requiredDone = UInt(counterWidth.W)
   val saver = UInt(saverWidth.W)
 }
@@ -46,7 +49,10 @@ class EvictionGater(
     nEvictionSaverLanes: Int,
     saverOf: UInt => UInt,
     slowRequestDepth: Int = 64,
-    counterWidth: Int = 64
+    counterWidth: Int = 64,
+    // Slow updates stay compact through the gater; it never reads their data.
+    payloadWidth: Int = 0,
+    offsetWidth: Int = 0
 ) extends Module {
   require(slowRequestDepth >= 1)
   require(counterWidth >= 1)
@@ -68,21 +74,32 @@ class EvictionGater(
     continuationSize,
     serverTagWidth,
     serverIDWidth,
-    laneWidth
+    laneWidth,
+    payloadWidth,
+    offsetWidth
   )
   private def sequencedUpdateType =
     new SequencedSlowUpdate(
       lineAddressWidth,
       continuationSize,
       counterWidth,
-      saverWidth
+      saverWidth,
+      payloadWidth,
+      offsetWidth
     )
 
   val io = IO(new Bundle {
     val coupledIn = Flipped(Decoupled(coupledType))
     val evictionOut = Decoupled(taggedEvictionType)
     val slowUpdateOut =
-      Decoupled(new SlowUpdate(lineAddressWidth, continuationSize))
+      Decoupled(
+        new SlowUpdate(
+          lineAddressWidth,
+          continuationSize,
+          payloadWidth,
+          offsetWidth
+        )
+      )
     // One per eviction-saver lane. Constant per-lane AXI IDs guarantee each
     // is its own ordered prefix, so completions are always immediately
     // consumed -- no ready/backpressure is needed or offered.

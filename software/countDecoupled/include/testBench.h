@@ -17,6 +17,9 @@ struct CountDecoupledBenchArgs
   bool legacy_single_port_watcher = false;
   bool hbm_strided_writes = false;
   uint64_t hbm_continuation_bank_run_entries = 1;
+  // Exact continuation pool size, in closures. 0 = size it from the run's
+  // demand as usual. Set it small to force the recycler to do real work.
+  uint64_t closure_pool = 0;
   std::string telemetry_dir;
   bool telemetry_dir_explicit = false;
   WaveformConfig wave; // hw_emu waveform capture (see --waveform/--fst)
@@ -28,8 +31,18 @@ inline void count_decoupled_usage(const char *prog)
             << " <xclbin_path|--cpu> [size] [num_instances] [watchdog_s] "
                "[--fast] [--legacy-single-port-watcher] "
                "[--hbm-strided-writes[=N]] [--hbm-phased-continuations[=N]] "
-               "[--telemetry-dir=DIR] "
+               "[--closure-pool=N] [--telemetry-dir=DIR] "
                "[--waveform[=DIR]] [--fst] [--keep-vcd|--no-vcd]\n";
+  std::cerr << "  --closure-pool=N     force the continuation pool to exactly N\n"
+               "                       closures, overriding both the run's demand\n"
+               "                       and the descriptor floor. Rounded down to a\n"
+               "                       multiple of 128 (one allocator burst).\n"
+               "                       Recycling makes a small pool legal, so this\n"
+               "                       is how you prove addresses really are being\n"
+               "                       returned: set it far below (2*size+1)*"
+               "instances\n"
+               "                       and the run should still pass, with\n"
+               "                       low_water > 0 and leaked=0 at the end.\n";
   std::cerr << "  --telemetry-dir=DIR  write the telemetry .bin file into DIR\n"
             << "                       (defaults to --waveform DIR when enabled,\n"
             << "                       otherwise $HARDCILK_TELEMETRY_DIR or /tmp).\n";
@@ -99,6 +112,14 @@ inline bool parse_count_decoupled_args(
         return false;
       continue;
     }
+    const std::string closurePoolPrefix = "--closure-pool=";
+    if (arg.rfind(closurePoolPrefix, 0) == 0)
+    {
+      if (!count_decoupled_parse_positive_u64(arg.substr(closurePoolPrefix.size()),
+                                              out.closure_pool))
+        return false;
+      continue;
+    }
     const std::string telemetryDirPrefix = "--telemetry-dir=";
     if (arg.rfind(telemetryDirPrefix, 0) == 0)
     {
@@ -145,7 +166,8 @@ inline int run_count_decoupled_benchmark(
                                     args.xclbin_path,
                                     args.legacy_single_port_watcher,
                                     args.hbm_strided_writes,
-                                    args.hbm_continuation_bank_run_entries);
+                                    args.hbm_continuation_bank_run_entries,
+                                    args.closure_pool);
         return driver.run_test_bench();
       },
       args.wave);

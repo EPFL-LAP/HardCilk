@@ -251,6 +251,10 @@ public:
 
     if (rc == 0 && passed == N)
     {
+      // capacity - low_water is the peak number of simultaneously live closures
+      // this run actually needed. It is the number to size the pool from next
+      // time; nothing computes it up front.
+      reportContinuationPools("[triangleCountDecoupled]");
       std::cout << "[triangleCountDecoupled] PASS\n";
       return 0;
     }

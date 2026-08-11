@@ -899,6 +899,18 @@ protected:
     uint64_t iters = 0;
     while (true)
     {
+      // Cooperative stop point (shared by GraphColoring / MaximalIndependentSet).
+      // Without it the Ctrl-C flag is set but nothing reads it, so the loop polls
+      // on to watchdog_s_ and the host looks hung after printing "stopping
+      // gracefully". Returning takes the same path the watchdog takes.
+      if (stopRequested())
+      {
+        t_kernel_done_ = std::chrono::high_resolution_clock::now();
+        std::cerr << "[" << label_ << "] interrupted by user; aborting after "
+                  << iters << " polls\n";
+        return -1;
+      }
+
       if (!fast_mode_ && checkPaused() == 0)
         managePausedServer();
 

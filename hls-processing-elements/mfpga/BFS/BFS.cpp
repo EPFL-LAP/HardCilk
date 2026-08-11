@@ -15,11 +15,14 @@
 static const uint32_t STREAM_END = 0x80000000u;
 
 void BFS(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlobal,
-         hls::stream<BFS_args> &taskIn)
+         hls::stream<BFS_args> &taskIn, hls::stream<uint64_t> &closureIn,
+         hls::stream<bfs_spawn_next> &spawnNext)
 {
 #pragma HLS INTERFACE ap_ctrl_none port = return
 #pragma HLS INTERFACE mode = axis port = taskIn
 #pragma HLS INTERFACE mode = axis port = taskOutGlobal
+#pragma HLS INTERFACE mode = axis port = closureIn
+#pragma HLS INTERFACE mode = axis port = spawnNext
 #pragma HLS INTERFACE mode = m_axi port = mem_0 bundle = gmem channel = \
     0 latency = 48 num_write_outstanding = 16 num_read_outstanding =    \
         16 max_write_burst_length = 16 max_read_burst_length =          \
@@ -71,43 +74,63 @@ void BFS(void *mem_0, hls::stream<sparse_edgemap_helper_args> &taskOutGlobal,
         }
     }
 
-    // Need to do 1 at a time so that the counter gets written last
-    MEM_OUT(mem_0, task.cont + 4, uint32_t, task.source);
-    MEM_OUT(mem_0, task.cont + 8, uint32_t, task.vertex_count);
-    MEM_OUT(mem_0, task.cont + 12, uint32_t, task.currentDistance);
-    MEM_OUT(mem_0, task.cont + 16, uint32_t, task.max_depth);
-    MEM_OUT(mem_0, task.cont + 20, uint32_t, task.frontier_length);
-    MEM_OUT(mem_0, task.cont + 24, uint32_t, task.active);
-    MEM_OUT(mem_0, task.cont + 28, uint32_t, task.done);
-    MEM_OUT(mem_0, task.cont + 32, addr_t, task.graph);
-    MEM_OUT(mem_0, task.cont + 40, addr_t, task.distance);
-    MEM_OUT(mem_0, task.cont + 48, addr_t, task.visited);
-    MEM_OUT(mem_0, task.cont + 56, addr_t, task.frontier0);
-    MEM_OUT(mem_0, task.cont + 64, addr_t, task.frontier1);
-    MEM_OUT(mem_0, task.cont + 72, addr_t, task.nextFChar);
-    MEM_OUT(mem_0, task.cont + 80, addr_t, task.cont);
-    // Otherwise the counter would get written first
-    MEM_OUT(mem_0, task.cont, uint32_t, task.counter);
+    // Publish progress independently of the continuation closure. Cached mode
+    // assigns a new closure address every level, so the host cannot poll the
+    // continuation in place. One 128-bit store keeps done and its accompanying
+    // level/frontier values coherent.
+    ap_uint<128> status_word = 0;
+    status_word.range(31, 0) = task.done;
+    status_word.range(63, 32) = task.currentDistance;
+    status_word.range(95, 64) = task.frontier_length;
+    MEM_OUT_VOLATILE(mem_0, task.status, ap_uint<128>, status_word);
 
     // If done, exit before spawning helpers
     if (task.done)
         return;
 
+#if BFS_LEGACY_ARGUMENT_NOTIFIER
+    // The legacy notifier addresses one host-provided continuation for the
+    // whole run. The mandatory spawnNext write buffer still performs the line
+    // write and gates helper release, but the address remains fixed. Consume
+    // the structurally-required allocator token so its output cannot remain
+    // permanently backpressured in a dual-profile design.
+    (void)closureIn.read();
+    addr_t continuation = task.cont;
+#else
+    // Cached continuations are insert-then-update: claim a fresh line, publish
+    // it through spawnNext, and let the write buffer stamp its assigned metadata
+    // into each helper before release.
+    addr_t continuation = closureIn.read();
+    task.cont = continuation;
+#endif
+
     addr_t current_frontier = task.active == 0 ? task.frontier0 : task.frontier1;
     addr_t next_frontier = task.active == 0 ? task.frontier1 : task.frontier0;
+
+    // Hand the closure write to the buffer before producing an unbounded number
+    // of helpers. The buffer may begin releasing them as soon as the write
+    // completes, so its finite input FIFO never has to hold a whole frontier.
+    bfs_spawn_next next;
+    next.addr = continuation;
+    next.data = task;
+    next.data.cont = continuation;
+    next.size = 7;
+    next.allow = task.counter;
+    spawnNext.write(next);
 
     // Spawn the helper tasks
     for (uint32_t i = 0; i < task.frontier_length; i += VERTICES_PER_TASK)
     {
 #pragma HLS PIPELINE II = 1
         sparse_edgemap_helper_args helper_task;
+        helper_task.cont = continuation;
+        helper_task.continuation_meta = 0;
         helper_task.graph = task.graph;
         helper_task.distance = task.distance;
         helper_task.visited = task.visited;
         helper_task.frontier = current_frontier;
         helper_task.next_frontier = next_frontier;
         helper_task.nextFChar = task.nextFChar;
-        helper_task.cont = task.cont;
         helper_task.index = i;
         helper_task.currentDistance = task.currentDistance;
         helper_task.max_depth = task.max_depth;
@@ -255,7 +278,14 @@ void recieve_test_and_set_responses(void *mem, hls::stream<uint32_t> &input_awai
     successful_ts.write(STREAM_END);
 }
 
-void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sparse_edgemap_helper_args &task, hls::stream<lock_resp> &fromLock2, hls::stream<uint64_t> &argOut)
+void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts,
+                       sparse_edgemap_helper_args &task,
+                       hls::stream<lock_resp> &fromLock2,
+#if BFS_LEGACY_ARGUMENT_NOTIFIER
+                       hls::stream<uint64_t> &argOut)
+#else
+                       hls::stream<bfs_counter_update> &argOut)
+#endif
 {
     uint32_t last_slot = 0;
     bool wrote_any = false;
@@ -307,7 +337,16 @@ void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sp
     while (!sent)
     {
 #pragma HLS PIPELINE off
+#if BFS_LEGACY_ARGUMENT_NOTIFIER
         sent = argOut.write_nb(cont_out);
+#else
+        bfs_counter_update update;
+        update.address = cont_out;
+        update.continuation_meta = task.continuation_meta;
+        update.payload = 0;
+        update.offset = 0;
+        sent = argOut.write_nb(update);
+#endif
     }
 }
 
@@ -317,7 +356,11 @@ void write_to_frontier(void *mem, hls::stream<uint32_t> &input_successful_ts, sp
 
 void sparse_edgemap_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3, void *mem_4, void *mem_5,
                            hls::stream<sparse_edgemap_helper_args> &taskIn,
+#if BFS_LEGACY_ARGUMENT_NOTIFIER
                            hls::stream<uint64_t> &argOut,
+#else
+                           hls::stream<bfs_counter_update> &argOut,
+#endif
                            hls::stream<lock_req> &toLock0,
                            hls::stream<lock_resp> &fromLock0,
                            hls::stream<lock_req> &toLock1,

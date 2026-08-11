@@ -5,6 +5,7 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 
 import NewArgumentNotifier.CacheEvictionSaver
+import chext.amba.axi4
 
 class CacheEvictionSaverTests extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "CacheEvictionSaver"
@@ -81,6 +82,68 @@ class CacheEvictionSaverTests extends AnyFlatSpec with ChiselScalatestTester {
       assert(dut.m_axi.b.ready.peek().litToBoolean)
       dut.clock.step()
       dut.m_axi.b.valid.poke(false.B)
+    }
+  }
+
+  it should "split a 2048-bit eviction into one two-beat 1024-bit burst" in {
+    val wideContinuationSize = 2048
+    val wideLineShift = 8
+    val wideLineAddressWidth = sysAddressWidth - wideLineShift
+    test(
+      new CacheEvictionSaver(
+        sysAddressWidth,
+        wideLineAddressWidth,
+        wideLineShift,
+        wideContinuationSize
+      )
+    ) { dut =>
+      init(dut)
+      assert(dut.m_axi.w.bits.data.getWidth == 1024)
+
+      // Hold both channels so the complete burst can be inspected without
+      // racing the saver's shallow input queue.
+      dut.m_axi.aw.ready.poke(false.B)
+      dut.m_axi.w.ready.poke(false.B)
+      val low = (BigInt(1) << 1024) - 1
+      val high = BigInt("0123456789abcdef", 16) << 900
+      val data = (high << 1024) | low
+      push(dut, 0x321, data, id = 1)
+
+      var guard = 0
+      while (!dut.m_axi.aw.valid.peek().litToBoolean) {
+        dut.clock.step(); guard += 1; assert(guard < 20)
+      }
+      dut.m_axi.aw.bits.addr.expect(BigInt(0x32100).U)
+      dut.m_axi.aw.bits.len.expect(1.U)
+      dut.m_axi.aw.bits.size.expect(7.U)
+      dut.m_axi.aw.bits.burst.expect(axi4.BurstType.INCR)
+
+      while (!dut.m_axi.w.valid.peek().litToBoolean) dut.clock.step()
+      dut.m_axi.w.bits.data.expect(low.U)
+      dut.m_axi.w.bits.strb.expect(((BigInt(1) << 128) - 1).U)
+      dut.m_axi.w.bits.last.expect(false.B)
+      // Backpressure must leave the first beat stable.
+      dut.clock.step(2)
+      dut.m_axi.w.bits.data.expect(low.U)
+      dut.m_axi.w.bits.last.expect(false.B)
+
+      dut.m_axi.aw.ready.poke(true.B)
+      dut.m_axi.w.ready.poke(true.B)
+      dut.clock.step()
+      dut.m_axi.aw.ready.poke(false.B)
+      dut.m_axi.w.bits.data.expect(high.U)
+      dut.m_axi.w.bits.last.expect(true.B)
+      dut.clock.step()
+
+      // One burst still produces exactly one completion, after its single B.
+      assert(!dut.io.writeCompleted.valid.peek().litToBoolean)
+      dut.m_axi.b.bits.id.poke(0.U)
+      dut.m_axi.b.valid.poke(true.B)
+      while (!dut.m_axi.b.ready.peek().litToBoolean) dut.clock.step()
+      dut.clock.step()
+      dut.m_axi.b.valid.poke(false.B)
+      while (!dut.io.writeCompleted.valid.peek().litToBoolean) dut.clock.step()
+      dut.io.writeCompleted.bits.id.expect(1.U)
     }
   }
 

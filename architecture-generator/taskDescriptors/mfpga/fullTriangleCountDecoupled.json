@@ -1,0 +1,825 @@
+{
+  "fpgaModel": "ALVEO_U55C",
+  "isVitisProject": true,
+  "name": "fullTriangleCountDecoupled",
+  "mallocList": {},
+  "memorySizeSim": 16,
+  "targetFrequency": 100,
+  "spawnList": {
+    "triangle": [
+      "adder_unit_launcher"
+    ],
+    "adder_unit_launcher": [
+      "adder"
+    ],
+    "adder": [
+      "memReader",
+      "adder"
+    ]
+  },
+  "spawnNextList": {
+    "adder_unit_launcher": [
+      "adder_unit_launcher"
+    ],
+    "adder": [
+      "adder"
+    ],
+    "triangle": [
+      "vertexWriteback"
+    ]
+  },
+  "sendArgumentList": {
+    "memReader": [
+      "adder"
+    ],
+    "adder": [
+      "adder_unit_launcher"
+    ],
+    "adder_unit_launcher": [
+      "vertexWriteback"
+    ]
+  },
+  "taskDescriptors": [
+    {
+      "name": "triangle",
+      "isRoot": true,
+      "isCont": false,
+      "numProcessingElements": 1,
+      "widthTask": 512,
+      "hasAXI": true,
+      "spawnServersCount": 1,
+      "variableSpawn": false,
+      "dynamicMemAlloc": false,
+      "generateArgOutWriteBuffer": false,
+      "spawnNextWriteBufferDepth": 64,
+      "widthMalloc": 0,
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 64,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 512,
+          "sideType": "scheduler"
+        }
+      ],
+      "peHDLPath": "../hls-kernel-output/fullTriangleCountDecoupled/triangle"
+    },
+    {
+      "name": "adder_unit_launcher",
+      "isRoot": false,
+      "isCont": true,
+      "numProcessingElements": 2,
+      "widthTask": 1024,
+      "hasAXI": true,
+      "spawnServersCount": 2,
+      "variableSpawn": false,
+      "dynamicMemAlloc": false,
+      "generateArgOutWriteBuffer": false,
+      "spawnNextWriteBufferDepth": 64,
+      "generateSpawnNextWriteBuffer": false,
+      "widthMalloc": 0,
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 0,
+          "portWidth": 512,
+          "sideType": "scheduler"
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 128,
+          "numVirtualServers": 2,
+          "slowArgumentHandlerCount": 1,
+          "cacheEvictionSaverCount": 1,
+          "newContinuationLanesPerServer": 2,
+          "directUpdateLanesPerServer": 4,
+          "argumentNotifierCutCount": 1,
+          "evictionCutCount": 1,
+          "argumentServerIdWidth": 7,
+          "slowAxiIdWidth": 5,
+          "cacheDelayCycles": 75,
+          "missedUpdateExtra": 64,
+          "slowRequestQueueDepth": 64,
+          "newContinuationLaneStripingFactor": 2,
+          "portWidth": 64,
+          "sideType": "argumentNotifier",
+          "legacyOverrides": {
+            "numVirtualServers": 1
+          }
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "enableContinuationRecycling": true,
+          "sideType": "allocator"
+        }
+      ],
+      "peHDLPath": "../hls-kernel-output/fullTriangleCountDecoupled/adder_unit_launcher",
+      "argumentSizeList": [
+        32
+      ],
+      "argumentOffsetWidth": 5
+    },
+    {
+      "name": "memReader",
+      "isRoot": false,
+      "isCont": false,
+      "numProcessingElements": 8,
+      "widthTask": 256,
+      "hasAXI": true,
+      "dedicatedAxiPort": true,
+      "spawnServersCount": 8,
+      "spawnerQueueDepth": 8,
+      "variableSpawn": false,
+      "dynamicMemAlloc": false,
+      "generateArgOutWriteBuffer": false,
+      "spawnNextWriteBufferDepth": 64,
+      "widthMalloc": 0,
+      "argumentSizeList": [
+        256
+      ],
+      "argumentOffsetWidth": 2,
+      "legacyOverrides": {
+        "spawnServersCount": 1,
+        "spawnerQueueDepth": 16
+      },
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 10,
+          "capacityVirtualQueue": 4096,
+          "useAffinity": false,
+          "affinityQueueDepth": 8,
+          "affinityTagBits": 4,
+          "numVirtualServers": 0,
+          "portWidth": 256,
+          "sideType": "scheduler",
+          "legacyOverrides": {
+            "numVirtualServers": 1,
+            "capacityPhysicalQueue": 64
+          }
+        }
+      ],
+      "peHDLPath": "../hls-kernel-output/fullTriangleCountDecoupled/memReader"
+    },
+    {
+      "name": "adder",
+      "isRoot": false,
+      "isCont": true,
+      "numProcessingElements": 8,
+      "widthTask": 1024,
+      "hasAXI": false,
+      "spawnServersCount": 8,
+      "variableSpawn": false,
+      "dynamicMemAlloc": false,
+      "generateArgOutWriteBuffer": false,
+      "generateSpawnNextWriteBuffer": false,
+      "spawnNextWriteBufferDepth": 64,
+      "spawnNextLocal": true,
+      "widthMalloc": 0,
+      "argumentSizeList": [
+        32
+      ],
+      "argumentOffsetWidth": 5,
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 512,
+          "sideType": "scheduler"
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 128,
+          "numVirtualServers": 2,
+          "slowArgumentHandlerCount": 1,
+          "cacheEvictionSaverCount": 1,
+          "newContinuationLanesPerServer": 4,
+          "directUpdateLanesPerServer": 4,
+          "argumentNotifierCutCount": 1,
+          "evictionCutCount": 1,
+          "argumentServerIdWidth": 7,
+          "slowAxiIdWidth": 5,
+          "cacheDelayCycles": 72,
+          "missedUpdateExtra": 64,
+          "slowRequestQueueDepth": 64,
+          "newContinuationLaneStripingFactor": 1,
+          "portWidth": 64,
+          "sideType": "argumentNotifier",
+          "legacyOverrides": {
+            "numVirtualServers": 1
+          }
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "enableContinuationRecycling": true,
+          "sideType": "allocator"
+        }
+      ],
+      "peHDLPath": "../hls-kernel-output/fullTriangleCountDecoupled/adder"
+    },
+    {
+      "name": "vertexWriteback",
+      "isRoot": false,
+      "isCont": true,
+      "numProcessingElements": 1,
+      "widthTask": 1024,
+      "hasAXI": true,
+      "dedicatedAxiPort": true,
+      "spawnServersCount": 1,
+      "spawnerQueueDepth": 8,
+      "spawnNextWriteBufferDepth": 64,
+      "variableSpawn": false,
+      "dynamicMemAlloc": false,
+      "generateArgOutWriteBuffer": false,
+      "generateSpawnNextWriteBuffer": false,
+      "widthMalloc": 0,
+      "sidesConfigs": [
+        {
+          "capacityPhysicalQueue": 16,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 0,
+          "portWidth": 512,
+          "sideType": "scheduler",
+          "legacyOverrides": {
+            "numVirtualServers": 1,
+            "capacityPhysicalQueue": 64
+          }
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 128,
+          "numVirtualServers": 1,
+          "slowArgumentHandlerCount": 1,
+          "cacheEvictionSaverCount": 1,
+          "newContinuationLanesPerServer": 1,
+          "directUpdateLanesPerServer": 2,
+          "argumentNotifierCutCount": 1,
+          "evictionCutCount": 1,
+          "argumentServerIdWidth": 9,
+          "slowAxiIdWidth": 5,
+          "cacheDelayCycles": 8,
+          "missedUpdateExtra": 64,
+          "slowRequestQueueDepth": 64,
+          "newContinuationLaneStripingFactor": 1,
+          "portWidth": 64,
+          "sideType": "argumentNotifier",
+          "legacyOverrides": {
+            "numVirtualServers": 1
+          }
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 512,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "enableContinuationRecycling": true,
+          "sideType": "allocator"
+        }
+      ],
+      "peHDLPath": "../hls-kernel-output/fullTriangleCountDecoupled/vertexWriteback"
+    }
+  ],
+  "widthAXIAddress": 34,
+  "widthAddress": 64,
+  "widthContCounter": 32,
+  "keepAXI4Interfaces": true,
+  "mFPGASynth": false,
+  "mFPGASimulation": false,
+  "maximumAXIPorts": 30,
+  "hasAXIDMAInput": false,
+  "transformAXI": false,
+  "transformPattern": [],
+  "watcherConfig": {
+    "hdlPath": "../hls-kernel-output/watcher/watcher",
+    "moduleName": "watcher",
+    "startAddr": 0,
+    "statusSlots": [
+      {
+        "label": "triangle0In_adder_unit_launcher0In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "triangle",
+              "index": 0,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder_unit_launcher",
+              "index": 0,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder_unit_launcher1In_memReader0In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder_unit_launcher",
+              "index": 1,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 0,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader1In_memReader2In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 1,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 2,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader3In_memReader4In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 3,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 4,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader5In_memReader6In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 5,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 6,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader7In_adder0In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 7,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 0,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder1In_adder2In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 1,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 2,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder3In_adder4In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 3,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 4,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder5In_adder6In",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 5,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 6,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder7In_triangle0Out",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder",
+              "index": 7,
+              "port": "taskIn"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "triangle",
+              "index": 0,
+              "port": "taskOutGlobal"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder_unit_launcher0Out_adder_unit_launcher1Out",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder_unit_launcher",
+              "index": 0,
+              "port": "taskOutGlobal1"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "adder_unit_launcher",
+              "index": 1,
+              "port": "taskOutGlobal1"
+            }
+          }
+        ]
+      },
+      {
+        "label": "memReader0Out_vertexWritebackIn",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "memReader",
+              "index": 0,
+              "port": "argOut"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "pe",
+              "taskName": "vertexWriteback",
+              "index": 0,
+              "port": "taskIn"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder_unit_launcherFast0_adder_unit_launcherFast1",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder_unit_launcher",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 0
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder_unit_launcher",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 1
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder_unit_launcherFast2_adder_unit_launcherFast3",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder_unit_launcher",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 0
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder_unit_launcher",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 1
+            }
+          }
+        ]
+      },
+      {
+        "label": "adderFast0_adderFast1",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 0
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 1
+            }
+          }
+        ]
+      },
+      {
+        "label": "adderFast2_adderFast3",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 2
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 3
+            }
+          }
+        ]
+      },
+      {
+        "label": "adderFast4_adderFast5",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 0
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 1
+            }
+          }
+        ]
+      },
+      {
+        "label": "adderFast6_adderFast7",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 2
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "adder",
+              "index": 1,
+              "port": "fastSpawn",
+              "lane": 3
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder_unit_launcherSlow_adderSlow",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "slowUpdateHandler",
+              "taskName": "adder_unit_launcher",
+              "index": 0,
+              "port": "input"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "slowUpdateHandler",
+              "taskName": "adder",
+              "index": 0,
+              "port": "input"
+            }
+          }
+        ]
+      },
+      {
+        "label": "adder_unit_launcherEvict_adderEvict",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "evictionSaver",
+              "taskName": "adder_unit_launcher",
+              "index": 0,
+              "port": "input"
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "evictionSaver",
+              "taskName": "adder",
+              "index": 0,
+              "port": "input"
+            }
+          }
+        ]
+      },
+      {
+        "label": "vertexWritebackFast0_vertexWritebackSlow",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "argumentServer",
+              "taskName": "vertexWriteback",
+              "index": 0,
+              "port": "fastSpawn",
+              "lane": 0
+            }
+          },
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "slowUpdateHandler",
+              "taskName": "vertexWriteback",
+              "index": 0,
+              "port": "input"
+            }
+          }
+        ]
+      },
+      {
+        "label": "vertexWritebackEvict_congested",
+        "fields": [
+          {
+            "encoding": "readyValid2",
+            "target": {
+              "kind": "evictionSaver",
+              "taskName": "vertexWriteback",
+              "index": 0,
+              "port": "input"
+            }
+          },
+          {
+            "encoding": "boolean1",
+            "target": {
+              "kind": "schedulerServer",
+              "taskName": "adder",
+              "index": 0,
+              "signal": "congested"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

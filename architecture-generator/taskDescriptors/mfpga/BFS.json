@@ -13,8 +13,12 @@
       "sparse_edgemap_helper"
     ]
   },
-  "spawnNextList": {},
-  "targetFrequency": 300,
+  "spawnNextList": {
+    "BFS": [
+      "BFS"
+    ]
+  },
+  "targetFrequency": 200,
   "taskDescriptors": [
     {
       "spawnServersCount": 1,
@@ -24,6 +28,10 @@
       "name": "BFS",
       "numProcessingElements": 1,
       "peHDLPath": "../hls-kernel-output/BFS/BFS",
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/BFS/cached/BFS",
+        "no-cache": "../hls-kernel-output/BFS/no-cache/BFS"
+      },
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -36,8 +44,29 @@
           "capacityPhysicalQueue": 32,
           "capacityVirtualQueue": 128,
           "numVirtualServers": 1,
+          "slowArgumentHandlerCount": 1,
+          "cacheEvictionSaverCount": 1,
+          "newContinuationLanesPerServer": 1,
+          "newContinuationLaneStripingFactor": 1,
+          "directUpdateLanesPerServer": 8,
+          "argumentNotifierCutCount": 1,
+          "evictionCutCount": 1,
+          "argumentServerIdWidth": 7,
+          "cacheDelayCycles": 65,
+          "missedUpdateExtra": 64,
+          "slowRequestQueueDepth": 64,
           "portWidth": 64,
-          "sideType": "argumentNotifier"
+          "sideType": "argumentNotifier",
+          "legacyOverrides": {
+            "numVirtualServers": 1
+          }
+        },
+        {
+          "capacityPhysicalQueue": 32,
+          "capacityVirtualQueue": 4096,
+          "numVirtualServers": 1,
+          "portWidth": 64,
+          "sideType": "allocator"
         }
       ],
       "variableSpawn": false,
@@ -48,13 +77,17 @@
       "generateArgOutWriteBuffer": false
     },
     {
-      "spawnServersCount": 1,
+      "spawnServersCount": 8,
       "dynamicMemAlloc": false,
       "isCont": false,
       "isRoot": false,
       "name": "sparse_edgemap_helper",
       "numProcessingElements": 8,
       "peHDLPath": "../hls-kernel-output/BFS/sparse_edgemap_helper",
+      "peHDLVariants": {
+        "cached": "../hls-kernel-output/BFS/cached/sparse_edgemap_helper",
+        "no-cache": "../hls-kernel-output/BFS/no-cache/sparse_edgemap_helper"
+      },
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -71,6 +104,13 @@
       "isAIE": false,
       "generateSpawnNextWriteBuffer": false,
       "generateArgOutWriteBuffer": false,
+      "argumentSizeList": [
+        8
+      ],
+      "argumentOffsetWidth": 7,
+      "legacyOverrides": {
+        "spawnServersCount": 1
+      },
       "taskId": 1,
       "participatesInLock": true,
       "lockPorts": 2

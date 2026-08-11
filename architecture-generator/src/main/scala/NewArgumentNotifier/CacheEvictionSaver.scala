@@ -53,9 +53,12 @@ class CacheEvictionSaver(
   require(lineAddressWidth + lineShift == memoryAddressWidth)
   require(queueDepth >= 1 && responseQueueDepth >= 1)
 
+  private val axiDataWidth = if (continuationSize == 2048) 1024 else continuationSize
+  private val beatsPerWrite = continuationSize / axiDataWidth
+
   val cfgAxi = axi4.Config(
     wAddr = memoryAddressWidth,
-    wData = continuationSize,
+    wData = axiDataWidth,
     wId = 1,
     read = false
   )
@@ -90,18 +93,34 @@ class CacheEvictionSaver(
         protected def onTransform: Unit = {
           out := 0.U.asTypeOf(out)
           out.addr := in.eviction.address ## 0.U(lineShift.W)
-          out.len := 0.U
-          out.size := log2Ceil(continuationSize / 8).U
+          out.len := (beatsPerWrite - 1).U
+          out.size := log2Ceil(axiDataWidth / 8).U
           out.burst := axi4.BurstType.INCR
         }
       }
 
-      new elastic.Transform(fork(), m_axi.w) {
-        protected def onTransform: Unit = {
-          out := 0.U.asTypeOf(out)
-          out.data := in.eviction.taskData
-          out.strb := Fill(continuationSize / 8, 1.U(1.W))
-          out.last := true.B
+      if (beatsPerWrite == 1) {
+        new elastic.Transform(fork(), m_axi.w) {
+          protected def onTransform: Unit = {
+            out := 0.U.asTypeOf(out)
+            out.data := in.eviction.taskData
+            out.strb := Fill(axiDataWidth / 8, 1.U(1.W))
+            out.last := true.B
+          }
+        }
+      } else {
+        new elastic.Replicate(fork(), m_axi.w) {
+          protected def onReplicate: Unit = {
+            len := beatsPerWrite.U
+            out := 0.U.asTypeOf(out)
+            out.data := Mux(
+              idx === 0.U,
+              in.eviction.taskData(axiDataWidth - 1, 0),
+              in.eviction.taskData(continuationSize - 1, axiDataWidth)
+            )
+            out.strb := Fill(axiDataWidth / 8, 1.U(1.W))
+            out.last := last
+          }
         }
       }
 

@@ -43,6 +43,19 @@ object CppHeaderTemplate {
          |        }
          |        return 0;
          |    }
+         |    // True when this task's continuation pool recycles. The pool is then
+         |    // sized by peak live closures, exhaustion is fatal rather than
+         |    // refillable, and the low-water register says how much headroom the
+         |    // run actually had.
+         |    bool recyclesContinuations() const {
+         |        for (const auto& config : sidesConfigs) {
+         |            if (config.sideType == "allocator") {
+         |                return config.enableContinuationRecycling;
+         |            }
+         |        }
+         |        return false;
+         |    }
+         |
          |    uint64_t getVirtualEntryWidth(const std::string& sideType) const {
          |        assert(sideType == "scheduler" || sideType == "allocator" ||
          |               sideType == "argumentNotifier" || sideType == "memoryAllocator");
@@ -102,6 +115,10 @@ object CppHeaderTemplate {
        |    int capacityPhysicalQueue;
        |    int portWidth;
        |    int virtualEntrtyWidth;
+       |    // Allocator sides: the free-address pool is a circular FIFO that
+       |    // resolved continuations are written back into, so it is sized by peak
+       |    // live closures rather than by the run's total. Running out is fatal.
+       |    bool enableContinuationRecycling;
        |};
        |
        |${taskDescriptorClass}
@@ -157,7 +174,7 @@ object CppHeaderTemplate {
   private def generateSideConfig(sidesConfigs: List[SideConfig]): String = {
     sidesConfigs
       .map { sc =>
-        s"""{"${sc.sideType}", ${sc.numVirtualServers}, ${sc.capacityVirtualQueue}, ${sc.capacityPhysicalQueue}, ${sc.portWidth}, ${sc.virtualEntrtyWidth}ull}"""
+        s"""{"${sc.sideType}", ${sc.numVirtualServers}, ${sc.capacityVirtualQueue}, ${sc.capacityPhysicalQueue}, ${sc.portWidth}, ${sc.virtualEntrtyWidth}ull, ${sc.enableContinuationRecycling}}"""
       }
       .mkString(", ")
   }

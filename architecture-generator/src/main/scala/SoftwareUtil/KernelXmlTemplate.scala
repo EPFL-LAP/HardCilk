@@ -352,6 +352,15 @@ freqHz=${freqHz}:${kernelName}.clock
 
 ${linkHookBlock}[vivado]
 prop=run.impl_1.strategy=Performance_HighUtilSLRs
+# Vitis launches the 200-odd block-level OOC syntheses in parallel and gives each
+# child ONE thread; that allocation is fixed for the run, so the kernel's own
+# synthesis -- the last job standing, and by far the largest -- inherits a single
+# thread too. Measured on fullTriangleCountDecoupled: identical RTL took 1:11 to
+# elaborate under Vitis against 0:26 standalone, and every later phase ran ~2.5x
+# slower. NOTE there is no `synth_design -max_threads` in 2024.1 (the run property
+# everyone suggests silently does nothing) -- `general.maxThreads` is the real
+# knob, and it also raises place/route parallelism.
+param=general.maxThreads=16
 """
   }
 

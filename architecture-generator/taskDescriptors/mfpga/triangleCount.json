@@ -14,7 +14,7 @@
     ]
   },
   "spawnNextList": {},
-  "targetFrequency": 300,
+  "targetFrequency": 200,
   "taskDescriptors": [
     {
       "spawnServersCount": 0,
@@ -23,7 +23,7 @@
       "isRoot": true,
       "name": "triangle",
       "numProcessingElements": 1,
-      "peHDLPath": "/beta/bradley/HardCilk/hls-kernel-output/triangleCount/triangle",
+      "peHDLPath": "../hls-kernel-output/triangleCount/triangle",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -54,7 +54,7 @@
       "isRoot": false,
       "name": "vertex_map",
       "numProcessingElements": 8,
-      "peHDLPath": "/beta/bradley/HardCilk/hls-kernel-output/triangleCount/vertex_map",
+      "peHDLPath": "../hls-kernel-output/triangleCount/vertex_map",
       "sidesConfigs": [
         {
           "capacityPhysicalQueue": 64,
@@ -71,6 +71,7 @@
       "isAIE": false,
       "generateSpawnNextWriteBuffer": false,
       "generateArgOutWriteBuffer": true,
+      "argumentWriteDataWidth_NoCache": 32,
       "argumentSizeList": [
         32
       ],

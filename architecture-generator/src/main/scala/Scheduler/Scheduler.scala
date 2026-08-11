@@ -62,6 +62,42 @@ object SchedulerOutsideRingLayout {
         spawnerIndices = spawners,
         sourceIndices = Vector.tabulate(sourceCount)(identity)
       )
+    } else if (groupedSourceStart > 0 && groupedSourceCount > 0) {
+      // Both kinds of source feed this ring: spawns arriving from another task
+      // (sources [0, groupedSourceStart)) and continuation lanes released by the
+      // argument server (the groupedSourceCount that follow them).
+      //
+      // The slots co-located with a spawner are the privileged ones, because
+      // BufferServerInput serves its co-located source and DECLINES the ring task
+      // while it has one, leaving that task to circulate. Those slots go to the
+      // continuation lanes, so a continuation already in flight is drained before
+      // new work is injected -- the opposite assignment lets an upstream task
+      // flood the ring with fresh tasks while resident ones go round and round.
+      //
+      // With one lane and one incoming spawn per spawner this lays out as
+      //
+      //   taskOutGlobal_0 -> (continuation_0 + spawner_0) -> taskOutGlobal_1 -> ...
+      //
+      // (data flows node i -> node i+1), so each spawn source also sits exactly
+      // one hop upstream of the spawner it feeds.
+      val evenSplit =
+        groupedSourceStart == spawnerCount && groupedSourceCount == spawnerCount
+      val spawners =
+        if (evenSplit) Vector.tabulate(spawnerCount)(i => 2 * i + 1)
+        else equallySpacedIndices(spawnerCount)
+
+      val laneSlots = spawners.take(groupedSourceCount)
+      val leftoverSlots =
+        (spawners.drop(groupedSourceCount) ++
+          Vector.tabulate(networkSize)(identity).filterNot(spawners.contains))
+          .iterator
+
+      val sources = Array.fill(sourceCount)(-1)
+      for (k <- laneSlots.indices) sources(groupedSourceStart + k) = laneSlots(k)
+      for (j <- 0 until sourceCount if sources(j) < 0)
+        sources(j) = leftoverSlots.next()
+
+      SchedulerOutsideRingLayout(spawners, sources.toVector)
     } else {
       val spawners = equallySpacedIndices(spawnerCount)
       val sources =
@@ -142,14 +178,22 @@ class Scheduler(
     affinityQueueDepth: Int = 0,
     affinityTagBits: Int = 0,
     fastArgumentRouteServersNumber: Int = 0,
-    newContinuationLaneStripingFactor: Int = 1
+    newContinuationLaneStripingFactor: Int = 1,
+    // Width of each scheduler server's HBM ring port. 0 (the default) means "one
+    // beat per task"; a narrower port spreads a task over several beats without
+    // changing the ring layout, which is what lets a task be wider than any HBM
+    // data channel the platform offers.
+    ringPortWidth: Int = 0
 ) extends Module
     with SchedulerHasMfpgaSupport
     with SchedulerModule {
 
+  private val vssPortWidth =
+    if (ringPortWidth > 0) ringPortWidth else taskWidth
+
   val vssAxiFullCfg = axi4.Config(
     wAddr = addrWidth,
-    wData = taskWidth,
+    wData = vssPortWidth,
     lite = false,
     wId = 1
   )
@@ -193,6 +237,13 @@ class Scheduler(
   val bufferServerInputs =
     Seq.fill(pairedIndices.size)(Module(new BufferServerInput(taskWidth)))
 
+  // Elastic, not rigid. The premise for leaving this ring rigid was that it has
+  // "one injector per node and no contention"; the first half is true and the
+  // second is not. Several sources inject here -- every incoming-spawn buffer
+  // and every fast/slow continuation lane that did not draw a co-located spawner
+  // slot -- and on a rigid ring a hole can only be taken by whoever it drifts
+  // past first, so an injector one hop downstream of a busy one never gets a
+  // turn. See the injectWanted/forceForward policy at the bottom of this module.
   val getOutsideSpawnNetwork =
     if (outsideSpawn)
       Some(
@@ -200,7 +251,8 @@ class Scheduler(
           new SchedulerNetwork(
             taskWidth,
             outsideSpawnNetworkSize,
-            spawnerIndices
+            spawnerIndices,
+            elasticData = true
           )
         )
       )
@@ -328,7 +380,8 @@ class Scheduler(
         ignoreRequestSignals = false, // HARDCODED
         nBeats = 16,
         ringWindowSize = schedulerLocalNetworkLength,
-        enableGlobalStart = enableGlobalStart
+        enableGlobalStart = enableGlobalStart,
+        ringPortWidth = vssPortWidth
       )
     )
   )
@@ -409,7 +462,7 @@ class Scheduler(
   // corruption (read-after-write settling margin had zero effect on HW, ruling
   // out a read-side cause).
   val vssAdapter = Seq.fill(schedulerServersNumber)(
-    Module(new SchedulerAXIAdapter(taskWidth, addrWidth))
+    Module(new SchedulerAXIAdapter(taskWidth, addrWidth, vssPortWidth))
   )
 
   val axiFullPorts = vssAdapter.map(_.axi)
@@ -581,6 +634,64 @@ class Scheduler(
       )
     }
   }
+
+  // ---- Outside-spawn ring admission policy -----------------------------------
+  // Must come after every connectOutsideSpawnSource call, since it reads the
+  // valid each source drives onto its slot.
+  //
+  // The two classes on this ring are NEW work (spawns arriving from another
+  // task) and CONTINUATIONS (the argument networks' fast and slow lanes, work
+  // already in flight that retires when it lands). New work only adds; a
+  // continuation is what frees a closure, a cache line and a scheduler entry.
+  // So a continuation must never be made to wait behind new work.
+  //
+  // The rigid ring got this exactly backwards, by position rather than by
+  // policy: holes travel with the data, so the node just behind a consumer sees
+  // them first and the node just after a busy injector never does. Measured on
+  // fullTriangleCountDecoupled/com-orkut, the fast lane sitting one hop
+  // downstream of triangle's incoming-spawn buffer moved 2 tasks and was then
+  // stuck valid/!ready from cycle 8339 to the end of the run, while the lane one
+  // hop behind a spawner kept going.
+  if (outsideSpawn) {
+    val ntw = getOutsideSpawnNetwork.get
+    val spawnerSlots = spawnerIndices.toSet
+    val sourceSlots = sourceIndices.toSet
+    // A paired source is wired into its BufferServerInput rather than onto the
+    // ring (and already wins there, via bufferHasTask), so those slots count as
+    // spawner nodes here and not as lanes.
+    val contLaneSlots =
+      (peCountGlobalTaskIn until outsideSpawnSourceCount)
+        .map(sourceIndices(_))
+        .toSet -- spawnerSlots
+
+    for (slot <- 0 until outsideSpawnNetworkSize) {
+      // "My producer has something for the ring." This reaches the hop UPSTREAM
+      // and stops it refilling the slot we are about to vacate, which is how a
+      // node makes its own hole instead of waiting for one. Only real sources
+      // ask: a spawner slot is a consumer whose peer hand-off is opportunistic,
+      // and one that asked continuously would pin whichever lane sits
+      // immediately upstream of it -- the starvation this change removes.
+      // Reading qOutTask.valid is safe here because no SchedulerInjectionSwap
+      // sits on this ring, so nothing derives valid from ready.
+      ntw.io.injectWanted.get(slot) :=
+        (if (spawnerSlots.contains(slot)) false.B
+         else if (sourceSlots.contains(slot))
+           ntw.io.connSS(slot).data.qOutTask.valid
+         else false.B)
+
+      // "Forward past the downstream hop's want anyway." Set on every
+      // continuation lane and on nothing else, so the override runs one way
+      // only: a lane can push past new work, new work can never push past a
+      // lane. Deliberately blanket rather than only where it is load-bearing
+      // today -- elastic redistributes priority instead of preserving ring
+      // order, so which lane needs it moves with the layout, and a missing force
+      // is a permanent starvation where a redundant one costs nothing between
+      // two sparse producers. Only the SOFT want is overridden; stopInFull stays
+      // unconditional, so this can reorder who gets a slot but never drop a task.
+      ntw.io.forceForward.get(slot) := contLaneSlots.contains(slot).B
+    }
+  }
+
   buildMfpgaConnections()
 }
 

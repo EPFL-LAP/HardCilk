@@ -5,6 +5,7 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 
 import NewArgumentNotifier.SlowArgumentHandler
+import chext.amba.axi4
 
 class SlowArgumentHandlerTests extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "SlowArgumentHandler"
@@ -48,7 +49,7 @@ class SlowArgumentHandlerTests extends AnyFlatSpec with ChiselScalatestTester {
     dut.io.slowUpdateIn.bits.address.poke((addr >> lineShift).U)
     // `data` and `strobe` describe the logical remainder; physically it begins
     // immediately above the low counter field.
-    dut.io.slowUpdateIn.bits.dataWrite.poke(((data & strobe) << counterWidth).U)
+    dut.io.slowUpdateIn.bits.payload.poke(((data & strobe) << counterWidth).U)
     dut.io.slowUpdateIn.valid.poke(true.B)
     var guard = 0
     while (!dut.io.slowUpdateIn.ready.peek().litToBoolean) {
@@ -182,7 +183,7 @@ class SlowArgumentHandlerTests extends AnyFlatSpec with ChiselScalatestTester {
         if (cycle < count) {
           dut.io.slowUpdateIn.valid.poke(true.B)
           dut.io.slowUpdateIn.bits.address.poke((0x100 + cycle).U)
-          dut.io.slowUpdateIn.bits.dataWrite.poke((cycle + 1).U)
+          dut.io.slowUpdateIn.bits.payload.poke((cycle + 1).U)
           assert(
             dut.io.slowUpdateIn.ready.peek().litToBoolean,
             s"input pipeline rejected update $cycle"
@@ -230,6 +231,122 @@ class SlowArgumentHandlerTests extends AnyFlatSpec with ChiselScalatestTester {
       expectAr(dut, addr, max = 50)
       respondR(dut, mkLine(2, 0x1))
       expectWriteBack(dut, addr, mkLine(1, 0x3))
+    }
+  }
+
+  it should "use two 1024-bit beats for a 2048-bit RMW while preserving its ID" in {
+    val wideContinuationSize = 2048
+    val wideLineShift = 8
+    val wideLineAddressWidth = sysAddressWidth - wideLineShift
+    val wideLine = NanTestUtil.line(counterWidth, wideContinuationSize) _
+    test(
+      new SlowArgumentHandler(
+        counterWidth,
+        sysAddressWidth,
+        wideLineAddressWidth,
+        wideLineShift,
+        wideContinuationSize,
+        axiIdWidth = 2
+      )
+    ) { dut =>
+      init(dut)
+      assert(dut.m_axi.r.bits.data.getWidth == 1024)
+
+      dut.m_axi.ar.ready.poke(false.B)
+      dut.m_axi.aw.ready.poke(false.B)
+      dut.m_axi.w.ready.poke(false.B)
+
+      def pushWide(byteAddress: BigInt, dataWrite: BigInt): Unit = {
+        dut.io.slowUpdateIn.bits.address.poke((byteAddress >> wideLineShift).U)
+        dut.io.slowUpdateIn.bits.payload.poke(dataWrite.U)
+        dut.io.slowUpdateIn.valid.poke(true.B)
+        var guard = 0
+        while (!dut.io.slowUpdateIn.ready.peek().litToBoolean) {
+          dut.clock.step(); guard += 1; assert(guard < 50)
+        }
+        dut.clock.step()
+        dut.io.slowUpdateIn.valid.poke(false.B)
+      }
+
+      def consumeAr(byteAddress: BigInt): BigInt = {
+        var guard = 0
+        while (!dut.m_axi.ar.valid.peek().litToBoolean) {
+          dut.clock.step(); guard += 1; assert(guard < 50)
+        }
+        dut.m_axi.ar.bits.addr.expect(byteAddress.U)
+        dut.m_axi.ar.bits.len.expect(1.U)
+        dut.m_axi.ar.bits.size.expect(7.U)
+        dut.m_axi.ar.bits.burst.expect(axi4.BurstType.INCR)
+        val id = dut.m_axi.ar.bits.id.peek().litValue
+        dut.m_axi.ar.ready.poke(true.B)
+        dut.clock.step()
+        dut.m_axi.ar.ready.poke(false.B)
+        id
+      }
+
+      // Leave ID 0 outstanding, then return ID 1 first. This verifies that the
+      // local beat assembly does not collapse the handler's OOO RID tracking.
+      val addr0 = BigInt(0x12000)
+      val addr1 = BigInt(0x13000)
+      pushWide(addr0, BigInt(1) << 1200)
+      pushWide(addr1, BigInt(1) << 1500)
+      val id0 = consumeAr(addr0)
+      val id1 = consumeAr(addr1)
+      assert(id0 == 0 && id1 == 1, s"unexpected allocated IDs: $id0, $id1")
+
+      val base = wideLine(2, (BigInt(1) << 1300) | 0x55)
+      val merged = wideLine(
+        1,
+        (BigInt(1) << 1492) | (BigInt(1) << 1300) | 0x55
+      )
+      val mask1024 = (BigInt(1) << 1024) - 1
+      val baseLow = base & mask1024
+      val baseHigh = base >> 1024
+
+      dut.m_axi.r.bits.id.poke(id1.U)
+      dut.m_axi.r.bits.data.poke(baseLow.U)
+      dut.m_axi.r.bits.last.poke(false.B)
+      dut.m_axi.r.valid.poke(true.B)
+      assert(dut.m_axi.r.ready.peek().litToBoolean)
+      dut.clock.step()
+      // A partial logical line must not trigger a write or spawn.
+      assert(!dut.m_axi.aw.valid.peek().litToBoolean)
+      assert(!dut.io.spawnOut.valid.peek().litToBoolean)
+
+      dut.m_axi.r.bits.data.poke(baseHigh.U)
+      dut.m_axi.r.bits.last.poke(true.B)
+      while (!dut.m_axi.r.ready.peek().litToBoolean) dut.clock.step()
+      dut.clock.step()
+      dut.m_axi.r.valid.poke(false.B)
+
+      var guard = 0
+      while (!dut.m_axi.aw.valid.peek().litToBoolean) {
+        dut.clock.step(); guard += 1; assert(guard < 30)
+      }
+      dut.m_axi.aw.bits.addr.expect(addr1.U)
+      dut.m_axi.aw.bits.id.expect(id1.U)
+      dut.m_axi.aw.bits.len.expect(1.U)
+      dut.m_axi.aw.bits.size.expect(7.U)
+
+      while (!dut.m_axi.w.valid.peek().litToBoolean) dut.clock.step()
+      dut.m_axi.w.bits.data.expect((merged & mask1024).U)
+      dut.m_axi.w.bits.last.expect(false.B)
+      dut.clock.step(2)
+      dut.m_axi.w.bits.data.expect((merged & mask1024).U)
+
+      dut.m_axi.aw.ready.poke(true.B)
+      dut.m_axi.w.ready.poke(true.B)
+      dut.clock.step()
+      dut.m_axi.aw.ready.poke(false.B)
+      dut.m_axi.w.bits.data.expect((merged >> 1024).U)
+      dut.m_axi.w.bits.last.expect(true.B)
+      dut.clock.step()
+
+      dut.m_axi.b.bits.id.poke(id1.U)
+      dut.m_axi.b.valid.poke(true.B)
+      assert(dut.m_axi.b.ready.peek().litToBoolean)
+      dut.clock.step()
+      dut.m_axi.b.valid.poke(false.B)
     }
   }
 }

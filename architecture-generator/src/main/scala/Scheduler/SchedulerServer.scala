@@ -13,15 +13,19 @@ class SchedulerServerIO(
     regBlock: RegisterBlock,
     sysAddressWidth: Int,
     peCount: Int,
-    enableGlobalStart: Boolean = false
+    enableGlobalStart: Boolean = false,
+    // Width of the HBM ring's AXI data channels. Defaults to the task width, in
+    // which case one beat is one task and this bundle is unchanged.
+    portWidth: Int = 0
 ) extends Bundle {
+  private val ringPortWidth = if (portWidth > 0) portWidth else taskWidth
   val connNetwork = Flipped(new SchedulerNetworkClientIO(taskWidth))
   val axi_mgmt = axi4.lite.Slave(regBlock.cfgAxi)
   val read_address = DecoupledIO(UInt(sysAddressWidth.W))
-  val read_data = Flipped(DecoupledIO(UInt(taskWidth.W)))
+  val read_data = Flipped(DecoupledIO(UInt(ringPortWidth.W)))
   val read_burst_len = Output(UInt(4.W))
   val write_address = DecoupledIO(UInt(sysAddressWidth.W))
-  val write_data = DecoupledIO(UInt(taskWidth.W))
+  val write_data = DecoupledIO(UInt(ringPortWidth.W))
   val write_burst_len = Output(UInt(4.W))
   val write_last = Output(UInt(1.W))
   val write_idle = Input(Bool())
@@ -69,24 +73,60 @@ class SchedulerServer(
     ignoreRequestSignals: Boolean,
     nBeats: Int,
     ringWindowSize: Int = 0,
-    enableGlobalStart: Boolean = false
+    enableGlobalStart: Boolean = false,
+    // Width of the HBM ring's AXI data channels. 0 (the default) means "same as
+    // the task width", which is the historical one-task-per-beat ring.
+    ringPortWidth: Int = 0
 ) extends Module {
 
   require(contentionThreshold + contentionDelta <= (peCount + vasCount))
   require(contentionThreshold - contentionDelta >= 0)
   require(nBeats <= 16)
+  // A task may be wider than the ring's AXI port, in which case it occupies
+  // beatsPerTask CONSECUTIVE beats of one ring slot. Everything below still
+  // counts TASKS -- the ring is a task array, the head/tail/currLen/maxLength
+  // registers are task indices, and the fifo-end and 4KB caps are applied to
+  // task-sized slots exactly as before. Only the AXI burst length and the two
+  // data channels are expressed in beats, so a burst carries a whole number of
+  // tasks and no task can ever be torn across two bursts.
+  private val portWidth = if (ringPortWidth > 0) ringPortWidth else taskWidth
+  require(
+    taskWidth % portWidth == 0,
+    s"taskWidth $taskWidth must be a whole number of $portWidth-bit ring beats"
+  )
+  private val beatsPerTask = taskWidth / portWidth
+  require(
+    isPow2(beatsPerTask),
+    s"beats per task ($beatsPerTask) must be a power of two"
+  )
+  require(
+    nBeats % beatsPerTask == 0,
+    s"a $nBeats-beat burst must hold a whole number of $beatsPerTask-beat tasks"
+  )
+  private val multiBeatTask = beatsPerTask > 1
+  private val beatShift = log2Ceil(beatsPerTask)
+  private val beatIdxWidth = if (multiBeatTask) beatShift else 1
+  // Burst size in TASKS. With one beat per task this is nBeats, i.e. unchanged.
+  private val tasksPerBurst = nBeats / beatsPerTask
   private val contentionRingWindowSize =
     if (ringWindowSize > 0) ringWindowSize else peCount + vasCount + 1
   require(contentionRingWindowSize > 0)
-  private val localQueueDepth = nBeats * 8
-  private val readAheadLowWatermark = nBeats * 7
+  private val localQueueDepth = tasksPerBurst * 8
+  private val readAheadLowWatermark = tasksPerBurst * 7
   private val maxOutstandingReadBursts = 8
   private val readCountWidth = log2Ceil(maxOutstandingReadBursts + 1) + 1
-  private val readBeatCountWidth = log2Ceil(localQueueDepth + nBeats + 1) + 1
+  private val readTaskCountWidth = log2Ceil(localQueueDepth + tasksPerBurst + 1) + 1
 
   val regBlock = new RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
   val io = IO(
-    new SchedulerServerIO(taskWidth, regBlock, sysAddressWidth, peCount, enableGlobalStart)
+    new SchedulerServerIO(
+      taskWidth,
+      regBlock,
+      sysAddressWidth,
+      peCount,
+      enableGlobalStart,
+      portWidth
+    )
   )
 
   io.axi_mgmt.suggestName("S_AXI_MGMT")
@@ -118,15 +158,17 @@ class SchedulerServer(
   private val splitPushPending = RegInit(false.B)
   private val queuesUtil = RegInit(0.U(64.W))
   private val enableMfpgaSteal = RegInit(0.U(64.W))
-  private val nBeatsUInt = nBeats.U(5.W)
-  private val localQueueCapacity = localQueueDepth.U(readBeatCountWidth.W)
+  private val burstTasksUInt = tasksPerBurst.U(5.W)
+  private val localQueueCapacity = localQueueDepth.U(readTaskCountWidth.W)
   private val ringTaskStealDebt = RegInit(0.U(64.W))
   // Read bursts may be issued ahead until the local scheduler buffer reaches
-  // the low watermark. inflightReadBeats = beats issued but not yet returned;
-  // fifoHeadReg/currLen only advance as beats RETURN, so the issue pointer and
-  // available-to-issue count are adjusted by inflightReadBeats.
+  // the low watermark. inflightReadTasks = tasks issued but not yet fully
+  // returned; fifoHeadReg/currLen only advance as tasks RETURN, so the issue
+  // pointer and available-to-issue count are adjusted by inflightReadTasks. A
+  // task whose beats are still arriving stays counted here, which is what keeps
+  // the issue pointer off the slot it is still draining.
   private val outstandingReads = RegInit(0.U(readCountWidth.W))
-  private val inflightReadBeats = RegInit(0.U(readBeatCountWidth.W))
+  private val inflightReadTasks = RegInit(0.U(readTaskCountWidth.W))
   private val readBurstLens = Module(new Queue(UInt(5.W), maxOutstandingReadBursts))
   private val returnBeatsLeft = RegInit(0.U(5.W))
   private val stealReqInjectedThisCycle = WireDefault(false.B)
@@ -151,30 +193,30 @@ class SchedulerServer(
     Mux(slotsToPageEnd < afterFifoCap, slotsToPageEnd(4, 0), afterFifoCap)
   }
 
-  private val pushRequestedBeats = Wire(UInt(6.W))
-  pushRequestedBeats := nBeatsUInt
+  private val pushRequestedTasks = Wire(UInt(6.W))
+  pushRequestedTasks := burstTasksUInt
   when(splitPushPending) {
-    pushRequestedBeats := taskQueueBuffer.io.count
-    when(taskQueueBuffer.io.count >= nBeatsUInt) {
-      pushRequestedBeats := nBeatsUInt
+    pushRequestedTasks := taskQueueBuffer.io.count
+    when(taskQueueBuffer.io.count >= burstTasksUInt) {
+      pushRequestedTasks := burstTasksUInt
     }
   }
 
-  private val pushBurstBeats =
-    capBurstAtFifoEnd(pushRequestedBeats, fifoTailReg)
+  private val pushBurstTasks =
+    capBurstAtFifoEnd(pushRequestedTasks, fifoTailReg)
 
   // Reads are sized/placed against what is NOT already claimed by an in-flight
   // burst, so a second read issues from where the first left off.
-  private val availToIssue = currLen - inflightReadBeats
+  private val availToIssue = currLen - inflightReadTasks
   private val readIssuePtr = {
-    val p = fifoHeadReg + inflightReadBeats
+    val p = fifoHeadReg + inflightReadTasks
     Mux(p < maxLength, p, p - maxLength)
   }
 
-  private val popRequestedBeats =
-    Mux(availToIssue < nBeats.U, availToIssue(4, 0), nBeatsUInt)
+  private val popRequestedTasks =
+    Mux(availToIssue < tasksPerBurst.U, availToIssue(4, 0), burstTasksUInt)
 
-  private val popBurstBeats = capBurstAtFifoEnd(popRequestedBeats, readIssuePtr)
+  private val popBurstTasks = capBurstAtFifoEnd(popRequestedTasks, readIssuePtr)
 
   regBlock.base(0x00)
   regBlock.reg(
@@ -325,9 +367,9 @@ class SchedulerServer(
   val datapathEnabled = Wire(Bool())
   // Issue-ahead: keep roughly seven bursts claimed, with an eight-burst local
   // buffer to absorb the next read burst.
-  val claimedReadBeats = taskQueueBuffer.io.count +& inflightReadBeats
-  val readRoomForBurst = claimedReadBeats +& popBurstBeats <= localQueueCapacity
-  val belowReadAheadWatermark = claimedReadBeats < readAheadLowWatermark.U
+  val claimedReadTasks = taskQueueBuffer.io.count +& inflightReadTasks
+  val readRoomForBurst = claimedReadTasks +& popBurstTasks <= localQueueCapacity
+  val belowReadAheadWatermark = claimedReadTasks < readAheadLowWatermark.U
   val readCanIssue =
     outstandingReads < maxOutstandingReadBursts.U &&
       !writingToHBM &&
@@ -336,18 +378,19 @@ class SchedulerServer(
       io.write_idle &&
       maxLength =/= 0.U &&
       availToIssue =/= 0.U &&
-      popBurstBeats =/= 0.U &&
+      popBurstTasks =/= 0.U &&
       belowReadAheadWatermark &&
       readRoomForBurst &&
       readBurstLens.io.enq.ready
 
   io.read_address.valid := readCanIssue
   io.read_address.bits := (readIssuePtr << addrShift) + rAddr
-  io.read_burst_len := (popBurstBeats - 1.U)(3, 0)
+  io.read_burst_len := ((popBurstTasks << beatShift) - 1.U)(3, 0)
 
   val readArFire = io.read_address.fire
   readBurstLens.io.enq.valid := readArFire
-  readBurstLens.io.enq.bits := popBurstBeats
+  // The return counter runs on beats, so record the burst in beats.
+  readBurstLens.io.enq.bits := (popBurstTasks << beatShift)(4, 0)
 
   val startingReturnedBurst = returnBeatsLeft === 0.U
   val currentReturnBeats =
@@ -363,9 +406,35 @@ class SchedulerServer(
     outstandingReads := outstandingReads - 1.U
   }
 
-  // inflightReadBeats: += the issued burst, -= each returned beat.
-  inflightReadBeats := inflightReadBeats +
-    Mux(readArFire, popBurstBeats, 0.U) - Mux(io.read_data.fire, 1.U, 0.U)
+  // ---------------------------------------------------------------------------
+  // BEAT -> TASK REASSEMBLY.  A returning task arrives as beatsPerTask beats,
+  // lowest-order first, and only lands in the local buffer on its last beat.
+  // rxHold shifts each beat down so the task is assembled little-endian, which
+  // is the order the ring was written in. With one beat per task there is no
+  // register and rxTask is the read data itself, so the RTL is unchanged.
+  // ---------------------------------------------------------------------------
+  private val rxBeatIdx =
+    if (multiBeatTask) Some(RegInit(0.U(beatIdxWidth.W))) else None
+  private val rxHold =
+    if (multiBeatTask) Some(Reg(UInt((taskWidth - portWidth).W))) else None
+  private val rxLastBeat =
+    rxBeatIdx.map(_ === (beatsPerTask - 1).U).getOrElse(true.B)
+  private val rxTask =
+    rxHold.map(h => Cat(io.read_data.bits, h)).getOrElse(io.read_data.bits)
+
+  if (multiBeatTask) {
+    when(io.read_data.fire) {
+      rxHold.get := Cat(io.read_data.bits, rxHold.get)(taskWidth - 1, portWidth)
+      rxBeatIdx.get := Mux(rxLastBeat, 0.U, rxBeatIdx.get + 1.U)
+    }
+  }
+
+  // A task is retired from the ring only once its last beat has landed.
+  val readTaskComplete = io.read_data.fire && rxLastBeat
+
+  // inflightReadTasks: += the issued burst, -= each fully returned task.
+  inflightReadTasks := inflightReadTasks +
+    Mux(readArFire, popBurstTasks, 0.U) - Mux(readTaskComplete, 1.U, 0.U)
 
   when(io.read_data.fire) {
     when(readLastBeat) {
@@ -381,10 +450,12 @@ class SchedulerServer(
   // CONGESTED AND THE SINGLE ENQUEUE PORT IS NOT BEING USED BY READ DATA.
   // ---------------------------------------------------------------------------
   val canTrackReturnedBeat = returnBeatsLeft =/= 0.U || readBurstLens.io.deq.valid
-  val readDataEnq = canTrackReturnedBeat && io.read_data.valid
+  // Only the last beat of a task claims the enqueue port; the earlier beats of a
+  // multi-beat task pass straight into rxHold and leave the port free.
+  val readDataEnq = canTrackReturnedBeat && io.read_data.valid && rxLastBeat
   // Absorbing may not eat the buffer space an in-flight read burst has already claimed.
   //
-  // The read path reserves it (claimedReadBeats = count + inflightReadBeats gates readCanIssue) but
+  // The read path reserves it (claimedReadTasks = count + inflightReadTasks gates readCanIssue) but
   // the absorb path used to ignore the reservation, and the two run at different times: a burst is
   // issued while UNcongested, congestion hits before it returns, and absorbed ring tasks then fill
   // the buffer to the brim. The returning beats have nowhere to land, so outstandingReads never
@@ -393,7 +464,7 @@ class SchedulerServer(
   // tasks it cannot write back. Reproduced by SchedulerCongestionTests: one 16-beat prefetch in
   // flight, 118 tasks absorbed, buffer at 128, zero HBM writes for the rest of the run.
   val roomBeyondInflightReads =
-    taskQueueBuffer.io.count +& inflightReadBeats < localQueueCapacity
+    taskQueueBuffer.io.count +& inflightReadTasks < localQueueCapacity
   val availableTaskEnq =
     datapathEnabled && networkCongested && !readDataEnq && roomBeyondInflightReads &&
       io.connNetwork.data.availableTask.valid
@@ -401,17 +472,18 @@ class SchedulerServer(
   taskQueueBuffer.io.enq.valid := readDataEnq || availableTaskEnq
   taskQueueBuffer.io.enq.bits := Mux(
     readDataEnq,
-    io.read_data.bits,
+    rxTask,
     io.connNetwork.data.availableTask.bits
   )
-  io.read_data.ready := canTrackReturnedBeat && taskQueueBuffer.io.enq.ready
+  io.read_data.ready :=
+    canTrackReturnedBeat && (!rxLastBeat || taskQueueBuffer.io.enq.ready)
   io.connNetwork.data.availableTask.ready :=
     datapathEnabled && networkCongested && !readDataEnq && roomBeyondInflightReads &&
       taskQueueBuffer.io.enq.ready
   val availableTaskFire =
     io.connNetwork.data.availableTask.valid && io.connNetwork.data.availableTask.ready
 
-  when(io.read_data.fire) {
+  when(readTaskComplete) {
     currLen := currLen - 1.U
     when(fifoHeadReg < maxLength - 1.U) {
       fifoHeadReg := fifoHeadReg + 1.U
@@ -460,39 +532,72 @@ class SchedulerServer(
       !writingToHBM &&
       io.write_idle &&
       maxLength =/= 0.U &&
-      pushBurstBeats =/= 0.U &&
-      (taskQueueBuffer.io.count >= nBeatsUInt ||
+      pushBurstTasks =/= 0.U &&
+      (taskQueueBuffer.io.count >= burstTasksUInt ||
         (splitPushPending && taskQueueBuffer.io.count =/= 0.U))
 
   io.write_address.valid := writeCanIssue
   io.write_address.bits := (fifoTailReg << addrShift) + rAddr
-  io.write_burst_len := (pushBurstBeats - 1.U)(3, 0)
+  io.write_burst_len := ((pushBurstTasks << beatShift) - 1.U)(3, 0)
 
   when(io.write_address.fire) {
     writingToHBM := true.B
-    writeBeatsLeft := pushBurstBeats
-    splitPushPending := pushBurstBeats < pushRequestedBeats
+    writeBeatsLeft := (pushBurstTasks << beatShift)(4, 0)
+    splitPushPending := pushBurstTasks < pushRequestedTasks
   }
 
+  // ---------------------------------------------------------------------------
+  // TASK -> BEAT SPILL.  The head of the local buffer is driven out lowest-order
+  // beat first and only dequeued on its last beat, so a burst always carries a
+  // whole number of tasks: a burst capped at the fifo end or a 4KB boundary is
+  // capped in TASK slots, and the split continuation resumes on a task boundary.
+  // The ring can therefore never hold a torn task. txBeatIdx is always 0 between
+  // bursts (writingToHBM only drops on the burst's last beat), which is what lets
+  // the push-size logic above keep counting whole queue entries.
+  // ---------------------------------------------------------------------------
+  private val txBeatIdx =
+    if (multiBeatTask) Some(RegInit(0.U(beatIdxWidth.W))) else None
+  private val txLastBeat =
+    txBeatIdx.map(_ === (beatsPerTask - 1).U).getOrElse(true.B)
+  private val txBeat = txBeatIdx
+    .map(idx =>
+      VecInit.tabulate(beatsPerTask)(i =>
+        taskQueueBuffer.io.deq.bits(portWidth * (i + 1) - 1, portWidth * i)
+      )(idx)
+    )
+    .getOrElse(taskQueueBuffer.io.deq.bits)
+
   io.write_data.valid := writingToHBM && taskQueueBuffer.io.deq.valid
-  io.write_data.bits := taskQueueBuffer.io.deq.bits
+  io.write_data.bits := txBeat
   io.write_last := writingToHBM && writeBeatsLeft === 1.U
 
   val writeDataFire = io.write_data.fire
+  val writeTaskComplete = writeDataFire && txLastBeat
+
+  if (multiBeatTask) {
+    when(writeDataFire) {
+      txBeatIdx.get := Mux(txLastBeat, 0.U, txBeatIdx.get + 1.U)
+    }
+  }
 
   taskQueueBuffer.io.deq.ready := Mux(
     writingToHBM,
-    io.write_data.ready,
+    io.write_data.ready && txLastBeat,
     qOutFire
   )
 
-  when(writeDataFire) {
+  // The ring pointers move per TASK ...
+  when(writeTaskComplete) {
     currLen := currLen + 1.U
     when(fifoTailReg < maxLength - 1.U) {
       fifoTailReg := fifoTailReg + 1.U
     }.otherwise {
       fifoTailReg := 0.U
     }
+  }
+
+  // ... and the burst counter per BEAT.
+  when(writeDataFire) {
     when(writeBeatsLeft === 1.U) {
       writingToHBM := false.B
       writeBeatsLeft := 0.U
@@ -522,7 +627,7 @@ class SchedulerServer(
   // ---------------------------------------------------------------------------
   val resizeNeeded =
     maxLength =/= 0.U &&
-      currLen + taskQueueBuffer.io.count + nBeatsUInt > maxLength
+      currLen + taskQueueBuffer.io.count + burstTasksUInt > maxLength
   val quiesceForPause = RegInit(false.B)
   val pauseRequested = quiesceForPause || interruptCondition
   val pauseDrained = outstandingReads === 0.U && !writingToHBM && io.write_idle

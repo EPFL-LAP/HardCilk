@@ -8,10 +8,10 @@ proc safe_set_property {property value net_pattern} {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ALLOW_COMBINATORIAL_LOOPS waivers for triangleCount_0 PE array
+# ALLOW_COMBINATORIAL_LOOPS waivers for triangle_0 PE array
 # ─────────────────────────────────────────────────────────────────────────────
 
-set base    "level0_i/ulp/triangleCount_0/inst"
+set base    "level0_i/ulp/triangle_0/inst"
 set pe_path "pe/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_interleave/req_buffer"
 
 set nets_to_waive {
@@ -25,4 +25,3 @@ for {set i 0} {$i < 16} {incr i} {
             "${base}/peMap_1_2_${i}/${pe_path}/${net}"
     }
 }
-

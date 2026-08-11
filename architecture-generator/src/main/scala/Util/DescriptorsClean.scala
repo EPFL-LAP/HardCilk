@@ -183,12 +183,28 @@ case class SideConfig(
     // lanes). Same trade-off as argumentNotifierCutCount.
     evictionCutCount: Int = 1,
     argumentServerIdWidth: Int = 6,
+    // AXI id width of this task's SlowArgumentHandler master, which is also its
+    // in-flight capacity (1 << width concurrent read-modify-writes).
+    //
+    // It doubles as the HBM port-sharing knob. The interconnect needs
+    // log2(masters) id bits above a master's native width to mux it, against a
+    // 6-bit HBM cap, so a 6-bit master must own a whole port -- three
+    // continuation tasks means three ports spent on a path that is idle in a
+    // healthy run. Dropping to 5 lets two share, to 4 lets four share. Lower it
+    // only where the slow path is genuinely cold; it is real concurrency.
+    slowAxiIdWidth: Int = 6,
     cacheDelayCycles: Int = 0,
     // Extra ArgumentServer coupledQ slots for missed updates with no co-cycle
     // eviction. Throughput knob for the non-backpressuring front porch; too small
     // only throttles (never incorrect). See ArgumentServer.scala.
     missedUpdateExtra: Int = 64,
     slowRequestQueueDepth: Int = 64,
+    // Allocator sides only. Turns the free-address pool into a circular FIFO
+    // that resolved continuations are written back into, so the pool is sized by
+    // PEAK LIVE closures rather than by every closure the run will ever take.
+    // Requires the cached (new) argument notifier, which is where resolutions
+    // are observed; it is silently dropped under the legacy profile.
+    enableContinuationRecycling: Boolean = false,
     legacyOverrides: Option[LegacySideOverrides] = None
 ) {
   def validate(): Unit = {
@@ -222,6 +238,12 @@ case class SideConfig(
     if (sideType == "argumentNotifier" && useNewArgumentNotifier) {
       require(slowArgumentHandlerCount > 0)
       require(cacheEvictionSaverCount > 0)
+      // 6 is the HBM id cap. At exactly 6 the master can never be muxed and owns
+      // a port outright; above it the interconnect could not even address it.
+      require(
+        slowAxiIdWidth >= 1 && slowAxiIdWidth <= 6,
+        s"slowAxiIdWidth must be in [1,6], got $slowAxiIdWidth"
+      )
       require(newContinuationLanesPerServer > 0)
       require(newContinuationLaneStripingFactor > 0)
       require(
@@ -241,6 +263,12 @@ case class SideConfig(
       require(cacheDelayCycles >= 0)
       require(missedUpdateExtra >= 1)
       require(slowRequestQueueDepth > 0)
+    }
+    if (enableContinuationRecycling) {
+      require(
+        sideType == "allocator",
+        s"enableContinuationRecycling is an allocator-side option, not '$sideType'"
+      )
     }
   }
 
@@ -264,6 +292,11 @@ case class SideConfig(
     } else this
     selected.copy(
       useNewArgumentNotifier = profile.usesCachedArgumentServer,
+      // Recycling observes resolutions inside the cached argument server, so the
+      // legacy notifier simply cannot feed it. Drop it rather than fail: the same
+      // descriptors are built under both profiles.
+      enableContinuationRecycling =
+        enableContinuationRecycling && profile.usesCachedArgumentServer,
       legacyOverrides = None
     ).normalized
   }
@@ -324,6 +357,16 @@ case class TaskDescriptor(
     isAIE: Boolean = false,
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
+    // The PE re-enters its own ring through a `spawnNextLocal` port instead of
+    // `taskOut`. Both carry a task to this task's local scheduler queue, but
+    // `taskOut` is one of the streams the spawnNext write buffer gates: it is
+    // released by an allow count in a spawnNext packet, which is what a recursive
+    // task wants when its children carry the continuation it just allocated.
+    // `spawnNextLocal` is the path for a re-entry that allocates nothing -- it
+    // waits on no closure, so it goes straight through with no buffer at all.
+    // Requires the task to appear in its own spawnList, which is the edge it
+    // takes over from `taskOut`.
+    spawnNextLocal: Boolean = false,
     argumentSizeList: List[Int] = List(),
     // Width of the aligned payload-slot selector carried by argOut when its
     // target uses NewArgumentNotifier.  It is intentionally explicit in JSON,
@@ -404,10 +447,25 @@ case class TaskDescriptor(
     sidesConfigs.foreach(_.validate())
 
     getSideConfig("scheduler").foreach { scheduler =>
+      // The scheduler's HBM ring stores whole tasks, but a task may be wider than
+      // the port that carries it: the server then moves it as widthTask/portWidth
+      // consecutive beats. A burst must still hold a whole number of tasks, hence
+      // the power-of-two divisor and the cap at the server's 16-beat burst.
       require(
-        scheduler.portWidth == widthTask,
-        s"Task '$name': scheduler portWidth=${scheduler.portWidth} must equal " +
-          s"widthTask=$widthTask; differing scheduler port widths are unsupported"
+        widthTask % scheduler.portWidth == 0,
+        s"Task '$name': widthTask=$widthTask must be a whole number of " +
+          s"${scheduler.portWidth}-bit scheduler ring beats"
+      )
+      val beatsPerTask = widthTask / scheduler.portWidth
+      require(
+        isPow2(beatsPerTask),
+        s"Task '$name': widthTask=$widthTask / scheduler portWidth=" +
+          s"${scheduler.portWidth} = $beatsPerTask beats per task must be a power of two"
+      )
+      require(
+        beatsPerTask <= 16,
+        s"Task '$name': $beatsPerTask beats per task exceeds the scheduler's " +
+          s"16-beat burst; widen scheduler portWidth"
       )
     }
 
@@ -446,8 +504,8 @@ case class TaskDescriptor(
       )
     }
     require(
-      isPow2(widthTask) && widthTask <= 1024,
-      s"Task '$name': widthTask must be power of 2 and <= 1024"
+      isPow2(widthTask),
+      s"Task '$name': widthTask must be a positive power of 2"
     )
     require(
       !(dedicatedAxiPort && totalAxiPorts > 0),
@@ -680,10 +738,14 @@ case class FullSysGenDescriptor(
         )
       }
 
+      // Both ports land on the same per-PE local queue; they differ only in
+      // whether the spawnNext write buffer holds the task back until a closure
+      // write lands. See TaskDescriptor.spawnNextLocal.
+      val selfSpawnPort = if (task.spawnNextLocal) "spawnNextLocal" else "taskOut"
       val selfSpawnedConnections = (0 until selfSpawnedCount(task.name)).map {
         i =>
           ConnectionDescriptor(
-            PortDescriptor(task.name, "PE", i, "taskOut", 0),
+            PortDescriptor(task.name, "PE", i, selfSpawnPort, 0),
             PortDescriptor(f"${task.name}", "HardCilk", 0, "taskIn", i),
             task.widthTask,
             "AXIS"
@@ -887,6 +949,16 @@ case class FullSysGenDescriptor(
     )
 
     require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
+
+    // spawnNextLocal takes over the task's self-spawn edge, so there has to be
+    // one. Without this the port would elaborate and connect to nothing.
+    taskDescriptors.filter(_.spawnNextLocal).foreach { task =>
+      require(
+        spawnList.getOrElse(task.name, Nil).contains(task.name),
+        s"Task '${task.name}': spawnNextLocal is the task's self-spawn path, so " +
+          s"'${task.name}' must appear in its own spawnList"
+      )
+    }
 
     // A NewArgumentNotifier update is a compact OR payload plus an aligned
     // payload-slot selector.  Every source feeding one target shares the same

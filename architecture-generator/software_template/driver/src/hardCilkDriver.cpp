@@ -9,7 +9,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dirent.h>
 #include <fstream>
@@ -18,6 +21,7 @@
 #include <sstream>
 #include <termios.h>
 #include <thread>
+#include <unistd.h>
 
 namespace
 {
@@ -92,6 +96,7 @@ bool readProcStat(pid_t pid, pid_t &ppid, std::string &comm)
 
 volatile std::sig_atomic_t hardCilkDriver::stop_requested_ = 0;
 volatile std::sig_atomic_t hardCilkDriver::force_requested_ = 0;
+volatile std::sig_atomic_t hardCilkDriver::teardown_started_ = 0;
 
 // Saved controlling-terminal settings, captured before the hw_emu simulator is
 // launched. The simulator can leave the tty in a raw / no-echo state (it drops to
@@ -102,8 +107,18 @@ static bool g_savedTermiosValid = false;
 
 void hardCilkDriver::saveTerminalState()
 {
+    if (g_savedTermiosValid)
+        return; // never overwrite the pristine settings with our own raw ones
     if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &g_savedTermios) == 0)
+    {
         g_savedTermiosValid = true;
+        // The console interrupt reader below leaves the tty in a non-canonical,
+        // no-echo, VINTR-disabled state. Every deliberate exit path already
+        // restores it, but an abort()/uncaught-exception/exit() from anywhere else
+        // would otherwise hand the user back a terminal that shows no typed input
+        // and ignores Ctrl-C. atexit is the cheap catch-all.
+        std::atexit(&hardCilkDriver::restoreTerminalState);
+    }
 }
 
 void hardCilkDriver::restoreTerminalState()
@@ -178,16 +193,100 @@ bool hardCilkDriver::stopRequested()
     return stop_requested_ != 0;
 }
 
+// Shim declared in memIO_xrt.h, which cannot include hardCilkDriver.h (that
+// header includes memIO_xrt.h). Lets the long HBM-clear loop be interruptible.
+namespace hardcilk_interrupt
+{
+bool stopRequested() { return hardCilkDriver::stopRequested(); }
+}
+
 void hardCilkDriver::clearStopRequested()
 {
     stop_requested_ = 0;
 }
 
+bool hardCilkDriver::startConsoleInterruptReader()
+{
+    static std::atomic_bool started{false};
+    bool expected = false;
+    if (!started.compare_exchange_strong(expected, true))
+        return true; // already armed
+
+    if (!isatty(STDIN_FILENO))
+    {
+        started = false;
+        return false; // no controlling terminal -> nothing generates a Ctrl-C
+    }
+    // read() from a BACKGROUND process group raises SIGTTIN, whose default action
+    // STOPS us. Only take over the tty when we actually own it.
+    const pid_t fg = tcgetpgrp(STDIN_FILENO);
+    if (fg == -1 || fg != getpgrp())
+    {
+        started = false;
+        return false;
+    }
+
+    struct termios raw;
+    if (tcgetattr(STDIN_FILENO, &raw) != 0)
+    {
+        started = false;
+        return false;
+    }
+    saveTerminalState(); // capture the pristine settings before we change them
+
+    raw.c_lflag &= ~(ICANON | ECHO); // deliver the ^C byte immediately, unechoed
+    raw.c_cc[VINTR] = _POSIX_VDISABLE; // <- the point: no SIGINT to the group
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 1; // 100 ms read timeout so the thread is never wedged
+    // tcsetattr from a background group raises SIGTTOU; we checked we are in the
+    // foreground, but ignore it anyway for the same reason restoreTerminalState
+    // does (a runner script may re-parent us mid-run).
+    std::signal(SIGTTOU, SIG_IGN);
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
+    {
+        started = false;
+        return false;
+    }
+
+    std::thread([]() {
+        for (;;)
+        {
+            unsigned char buf[64];
+            ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
+            if (n < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+                break; // tty went away -- the SIGINT handler stays as the fallback
+            }
+            for (ssize_t i = 0; i < n; ++i)
+                if (buf[i] == 0x03) // ETX, i.e. what Ctrl-C used to be turned into
+                    requestStop(SIGINT);
+        }
+    }).detach();
+    return true;
+}
+
+void hardCilkDriver::noteTeardownStarted()
+{
+    teardown_started_ = 1;
+}
+
+void hardCilkDriver::armInterruptHandling()
+{
+    saveTerminalState();
+    startConsoleInterruptReader();
+    startInterruptSupervisor();
+}
+
 void hardCilkDriver::installSignalHandlers()
 {
+    // Kept as the fallback path (and for `kill -INT/-TERM <hostpid>`, which targets
+    // only us and so never disturbs the simulator). When armInterruptHandling()
+    // took over the tty, no terminal-generated SIGINT exists to reach these.
     std::signal(SIGINT, hardCilkDriver::requestStop);
     std::signal(SIGTERM, hardCilkDriver::requestStop);
-    startInterruptSupervisor();
+    armInterruptHandling();
 }
 
 void hardCilkDriver::terminateSimulator(int sig)
@@ -257,16 +356,87 @@ void hardCilkDriver::startInterruptSupervisor()
         while (!stopRequested() && force_requested_ == 0)
             std::this_thread::sleep_for(milliseconds(100));
         // First Ctrl-C is a GRACEFUL stop: the run keeps unwinding so it can dump
-        // telemetry and let the simulator save its waveform. Because the emulator
-        // was launched with SIGINT inherited as SIG_IGN, xsim does NOT pause on the
-        // Ctrl-C and keeps servicing those reads, so the clean path completes and
-        // the process exits normally (this thread is then reaped) well within the
-        // window below. The deadline is only a last-resort backstop so a wedged
-        // simulator can never hang the shell forever. A SECOND Ctrl-C
+        // telemetry and let the simulator save its waveform. Because
+        // armInterruptHandling() disabled the tty's VINTR, that Ctrl-C never became
+        // a signal at all, so xsim was not interrupted, keeps advancing simulated
+        // time, and keeps servicing those reads -- the clean path completes and the
+        // process exits normally (this thread is then reaped) well within the window
+        // below. The deadline is only a last-resort backstop for the cases where we
+        // could not take over the tty (stdin not a terminal) and the signal did
+        // reach the simulator, wedging it at its `xsim%` prompt. A SECOND Ctrl-C
         // (force_requested_) skips the wait entirely.
-        const auto deadline = steady_clock::now() + seconds(600);
-        while (force_requested_ == 0 && steady_clock::now() < deadline)
+        //
+        // Two phases, because they have very different honest durations:
+        //
+        //   phase 1 -- the benchmark body is still running. All it has to do is
+        //     notice stopRequested() in its poll loop, read back results and dump
+        //     telemetry. Tens of seconds. If it takes much longer the driver's poll
+        //     loop is NOT checking the flag (fullTriangleCountDecoupled's did not),
+        //     and the run would otherwise sit silent until its own watchdog -- the
+        //     "Ctrl-C printed a message and then nothing happened" report. Bounded,
+        //     and we say so out loud every 10 s so it is never a silent wait.
+        //
+        //   phase 2 -- noteTeardownStarted() has fired. Under hw_emu that is where
+        //     post_sim.tcl finalizes the VCD and copies the WDB (hundreds of MB,
+        //     minutes). Cutting that off would destroy exactly the artifact the
+        //     graceful stop exists to produce, so we stand down here and let the
+        //     teardown watchdog own the backstop.
+        long grace_s = 180;
+        if (const char *e = std::getenv("HARDCILK_INTERRUPT_GRACE_S"))
+        {
+            char *endp = nullptr;
+            const long v = std::strtol(e, &endp, 10);
+            if (endp != e && v > 0)
+                grace_s = v;
+        }
+        const auto t0 = steady_clock::now();
+        const auto deadline = t0 + seconds(grace_s);
+        auto next_beat = t0 + seconds(10);
+        while (force_requested_ == 0)
+        {
+            const auto now = steady_clock::now();
+            if (teardown_started_ == 0 && now >= deadline)
+                break;
+            if (now >= next_beat)
+            {
+                // write(2) only -- this thread races the main thread's iostreams.
+                char beat[160];
+                const int elapsed =
+                    static_cast<int>(duration_cast<seconds>(now - t0).count());
+                const int n = std::snprintf(
+                    beat, sizeof(beat),
+                    "[hardCilk] still stopping (%ds)%s -- press Ctrl-C again to "
+                    "force-quit now\n",
+                    elapsed,
+                    teardown_started_ != 0 ? ", finalizing waveform/teardown" : "");
+                if (n > 0)
+                {
+                    ssize_t w = ::write(STDERR_FILENO, beat,
+                                        static_cast<size_t>(n));
+                    (void)w;
+                }
+                next_beat = now + seconds(10);
+            }
             std::this_thread::sleep_for(milliseconds(100));
+        }
+        if (force_requested_ == 0)
+        {
+            // We got here on the deadline, not on a second Ctrl-C: the benchmark
+            // body never came back, which means its poll loop is not checking
+            // stopRequested(). Say so, because it is a code fix, not a hiccup.
+            char why[220];
+            const int n = std::snprintf(
+                why, sizeof(why),
+                "\n[hardCilk] graceful stop did not complete within %lds; the "
+                "driver's poll loop is not checking stopRequested(). Forcing.\n"
+                "[hardCilk] (raise HARDCILK_INTERRUPT_GRACE_S to wait longer.)\n",
+                grace_s);
+            if (n > 0)
+            {
+                ssize_t w = ::write(STDERR_FILENO, why, static_cast<size_t>(n));
+                (void)w;
+            }
+        }
         static const char msg[] =
             "\n[hardCilk] forcing shutdown and terminating simulator\n";
         ssize_t written = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
@@ -919,6 +1089,31 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
 
 int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor taskDescriptor)
 {
+    // A recycling pool is sized for peak live closures and refilled in hardware,
+    // so a pause means the pool was genuinely too small -- there is nothing
+    // sensible to refill it with mid-run, and quietly handing out a second pool
+    // would mask the undersizing. Fail loudly with the numbers needed to pick a
+    // bigger size next run.
+    if (taskDescriptor.recyclesContinuations())
+    {
+        const uint64_t capacity =
+            memory_->readReg64(base_address + alloc_server_capacity_shift);
+        const uint64_t leaked =
+            memory_->readReg64(base_address + alloc_server_leaked_shift);
+        std::ostringstream oss;
+        oss << "Continuation pool exhausted for task '" << taskDescriptor.name
+            << "' (capacity " << capacity << " closures";
+        if (leaked != 0)
+            oss << ", " << leaked
+                << " addresses LEAKED by the resolution collectors -- the pool "
+                   "shrank during the run, so the collector queues are undersized "
+                   "as well";
+        oss << "). Recycling cannot refill a pool that is too small for the peak "
+               "number of simultaneously live closures; re-run with a larger "
+               "continuation buffer.";
+        throw std::runtime_error(oss.str());
+    }
+
     // read the raddr of the server
     uint64_t addr = memory_->readReg64(base_address + alloc_server_raddr_shift);
 
@@ -1021,6 +1216,82 @@ int hardCilkDriver::setReturnAddr(uint64_t addr)
         printf("Return address set to 0x%lx (... suppressing further per-instance logs)\n", addr);
 
     return 0;
+}
+
+std::vector<hardCilkDriver::ContinuationPoolStats>
+hardCilkDriver::continuationPoolStats()
+{
+    std::vector<ContinuationPoolStats> stats;
+
+    auto sample = [&](const std::string &task, uint64_t index, uint64_t base) {
+        ContinuationPoolStats s;
+        s.task = task;
+        s.serverIndex = index;
+        s.baseAddress = base;
+        s.capacity = memory_->readReg64(base + alloc_server_capacity_shift);
+        s.available = memory_->readReg64(base + alloc_server_availableSize_shift);
+        s.lowWater = memory_->readReg64(base + alloc_server_lowWater_shift);
+        s.leaked = memory_->readReg64(base + alloc_server_leaked_shift);
+        s.handedOut = memory_->readReg64(base + alloc_server_handedOut_shift);
+        // Capacity is only nonzero on a recycling build; skip the rest.
+        if (s.capacity != 0)
+            stats.push_back(s);
+    };
+
+    if (buildDescriptor_.loaded)
+    {
+        std::map<std::string, uint64_t> seen;
+        for (const auto &server : buildDescriptor_.servers)
+            if (server.kind == "allocator")
+                sample(server.task, seen[server.task]++, server.baseAddress);
+        return stats;
+    }
+
+    for (const auto &taskDescriptor : descriptor.taskDescriptors)
+    {
+        uint64_t index = 0;
+        for (auto base : taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses)
+            sample(taskDescriptor.name, index++, static_cast<uint64_t>(base));
+    }
+    return stats;
+}
+
+void hardCilkDriver::reportContinuationPools(const std::string &prefix)
+{
+    for (const auto &s : continuationPoolStats())
+    {
+        const uint64_t peakUsed = s.capacity - s.lowWater;
+        std::cout << prefix << " continuation pool [" << s.task << ":"
+                  << s.serverIndex << "] capacity=" << s.capacity
+                  << " handed_out=" << s.handedOut
+                  << " low_water=" << s.lowWater << " peak_live<=" << peakUsed;
+        if (s.capacity != 0)
+            std::cout << " (" << (100.0 * peakUsed / s.capacity) << "% used)";
+        std::cout << " leaked=" << s.leaked << std::endl;
+        // Only `capacity` distinct addresses exist, so handing out more than that
+        // is proof the pool wrapped and addresses were reissued.
+        if (s.capacity != 0)
+        {
+            if (s.handedOut > s.capacity)
+                std::cout << prefix << "   RECYCLED: " << s.handedOut
+                          << " continuations issued from a " << s.capacity
+                          << "-entry pool (" << (s.handedOut / s.capacity)
+                          << "x reuse)\n";
+            else
+                std::cout << prefix << "   note: pool never wrapped ("
+                          << s.handedOut << " issued <= " << s.capacity
+                          << " capacity), so this run did not exercise recycling\n";
+        }
+        if (s.leaked != 0)
+            std::cerr << prefix
+                      << " WARNING: the resolution collectors dropped " << s.leaked
+                      << " addresses for '" << s.task
+                      << "'; the pool shrank during this run and the collector "
+                         "queues need to be deeper\n";
+        if (s.lowWater == 0)
+            std::cout << prefix << " note: low water never observed for '"
+                      << s.task << "' (no closures were handed out)\n";
+    }
 }
 
 /**

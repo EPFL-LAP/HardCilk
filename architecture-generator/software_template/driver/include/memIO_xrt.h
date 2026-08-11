@@ -2,6 +2,14 @@
 #include <memIO.h>
 #include <rama_striping.h>
 
+// hardCilkDriver.h includes THIS header, so it cannot be included back here.
+// Long-running memory operations still need to be interruptible, so the one bit
+// they need is forwarded through this shim (defined in hardCilkDriver.cpp).
+namespace hardcilk_interrupt
+{
+bool stopRequested();
+}
+
 #include <algorithm>
 #include <bits/stdc++.h>
 #include <chrono>
@@ -163,6 +171,15 @@ struct XRTMemory : Memory{
       static constexpr uint64_t ZERO_CHUNK_BYTES = 64ULL * 1024 * 1024;
       static const std::vector<uint8_t> zeros(ZERO_CHUNK_BYTES, 0);
       for (int bank = firstBank; bank <= lastBank; ++bank) {
+        // Cooperative stop point. Under hw_emu this clear is minutes long and is
+        // the phase a Ctrl-C is most likely to land in; without this the run only
+        // notices once it reaches its poll loop. A partial clear is fine -- the
+        // run is being abandoned, and the poll loop aborts immediately after.
+        if (hardcilk_interrupt::stopRequested()) {
+          std::cerr << "[hbm] interrupted by user; stopping HBM clear at bank "
+                    << bank << "\n";
+          return;
+        }
         std::vector<xrt::bo> tiles;
         tiles.reserve(static_cast<size_t>(BANK_SIZE / ZERO_CHUNK_BYTES) + 1);
         for (uint64_t offset = 0; offset < BANK_SIZE;

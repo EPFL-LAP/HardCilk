@@ -7,6 +7,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef BFS_LEGACY_ARGUMENT_NOTIFIER
+#define BFS_LEGACY_ARGUMENT_NOTIFIER 0
+#endif
+#if BFS_LEGACY_ARGUMENT_NOTIFIER != 0 && BFS_LEGACY_ARGUMENT_NOTIFIER != 1
+#error "BFS_LEGACY_ARGUMENT_NOTIFIER must be 0 or 1"
+#endif
+
 #define MEM_OUT_VOLATILE(mem_port, addr, type, value) \
   *((volatile type *)((uint8_t *)(mem_port) + (addr))) = (value)
 
@@ -97,32 +104,68 @@ struct BFS_args
   addr_t frontier1;
   addr_t nextFChar;
   addr_t cont;
-  uint8_t _padding[40];
+  addr_t status;
+  uint8_t _padding[32];
 };
 
-struct sparse_edgemap_helper_args
+struct __attribute__((packed)) sparse_edgemap_helper_args
 {
-  addr_t graph;               // 0
-  addr_t distance;            // 8
-  addr_t visited;             // 16
-  addr_t frontier;            // 24
-  addr_t next_frontier;       // 32
-  addr_t nextFChar;           // 40
-  addr_t cont;                // 48
-  uint32_t index;             // 56
-  uint32_t currentDistance;   // 60
-  uint32_t vertex_count;      // 64  total vertices in the graph (bounds checks)
-  uint32_t max_depth;         // 68
-  uint32_t task_vertex_count; // 72  BFS_new: # frontier vertices in THIS chunk
+  addr_t cont;                 // 0
+  uint32_t continuation_meta;  // 8, stamped by the spawnNext write buffer
+  addr_t graph;                // 12
+  addr_t distance;             // 20
+  addr_t visited;              // 28
+  addr_t frontier;             // 36
+  addr_t next_frontier;        // 44
+  addr_t nextFChar;            // 52
+  uint32_t index;              // 60
+  uint32_t currentDistance;    // 64
+  uint32_t vertex_count;       // 68  total vertices in the graph (bounds checks)
+  uint32_t max_depth;          // 72
+  uint32_t task_vertex_count;  // 76  BFS_new: # frontier vertices in THIS chunk
   // The scheduler's PE-facing AXIS width and backing-queue entry size are both
   // driven by the descriptor's widthTask, which must be a power of two. The real
-  // payload is 76 bytes; pad to 128 bytes (1024 bits) so it matches
+  // payload is 80 bytes; pad to 128 bytes (1024 bits) so it matches
   // widthTask=1024 in BFS.json. Without this the trailing fields (task_vertex_count,
   // max_depth) are truncated off the task stream.
-  uint8_t _pad[52]; // 76..127
+  uint8_t _pad[48]; // 80..127
 };
 static_assert(sizeof(sparse_edgemap_helper_args) == 128,
               "sparse_edgemap_helper_args must be 1024 bits (widthTask=1024)");
+static_assert(offsetof(sparse_edgemap_helper_args, continuation_meta) == 8,
+              "metadata must land where the write buffer stamps it");
+
+// Host-visible progress is separate from the cached continuation address,
+// which changes on every BFS level.
+struct __attribute__((packed)) bfs_status {
+  uint32_t done;
+  uint32_t currentDistance;
+  uint32_t frontier_length;
+  uint32_t reserved;
+};
+
+// One continuation-line write followed by release of `allow` helper tasks.
+// The padding makes the Vitis AXIS packet the next power-of-two width.
+struct bfs_spawn_next {
+  addr_t addr;
+  BFS_args data;
+  uint32_t size;
+  uint32_t allow;
+  uint8_t _padding[112];
+};
+
+#if !BFS_LEGACY_ARGUMENT_NOTIFIER
+struct __attribute__((packed)) bfs_counter_update {
+  addr_t address;
+  uint32_t continuation_meta;
+  ap_uint<8> payload;
+  ap_uint<7> offset;
+};
+#endif
+
+static_assert(sizeof(BFS_args) == 128, "BFS continuation ABI");
+static_assert(sizeof(bfs_status) == 16, "BFS host status ABI");
+static_assert(sizeof(bfs_spawn_next) == 256, "BFS spawnNext packet ABI");
 
 // Build a lock request beat:
 //   tdata[63:0]    = byte address of the slot (tag)

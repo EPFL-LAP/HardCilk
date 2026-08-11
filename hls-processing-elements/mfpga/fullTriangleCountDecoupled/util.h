@@ -21,11 +21,11 @@ using addr_t = uint64_t;
 // Elements of an adjacency list held in an adder's closure per side. One
 // memReader fetch fills exactly one window, so this also sets the argument-update
 // payload size: ADDER_WINDOW * 4 = 64 bytes = one aligned slot of the closure.
-static constexpr uint32_t ADDER_WINDOW = 16;
+static constexpr uint32_t ADDER_WINDOW = 8;
 // Candidate vertices an adder_unit_launcher hands out per round. Argument updates
 // are OR-merged, so the partial counts cannot share a field: each adder of the
 // batch owns its own 32-bit slot in the launcher's closure.
-static constexpr uint32_t LAUNCHER_BATCH = 32;
+static constexpr uint32_t LAUNCHER_BATCH = 16;
 
 // The intersection of adj(v) and adj(u), advanced one comparison per task.
 //
@@ -55,32 +55,106 @@ struct __attribute__((packed)) counter_continuation {
   uint32_t b_full_len;            // |adj(u)|
   uint32_t A_data[ADDER_WINDOW];  // window [a_storage_top_pointer - ADDER_WINDOW, a_storage_top_pointer)
   uint32_t B_data[ADDER_WINDOW];
-  uint8_t _padding[64];
 };
 
 // One base vertex's driver. Hands out a batch of adders, parks on their partial
 // counts, sums them, and goes around again until adj(v) is exhausted.
+// The launcher is a child continuation of the vertex_writeback closure triangle
+// parks for this vertex, so it obeys the same two pinned offsets that
+// counter_continuation does: _counter at bits [31:0] for the argument server,
+// continuation_meta at bits [95:64] for the spawnNext write buffer. That
+// displaces v_neighbors, which is why the order looks reshuffled against the
+// version that wrote its result straight to memory.
+//
+// There is no `offset` field, unlike counter_continuation. That one exists
+// because sixteen adders share one launcher closure and each has to be told
+// which counts[] slot is its own. Exactly one launcher reports into a writeback
+// closure, so its slot is the compile-time constant offsetof(count)/4 and the
+// launcher stamps it into the update rather than carrying it.
+//
+// vertex and triangle_count_arr are gone too: the writeback closure carries
+// both, stamped by triangle when it allocates, so the launcher never has to know
+// where the answer lands. Dropping those eight bytes is what pays for _cont.
 struct __attribute__((packed)) adder_unit_launcher_continuation {
   uint32_t _counter;               // adders outstanding this round
-  uint32_t vertex;                 // v
+  uint32_t v_size;                 // |adj(v)|
+  uint32_t continuation_meta;      // stamped by the write buffer at bits [95:64]
+  uint32_t cursor;                 // next candidate of adj(v) to hand out
+  addr_t _cont;                    // parent vertex_writeback closure
   addr_t v_neighbors;              // &adj(v)[0]
   addr_t adj_list;                 // graph index base: {ptr, size} per vertex
-  uint32_t v_size;                 // |adj(v)|
-  uint32_t cursor;                 // next candidate of adj(v) to hand out
   uint32_t running_total;          // batches already summed
-  uint32_t _padding0;
-  addr_t triangle_count_arr;       // per-vertex {done, count} result array
-  uint8_t _padding1[80];
+  uint8_t _padding[20];
   uint32_t counts[LAUNCHER_BATCH]; // one OR-merged slot per adder of the batch
 };
 
+// One vertex's answer, and the admission token for the whole run.
+//
+// triangle takes one of these before it spawns a vertex's launcher, so the size
+// of this pool -- and nothing else -- caps how many vertices are in flight. The
+// cap is self-enforcing: the pool only refills when a vertex retires, and
+// triangle blocking on closureIn cannot stall anything that would free a
+// closure, because triangle consumes nothing from downstream.
+//
+// count is the single OR-merged slot the launcher writes once adj(v) is
+// exhausted. It sits at word 3, so a two-bit offset addresses the whole line.
+struct __attribute__((packed)) vertex_writeback_continuation {
+  uint32_t _counter;          // one launcher outstanding
+  uint32_t _padding0;
+  uint32_t continuation_meta; // stamped by the write buffer at bits [95:64]
+  uint32_t count;             // OR-merged: this vertex's wedge closures
+  addr_t triangle_count_arr;  // per-vertex {done, count} result array
+  uint32_t vertex;            // v
+  uint32_t _padding1;
+  // Padded to the same 128-byte line as the other two continuations. Not
+  // waste in any meaningful sense -- 512 of these is 64 KB -- and it is what
+  // keeps this task's notifier masters at the same 1024-bit AXI shape as the
+  // adder's and the launcher's (memoryAxiDataWidth follows continuationSize).
+  // At 256 bits they become two new shape classes, the HBM allocator runs out
+  // of shape-aware ports, and every mixed port falls to the id-collapse path.
+  uint8_t _padding2[96];
+};
+
+// One window is one AXI beat. Making that the element type of the memReader's
+// port is what gets a fetch into a single burst; read_request then counts in
+// windows, which is why adjacency lists must start on a window boundary.
+typedef ap_uint<ADDER_WINDOW * 32> window_beat;
+
+// One entry of the graph index. The two fields are adjacent, so reading them as
+// a pair is one 16-byte bus access instead of two 8-byte ones -- which also
+// keeps a dependent address computation off the critical path, since nothing
+// has to wait on the first field to issue the second read.
+struct __attribute__((packed)) adj_entry {
+  addr_t neighbors; // &adj(u)[0]
+  uint64_t size;    // |adj(u)|
+};
+
+// ... but read as one 128-bit scalar, not as the struct. HLS decomposes a struct
+// load into one bus access per member, and max_widen_bitwidth will not merge
+// them back, so the struct form costs two 64-bit beats per entry. These
+// accessors keep the layout in one place while the access stays a single beat.
+typedef ap_uint<8 * sizeof(adj_entry)> adj_entry_beat;
+
+static inline addr_t adjNeighbors(const adj_entry_beat &e) {
+  return (addr_t)e.range(8 * sizeof(addr_t) - 1, 0);
+}
+static inline uint32_t adjSize(const adj_entry_beat &e) {
+  return (uint32_t)e.range(8 * sizeof(addr_t) + 31, 8 * sizeof(addr_t));
+}
+
 // The root task. Walks every vertex and hands each one to a launcher.
+// first_vertex/vertex_count is a half-open range, not just a count: the host
+// slices a graph whose closure demand exceeds the pool into several runs over
+// disjoint vertex ranges, and adj_list is indexed by GLOBAL vertex id (candidate
+// lookups use ids from anywhere in the graph), so the range cannot be expressed
+// by shifting the base pointer.
 struct __attribute__((packed)) triangle_task {
   addr_t _cont;
   addr_t adj_list;
   addr_t triangle_count_arr;
+  uint32_t first_vertex;
   uint32_t vertex_count;
-  uint8_t _padding[36];
+  uint8_t _padding[32];
 };
 
 struct __attribute__((packed)) memReader_task {
@@ -102,30 +176,38 @@ struct __attribute__((packed)) counter_continuation_update {
   addr_t address;
   uint32_t continuation_meta;
   uint32_t payload[ADDER_WINDOW];
-  ap_uint<2> offset; // 256-byte closure / 64-byte payload = 4 slots
+  ap_uint<2> offset; // 128-byte closure / 32-byte payload = 4 slots
 };
 
 struct __attribute__((packed)) adder_done_continuation_update {
   addr_t address;
   uint32_t continuation_meta;
   uint32_t payload;
-  ap_uint<6> offset; // 256-byte closure / 4-byte payload = 64 slots
+  ap_uint<5> offset; // 128-byte closure / 4-byte payload = 32 slots
+};
+
+// The launcher's one report into its vertex_writeback closure: the finished
+// vertex's total. Same shape as the adder's, narrower only because the closure
+// it lands in is a quarter the size.
+struct __attribute__((packed)) adder_unit_launcher_done_update {
+  addr_t address;
+  uint32_t continuation_meta;
+  uint32_t payload;
+  ap_uint<5> offset; // 128-byte closure / 4-byte payload = 32 slots
 };
 
 // spawnNext write-buffer packets. The layout mirrors WriteBundleCounter: address,
-// continuation line, transfer size, then one allow count per gated taskOut.
-//
-// A packet whose continuation line carries _counter == 0 is waiting on nothing,
-// so the buffer spawns `data` straight down its direct-spawn link instead of
-// writing it to the ArgumentServer. That is how an adder goes around again after
-// a comparison: nothing was allocated, nothing is written, `data` already holds
-// the metadata the buffer would otherwise have stamped in, and allow is 0 because
-// there is no memReader task waiting to be released.
+// continuation line, transfer size (log2 bytes), then one allow count per gated
+// taskOutGlobal. The buffer writes the line to the ArgumentServer and, once that
+// write is acknowledged, releases `allow` tasks from the matching stream -- which
+// is what keeps a child from reaching a scheduler before the closure it points at
+// exists. A re-entry that allocates nothing needs none of this and goes out the
+// PE's spawnNextLocal port instead, bypassing the buffer entirely.
 struct adder_self_spawn_next {
   addr_t addr;
   counter_continuation data;
   uint32_t size;
-  uint32_t allow; // memReaderTaskOut
+  uint32_t allow; // taskOutGlobal1: the memReader fetch
   uint8_t _padding[240];
 };
 
@@ -133,11 +215,19 @@ struct adder_unit_launcher_spawn_next {
   addr_t addr;
   adder_unit_launcher_continuation data;
   uint32_t size;
-  uint32_t allow; // adder_taskOut
+  uint32_t allow; // taskOutGlobal1: this round's adders
   uint8_t _padding[240];
 };
 
-static_assert(sizeof(counter_continuation) == 256, "adder continuation ABI");
+struct triangle_spawn_next {
+  addr_t addr;
+  vertex_writeback_continuation data;
+  uint32_t size;
+  uint32_t allow; // taskOutGlobal: this vertex's launcher
+  uint8_t _padding[112];
+};
+
+static_assert(sizeof(counter_continuation) == 128, "adder continuation ABI");
 static_assert(offsetof(counter_continuation, continuation_meta) == 8,
               "metadata must land where the write buffer stamps it");
 static_assert(offsetof(counter_continuation, A_data) %
@@ -147,25 +237,48 @@ static_assert(offsetof(counter_continuation, B_data) %
                   (ADDER_WINDOW * sizeof(uint32_t)) == 0,
               "B_data must occupy an aligned payload slot");
 static_assert(offsetof(counter_continuation, A_data) /
-                      (ADDER_WINDOW * sizeof(uint32_t)) == 1,
+                      (ADDER_WINDOW * sizeof(uint32_t)) == 2,
               "A_data update-slot ABI");
 static_assert(offsetof(counter_continuation, B_data) /
-                      (ADDER_WINDOW * sizeof(uint32_t)) == 2,
+                      (ADDER_WINDOW * sizeof(uint32_t)) == 3,
               "B_data update-slot ABI");
 
-static_assert(sizeof(adder_unit_launcher_continuation) == 256,
+static_assert(sizeof(adder_unit_launcher_continuation) == 128,
               "launcher continuation ABI");
+static_assert(offsetof(adder_unit_launcher_continuation, continuation_meta) == 8,
+              "metadata must land where the write buffer stamps it");
 static_assert(offsetof(adder_unit_launcher_continuation, counts) %
                   sizeof(uint32_t) == 0,
               "count slots must be aligned 32-bit updates");
 static_assert(offsetof(adder_unit_launcher_continuation, counts) /
-                      sizeof(uint32_t) == 32,
+                      sizeof(uint32_t) == 16,
               "count update-slot ABI");
 static_assert(offsetof(adder_unit_launcher_continuation, counts) /
                           sizeof(uint32_t) + LAUNCHER_BATCH ==
                   sizeof(adder_unit_launcher_continuation) / sizeof(uint32_t),
               "the batch must fill the closure exactly");
 
+static_assert(sizeof(vertex_writeback_continuation) == 128,
+              "writeback continuation ABI");
+static_assert(offsetof(vertex_writeback_continuation, continuation_meta) == 8,
+              "metadata must land where the write buffer stamps it");
+static_assert(offsetof(vertex_writeback_continuation, count) %
+                  sizeof(uint32_t) == 0,
+              "the count slot must be an aligned 32-bit update");
+static_assert(offsetof(vertex_writeback_continuation, count) /
+                      sizeof(uint32_t) == 3,
+              "count update-slot ABI");
+
+static_assert(offsetof(adder_unit_launcher_done_update, address) == 0,
+              "launcher update address field ABI");
+static_assert(offsetof(adder_unit_launcher_done_update, continuation_meta) == 8,
+              "launcher update metadata field ABI");
+static_assert(offsetof(adder_unit_launcher_done_update, payload) == 12,
+              "launcher update payload field ABI");
+static_assert(offsetof(adder_unit_launcher_done_update, offset) == 16,
+              "launcher update offset field ABI");
+
+static_assert(sizeof(adj_entry) == 16, "graph index entry ABI");
 static_assert(sizeof(triangle_task) == 64, "root task ABI");
 static_assert(sizeof(memReader_task) == 32, "memReader task ABI");
 static_assert(offsetof(memReader_task, continuation_meta) == 8,
@@ -177,7 +290,7 @@ static_assert(offsetof(counter_continuation_update, continuation_meta) == 8,
               "window update metadata field ABI");
 static_assert(offsetof(counter_continuation_update, payload) == 12,
               "window update payload field ABI");
-static_assert(offsetof(counter_continuation_update, offset) == 76,
+static_assert(offsetof(counter_continuation_update, offset) == 44,
               "window update offset field ABI");
 
 static_assert(offsetof(adder_done_continuation_update, address) == 0,
@@ -191,6 +304,8 @@ static_assert(offsetof(adder_done_continuation_update, offset) == 16,
 
 // wAddr(64) + wData(2048) + size(32) + allow(32), rounded up to the next power
 // of two.
-static_assert(sizeof(adder_self_spawn_next) == 512, "adder spawnNext packet ABI");
-static_assert(sizeof(adder_unit_launcher_spawn_next) == 512,
+static_assert(sizeof(adder_self_spawn_next) == 384, "adder spawnNext packet ABI");
+static_assert(sizeof(adder_unit_launcher_spawn_next) == 384,
               "launcher spawnNext packet ABI");
+static_assert(sizeof(triangle_spawn_next) == 256,
+              "triangle spawnNext packet ABI");

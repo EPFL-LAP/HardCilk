@@ -105,6 +105,27 @@ class HardCilk(
     case (name, factory) => name -> Module(factory())
   }
 
+  // Continuation recycling: every resolution in the argument notifier hands its
+  // freed address to that task's allocator, which packs, rings and writes them
+  // back into its own free list. Index order matches on both sides (cache lanes
+  // then slow handlers), so this is a straight zip.
+  for ((name, allocator) <- allocatorMap) {
+    allocator.io_recycle.foreach { recycleIn =>
+      val resolved = newNotifierMap(name).resolvedAddresses.getOrElse(
+        throw new IllegalStateException(
+          s"$name: allocator expects recycle sources but its argument " +
+            "notifier does not export resolutions"
+        )
+      )
+      require(
+        resolved.length == recycleIn.length,
+        s"$name: ${resolved.length} resolution branches but " +
+          s"${recycleIn.length} recycle inputs"
+      )
+      recycleIn.zip(resolved).foreach { case (sink, source) => sink := source }
+    }
+  }
+
   val spawnNextWBMap = blueprint.spawnNextWBFactories.map {
     case (name, factory) => name -> factory()
   }
