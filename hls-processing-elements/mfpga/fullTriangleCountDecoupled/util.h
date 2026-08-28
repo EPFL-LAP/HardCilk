@@ -20,7 +20,7 @@ using addr_t = uint64_t;
 
 // Elements of an adjacency list held in an adder's closure per side. One
 // memReader fetch fills exactly one window, so this also sets the argument-update
-// payload size: ADDER_WINDOW * 4 = 64 bytes = one aligned slot of the closure.
+// payload size: ADDER_WINDOW * 4 = 32 bytes = one aligned slot of the closure.
 static constexpr uint32_t ADDER_WINDOW = 8;
 // Candidate vertices an adder_unit_launcher hands out per round. Argument updates
 // are OR-merged, so the partial counts cannot share a field: each adder of the
@@ -36,7 +36,7 @@ static constexpr uint32_t LAUNCHER_BATCH = 16;
 // parent pointer lives further up in _cont and is restored into the done update
 // once the merge finishes.
 //
-// A_data and B_data are each one aligned 64-byte slot, which is exactly what a
+// A_data and B_data are each one aligned 32-byte slot, which is exactly what a
 // memReader update writes. Updates are OR-merged, so whichever window a fetch
 // targets has to be written clear into the closure that parks on it.
 struct __attribute__((packed)) counter_continuation {
@@ -59,22 +59,19 @@ struct __attribute__((packed)) counter_continuation {
 
 // One base vertex's driver. Hands out a batch of adders, parks on their partial
 // counts, sums them, and goes around again until adj(v) is exhausted.
+//
 // The launcher is a child continuation of the vertex_writeback closure triangle
 // parks for this vertex, so it obeys the same two pinned offsets that
 // counter_continuation does: _counter at bits [31:0] for the argument server,
-// continuation_meta at bits [95:64] for the spawnNext write buffer. That
-// displaces v_neighbors, which is why the order looks reshuffled against the
-// version that wrote its result straight to memory.
+// continuation_meta at bits [95:64] for the spawnNext write buffer.
 //
 // There is no `offset` field, unlike counter_continuation. That one exists
-// because sixteen adders share one launcher closure and each has to be told
-// which counts[] slot is its own. Exactly one launcher reports into a writeback
-// closure, so its slot is the compile-time constant offsetof(count)/4 and the
-// launcher stamps it into the update rather than carrying it.
-//
-// vertex and triangle_count_arr are gone too: the writeback closure carries
-// both, stamped by triangle when it allocates, so the launcher never has to know
-// where the answer lands. Dropping those eight bytes is what pays for _cont.
+// because LAUNCHER_BATCH adders share one launcher closure and each has to be
+// told which counts[] slot is its own. Exactly one launcher reports into a
+// writeback closure, so its slot is the compile-time constant offsetof(count)/4
+// and the launcher stamps it into the update rather than carrying it. The
+// writeback closure also carries the vertex and the result array, so the launcher
+// never has to know where the answer lands.
 struct __attribute__((packed)) adder_unit_launcher_continuation {
   uint32_t _counter;               // adders outstanding this round
   uint32_t v_size;                 // |adj(v)|
@@ -106,12 +103,11 @@ struct __attribute__((packed)) vertex_writeback_continuation {
   addr_t triangle_count_arr;  // per-vertex {done, count} result array
   uint32_t vertex;            // v
   uint32_t _padding1;
-  // Padded to the same 128-byte line as the other two continuations. Not
-  // waste in any meaningful sense -- 512 of these is 64 KB -- and it is what
+  // Padded to the same 128-byte line as the other two continuations, which is what
   // keeps this task's notifier masters at the same 1024-bit AXI shape as the
-  // adder's and the launcher's (memoryAxiDataWidth follows continuationSize).
-  // At 256 bits they become two new shape classes, the HBM allocator runs out
-  // of shape-aware ports, and every mixed port falls to the id-collapse path.
+  // adder's and the launcher's (memoryAxiDataWidth follows continuationSize). At
+  // 256 bits they become two new shape classes, the HBM allocator runs out of
+  // shape-aware ports, and every mixed port falls to the id-collapse path.
   uint8_t _padding2[96];
 };
 

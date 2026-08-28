@@ -9,10 +9,6 @@
 
 static const uint32_t STREAM_END = 0x80000000u;
 
-// Density is defined the same way GBBS does: degree_sum / |S| with both
-// directions counted (NOT degree_sum / (2|S|)), and threshold is
-// (1 + epsilon) * density. This makes the reported FPGA density directly
-// comparable to GBBS's WorkEfficientDensestSubgraph instead of being 2x smaller.
 static inline density_t compute_density_from_degree_sum(uint64_t degree_sum,
                                                         uint32_t vertex_count)
 {
@@ -52,23 +48,6 @@ static inline uint32_t select_next_active(ApproxDenseSub_args &task,
     return 2;
 }
 
-// ---------------------------------------------------------
-// Orchestrator
-//
-// One BKV12 peeling round is run as two barrier-separated waves:
-//
-//   PHASE_CLASSIFY  : read D[] (frozen by the previous round's barrier),
-//                     compute density/threshold, update the best subgraph, then
-//                     spawn classify helpers that split the frontier into
-//                     survivors (-> next_frontier) and removed vertices
-//                     (-> removed_list). Continuation re-enters in DECREMENT.
-//   PHASE_DECREMENT : spawn decrement helpers over removed_list that lower the
-//                     induced degrees of the removed vertices' neighbors, in
-//                     place. Continuation re-enters in CLASSIFY for round+1.
-//
-// Because no helper writes D[] during the classify wave, every classification
-// in a round sees the same snapshot of degrees, matching the reference.
-// ---------------------------------------------------------
 void ApproxDenseSub(void *mem_0, void *mem_1, void *mem_2, void *mem_3,
                     void *mem_4,
                     hls::stream<vertex_subset_helper_args> &taskOutGlobal,
@@ -318,9 +297,6 @@ typedef struct
     uint64_t degree;
 } vertex_output;
 
-// ---------------------------------------------------------
-// Classify-wave stages
-// ---------------------------------------------------------
 
 void read_vertices(void *mem, hls::stream<uint32_t> &output_vertices,
                    vertex_subset_helper_args &task)
@@ -343,9 +319,7 @@ void classify_vertices(void *mem, hls::stream<uint32_t> &input_vertices,
                        hls::stream<uint32_t> &to_remove,
                        vertex_subset_helper_args &task)
 {
-    // D[] is frozen for the whole classify wave (no decrements happen until the
-    // next, barrier-separated wave), so every read here is a snapshot read. No
-    // writes to D[] occur here.
+
     while (true)
     {
 #pragma HLS pipeline II = 1
@@ -520,9 +494,6 @@ void classify_wave(void *mem_frontier, void *mem_degree, void *mem_keep,
     finish_classify(keep_done, removed_done, argOut, task);
 }
 
-// ---------------------------------------------------------
-// Decrement-wave stages
-// ---------------------------------------------------------
 
 void read_removed_vertices(void *mem, hls::stream<uint32_t> &to_remove,
                            vertex_subset_helper_args &task)
@@ -700,12 +671,6 @@ void vertex_subset_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3,
 #pragma HLS INTERFACE mode = axis port = toLock1
 #pragma HLS INTERFACE mode = axis port = fromLock1
 
-    // mem_0: read  - current frontier (classify) / removed_list (decrement)
-    // mem_1: read  - induced degree D[]
-    // mem_2: write - next_frontier (survivors)
-    // mem_3: write - removed_list
-    // mem_4: read  - CSR vertex table (neighbor address + degree)
-    // mem_5: read  - neighbor lists
 #pragma HLS INTERFACE mode = m_axi port = mem_0 bundle = gmem channel = \
     0 latency = 48 num_write_outstanding = 1 num_read_outstanding =     \
         64 max_read_burst_length = 16 max_widen_bitwidth = 256

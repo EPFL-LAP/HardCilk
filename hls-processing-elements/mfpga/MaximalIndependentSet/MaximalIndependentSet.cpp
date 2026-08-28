@@ -6,6 +6,10 @@
 #define VERTICES_PER_TASK 64
 
 static const uint32_t STREAM_END = 0x80000000u;
+// Join-counter park value for a continuation that has finished. The
+// ArgumentServer spawns on the counter reaching exactly zero, so parking at 1
+// arms a re-fire on a single stray decrement; park far out of reach instead.
+static const uint32_t COUNTER_PARKED = 0x40000000u;
 
 typedef struct
 {
@@ -186,9 +190,6 @@ void write_counts(void *mem, hls::stream<count_item> &input_counts,
     }
 }
 
-// ---------------------------------------------------------
-// Top Level CountNGH / NGS Primitive
-// ---------------------------------------------------------
 
 void NGS(void *mem_0, void *mem_1, void *mem_2, void *mem_3,
          hls::stream<NGS_args> &taskIn,
@@ -254,6 +255,20 @@ void MaximalIndependentSet(void *mem_0,
             16 max_widen_bitwidth = 256
 
     auto task = taskIn.read();
+
+    // `done` is TERMINAL: latch it, never recompute it. The launcher can be
+    // re-entered after it has already published done=1 -- the ArgumentServer
+    // spawns on the join counter hitting exactly zero, so any single stray
+    // decrement against the parked counter is enough, and a mid-run scheduler
+    // queue resize is a documented source of duplicate/garbage task dispatches.
+    // Without this guard the recomputation below derives done=0 from a fresh
+    // nextFChar read and restarts the whole loop. By then the host has already
+    // observed done=1 and snapshotted inMis[]/covered[] mid-flight, which is
+    // exactly the "done then un-done" measured on com-orkut (done read back as
+    // 0 with last_covered_length=1 after the poll loop had seen it set).
+    if (task.done != 0)
+        return;
+
     uint32_t chunk_count =
         (task.vertex_count + VERTICES_PER_TASK - 1) / VERTICES_PER_TASK;
     bool launch_ngs = task.ngs_done == 0;
@@ -265,37 +280,67 @@ void MaximalIndependentSet(void *mem_0,
         task.num_finished = 0;
         task.ngs_done = 1;
         task.loop_started = 0;
+        task.stall_rounds = 0;
+        task.rounds = 0;
         task.done = (task.vertex_count == 0) ? 1 : 0;
-        task.counter = task.done ? 1 : chunk_count;
+        task.counter = task.done ? COUNTER_PARKED : chunk_count;
     }
     else
     {
         bool had_loop_pass = task.loop_started != 0;
         if (had_loop_pass)
         {
-            uint64_t covered_length = MEM_IN_VOLATILE(mem_0, task.nextFChar, uint64_t);
-            MEM_OUT_VOLATILE(mem_0, task.nextFChar, uint64_t, 0);
-            task.last_covered_length = (uint32_t)covered_length;
-            task.num_finished += (uint32_t)covered_length;
+            // nextFChar is incremented by lock-server AMU atomics, but this read
+            // is a plain m_axi load from a different master, so it can miss
+            // increments that have not yet retired to HBM. Do NOT read-and-reset
+            // per round: a reset that races the AMU's writebacks both loses the
+            // count permanently and leaves small garbage behind, so num_finished
+            // never reaches vertex_count and last_covered_length never reads 0.
+            // On com-orkut that left num_finished at 50356/3072627 and kept the
+            // loop spawning ~48011 no-op tasks per round until the spawner queue
+            // overflowed twice. Letting the counter accumulate monotonically and
+            // taking the delta makes a stale read understate one round only, and
+            // self-correct on the next.
+            uint32_t total_covered =
+                (uint32_t)MEM_IN_VOLATILE(mem_0, task.nextFChar, uint64_t);
+            uint32_t delta = total_covered > task.num_finished
+                                 ? total_covered - task.num_finished
+                                 : 0;
+            task.last_covered_length = delta;
+            task.num_finished += delta; // monotone: never walks backwards
             task.active = 1 - task.active;
         }
         else
         {
-            MEM_OUT_VOLATILE(mem_0, task.nextFChar, uint64_t, 0);
             task.last_covered_length = 0;
             task.loop_started = 1;
         }
 
-        bool no_progress = had_loop_pass && task.last_covered_length == 0;
+        // A zero delta is only weak evidence that the run is over. nextFChar is
+        // read with a plain m_axi load, so a round whose increments have not yet
+        // retired reads delta==0 with work still outstanding -- and in the tail
+        // a round legitimately covers only a handful of vertices, so exactly one
+        // unretired increment is enough. Previously an un-done re-entry
+        // accidentally rescued that; now that done is latched, a single spurious
+        // zero would end the run for good. Require consecutive zero deltas, and
+        // treat num_finished reaching vertex_count as the real completion test.
+        if (had_loop_pass)
+            task.stall_rounds =
+                (task.last_covered_length == 0) ? task.stall_rounds + 1 : 0;
+        else
+            task.stall_rounds = 0;
+
+        bool no_progress = task.stall_rounds >= 3;
         if (task.num_finished >= task.vertex_count || no_progress)
         {
             task.done = 1;
-            task.counter = 1;
+            task.counter = COUNTER_PARKED;
         }
         else
         {
             task.done = 0;
             task.counter = chunk_count;
+            task.rounds++; // instrumentation: loop rounds actually spawned
         }
     }
 
@@ -316,6 +361,8 @@ void MaximalIndependentSet(void *mem_0,
     MEM_OUT(mem_0, task.cont + 80, addr_t, task.covered1);
     MEM_OUT(mem_0, task.cont + 88, addr_t, task.nextFChar);
     MEM_OUT(mem_0, task.cont + 96, addr_t, task.cont);
+    MEM_OUT(mem_0, task.cont + 104, uint32_t, task.stall_rounds);
+    MEM_OUT(mem_0, task.cont + 108, uint32_t, task.rounds);
     // Otherwise the counter would get written first.
     MEM_OUT(mem_0, task.cont, uint32_t, task.counter);
 
@@ -384,8 +431,6 @@ void select_uncovered_zero_vertices(void *mem_covered, void *mem_count,
                                     hls::stream<uint32_t> &selected_vertices,
                                     mis_loop_helper_args &task)
 {
-    // Vertex stream is unique within the helper chunk, so per-vertex state has
-    // no loop-carried dependence here.
 #pragma HLS DEPENDENCE variable = mem_covered inter false
 #pragma HLS DEPENDENCE variable = mem_count inter false
     while (true)
@@ -397,11 +442,17 @@ void select_uncovered_zero_vertices(void *mem_covered, void *mem_count,
             break;
         }
 
+        // Advisory only. Both of these are plain m_axi loads racing the lock
+        // server's AMU, which is the sole coherence point for covered[] and
+        // nghCount[]. A stale nghCount read is safe (decrements only lower it,
+        // so it can only read high and delay a root by a round); a stale
+        // covered[] read is not (the array is monotone 0->1, so it can only
+        // read low). MIS membership is therefore decided by the atomic claim in
+        // receive_cover_responses, never here.
         uint8_t covered = MEM_ARR_IN(mem_covered, task.covered, vertex, uint8_t);
         uint32_t count = MEM_ARR_IN(mem_count, task.nghCount, vertex, uint32_t);
         if (covered == 0 && count == 0)
         {
-            MEM_ARR_OUT(mem_covered, task.inMis, vertex, uint8_t, 1);
             selected_vertices.write(vertex);
         }
     }
@@ -409,19 +460,109 @@ void select_uncovered_zero_vertices(void *mem_covered, void *mem_count,
     selected_vertices.write(STREAM_END);
 }
 
-void expand_selected_vertices(void *mem, hls::stream<uint32_t> &selected_vertices,
+// The root's own claim, issued alone and ahead of any expansion. Splitting it
+// from the neighbour claims is what makes expansion conditional: a candidate
+// that loses this claim was already covered by an MIS neighbour, so it is not a
+// member AND must not go on to cover its own neighbours.
+void claim_selected_roots(hls::stream<uint32_t> &selected_vertices,
+                          hls::stream<uint32_t> &root_awaiting_response,
+                          mis_loop_helper_args &task,
+                          hls::stream<lock_req> &toLock)
+{
+    while (true)
+    {
+#pragma HLS pipeline II = 1
+        uint32_t vertex = selected_vertices.read();
+        if (vertex & STREAM_END)
+        {
+            break;
+        }
+
+        lock_req req = make_lock_req(task.covered + (addr_t)vertex, 1,
+                                     LOCK_OP_SET_AND_RETURN_CURRENT, false,
+                                     ATOMIC_MODE_BYTE);
+        toLock.write(req);
+        root_awaiting_response.write(vertex);
+    }
+
+    root_awaiting_response.write(STREAM_END);
+}
+
+// Winning the claim is the ONLY basis for membership, and now also the gate on
+// expansion. The covered[]/nghCount[] reads back in select are plain m_axi loads
+// and are advisory: nghCount can only read high (conservative -- it defers a
+// root by a round), and covered can only read low, which is exactly what this
+// claim filters out.
+void confirm_selected_roots(void *mem_inmis,
+                            hls::stream<uint32_t> &root_awaiting_response,
+                            hls::stream<uint32_t> &confirmed_for_expand,
+                            hls::stream<uint32_t> &confirmed_for_update,
+                            hls::stream<uint32_t> &root_count,
+                            mis_loop_helper_args &task,
+                            hls::stream<lock_resp> &fromLock)
+{
+    uint32_t marked = 0;
+    uint32_t last_marked = 0;
+
+    while (true)
+    {
+#pragma HLS pipeline II = 1
+        uint32_t token = root_awaiting_response.read();
+        if (token & STREAM_END)
+        {
+            break;
+        }
+
+        lock_resp resp = fromLock.read();
+        // Identify the vertex from the echoed tag, not from the awaiting entry:
+        // a request that hits a tag conflict goes back around its PE's replay
+        // queue, so responses need not arrive in issue order. widthAXIAddress
+        // is >= 32, so the low 32 bits of the tag are exact.
+        uint32_t vertex = (uint32_t)lock_resp_tag(resp) - (uint32_t)task.covered;
+
+        if (lock_resp_success(resp) && lock_resp_current_byte(resp) == 0)
+        {
+            MEM_ARR_OUT_VOLATILE(mem_inmis, task.inMis, vertex, uint8_t, 1);
+            last_marked = vertex;
+            marked++;
+            confirmed_for_expand.write(vertex);
+            confirmed_for_update.write(vertex); // a root is newly covered too
+        }
+    }
+
+    confirmed_for_expand.write(STREAM_END);
+    confirmed_for_update.write(STREAM_END);
+
+    // Memory fence before the count leaves this stage, matching BFS and
+    // GraphColoring. inMis[] is a plain m_axi store; the count feeds the final
+    // nextFChar add, which gates completion, which releases the join counter and
+    // ultimately the host's readback. Reading the last byte back on the same
+    // port and folding it into the emitted value stops HLS dropping the read or
+    // sinking it past the completion.
+    uint32_t out = marked;
+    if (marked != 0)
+    {
+        volatile uint8_t flush =
+            MEM_ARR_IN_VOLATILE(mem_inmis, task.inMis, last_marked, uint8_t);
+        if (flush == 0) // never true: we just wrote 1 to that byte
+            out ^= 0xFFFFFFFFu;
+    }
+    root_count.write(out);
+}
+
+// Neighbours of CONFIRMED roots only. The root itself is already claimed and
+// counted, so it is not re-emitted here.
+void expand_selected_vertices(void *mem, hls::stream<uint32_t> &confirmed_roots,
                               hls::stream<uint32_t> &cover_candidates,
                               mis_loop_helper_args &task)
 {
     while (true)
     {
-        uint32_t selected = selected_vertices.read();
+        uint32_t selected = confirmed_roots.read();
         if (selected & STREAM_END)
         {
             break;
         }
-
-        cover_candidates.write(selected);
 
         ap_uint<128> bulk =
             MEM_IN(mem, task.graph + ((addr_t)selected << 4), ap_uint<128>);
@@ -453,6 +594,10 @@ void attempt_cover_vertices(hls::stream<uint32_t> &cover_candidates,
             break;
         }
 
+        // Non-blocking is correct: tags are exact addresses, so a conflict means
+        // another request for this same vertex is already in flight and will
+        // perform the set. success=0 therefore carries the same meaning as
+        // previous==1 ("someone else covered it"), and neither counts it here.
         lock_req req = make_lock_req(task.covered + (addr_t)vertex, 1,
                                      LOCK_OP_SET_AND_RETURN_CURRENT, false,
                                      ATOMIC_MODE_BYTE);
@@ -464,90 +609,76 @@ void attempt_cover_vertices(hls::stream<uint32_t> &cover_candidates,
 }
 
 void receive_cover_responses(hls::stream<uint32_t> &cover_awaiting_response,
-                             hls::stream<uint32_t> &newly_covered_for_buffer,
                              hls::stream<uint32_t> &newly_covered_for_update,
+                             hls::stream<uint32_t> &neighbour_count,
                              mis_loop_helper_args &task,
-                             hls::stream<lock_resp> &fromLock,
-                             hls::stream<lock_req> &toLock)
+                             hls::stream<lock_resp> &fromLock)
 {
+    uint32_t covered_here = 0;
+
     while (true)
     {
 #pragma HLS pipeline II = 1
-        uint32_t vertex = cover_awaiting_response.read();
-        if (vertex & STREAM_END)
+        uint32_t token = cover_awaiting_response.read();
+        if (token & STREAM_END)
         {
             break;
         }
 
         lock_resp resp = fromLock.read();
+        // Same reordering argument as confirm_selected_roots: decode from the
+        // echoed tag rather than pairing positionally with the awaiting entry.
+        uint32_t vertex = (uint32_t)lock_resp_tag(resp) - (uint32_t)task.covered;
+
         if (lock_resp_success(resp) && lock_resp_current_byte(resp) == 0)
         {
-            newly_covered_for_buffer.write(vertex);
             newly_covered_for_update.write(vertex);
-            lock_req req = make_lock_req(task.nextFChar, 1,
-                                         LOCK_OP_ADD_N_RETURN_CURRENT, true,
-                                         ATOMIC_MODE_DOUBLEWORD);
-            toLock.write(req);
+            covered_here++;
         }
     }
 
-    newly_covered_for_buffer.write(STREAM_END);
     newly_covered_for_update.write(STREAM_END);
+    // Counted locally and folded into ONE atomic per chunk below, instead of an
+    // ADD_N per covered vertex. Every one of those hit the same nextFChar tag,
+    // so they serialised through a single AMU slot for the whole run.
+    neighbour_count.write(covered_here);
 }
 
-void write_newly_covered(void *mem, hls::stream<uint32_t> &newly_covered,
-                         hls::stream<uint8_t> &buffer_done,
-                         mis_loop_helper_args &task,
-                         hls::stream<lock_resp> &fromLock)
-{
-    while (true)
-    {
-#pragma HLS pipeline II = 1
-        uint32_t vertex = newly_covered.read();
-        if (vertex & STREAM_END)
-        {
-            break;
-        }
-
-        lock_resp resp = fromLock.read();
-        if (lock_resp_success(resp))
-        {
-            uint32_t slot = lock_resp_current(resp);
-            MEM_ARR_OUT(mem, task.next_covered, slot, uint32_t, vertex);
-        }
-    }
-
-    buffer_done.write(1);
-}
-
-void read_newly_covered_neighbors(void *mem, hls::stream<uint32_t> &newly_covered,
+// Drains the confirmed roots first, then the newly covered neighbours: every
+// vertex that becomes covered must decrement its lower-priority neighbours.
+void read_newly_covered_neighbors(void *mem, hls::stream<uint32_t> &covered_roots,
+                                  hls::stream<uint32_t> &covered_neighbours,
                                   hls::stream<neighbor_item> &neighbors_to_update,
                                   mis_loop_helper_args &task)
 {
-    while (true)
+    for (int source = 0; source < 2; source++)
     {
-        uint32_t vertex = newly_covered.read();
-        if (vertex & STREAM_END)
+        while (true)
         {
-            break;
-        }
+            uint32_t vertex = (source == 0) ? covered_roots.read()
+                                            : covered_neighbours.read();
+            if (vertex & STREAM_END)
+            {
+                break;
+            }
 
-        uint32_t covered_priority =
-            MEM_ARR_IN(mem, task.priority, vertex, uint32_t);
-        ap_uint<128> bulk =
-            MEM_IN(mem, task.graph + ((addr_t)vertex << 4), ap_uint<128>);
-        addr_t neighbor_address = bulk.range(63, 0);
-        uint64_t degree = bulk.range(127, 64);
+            uint32_t covered_priority =
+                MEM_ARR_IN(mem, task.priority, vertex, uint32_t);
+            ap_uint<128> bulk =
+                MEM_IN(mem, task.graph + ((addr_t)vertex << 4), ap_uint<128>);
+            addr_t neighbor_address = bulk.range(63, 0);
+            uint64_t degree = bulk.range(127, 64);
 
-        for (uint32_t n = 0; n < degree; n++)
-        {
+            for (uint32_t n = 0; n < degree; n++)
+            {
 #pragma HLS pipeline II = 1
-            neighbor_item neighbor;
-            neighbor.vertex = vertex;
-            neighbor.neighbor = MEM_ARR_IN(mem, neighbor_address, n, uint32_t);
-            neighbor.vertex_priority = covered_priority;
-            neighbor.last = false;
-            neighbors_to_update.write(neighbor);
+                neighbor_item neighbor;
+                neighbor.vertex = vertex;
+                neighbor.neighbor = MEM_ARR_IN(mem, neighbor_address, n, uint32_t);
+                neighbor.vertex_priority = covered_priority;
+                neighbor.last = false;
+                neighbors_to_update.write(neighbor);
+            }
         }
     }
 
@@ -561,6 +692,8 @@ void read_newly_covered_neighbors(void *mem, hls::stream<uint32_t> &newly_covere
 
 void attempt_priority_updates(void *mem_covered, void *mem_priority,
                               hls::stream<neighbor_item> &neighbors_to_update,
+                              hls::stream<uint32_t> &root_count,
+                              hls::stream<uint32_t> &neighbour_count,
                               hls::stream<uint32_t> &update_awaiting_response,
                               mis_loop_helper_args &task,
                               hls::stream<lock_req> &toLock)
@@ -574,6 +707,10 @@ void attempt_priority_updates(void *mem_covered, void *mem_priority,
             break;
         }
 
+        // Plain read used purely as a filter to skip needless lock traffic. It
+        // can only read stale-low (covered[] is monotone 0->1), so the worst
+        // case is one extra decrement against an already-covered vertex, which
+        // is never selected again -- harmless by design.
         uint8_t covered =
             MEM_ARR_IN(mem_covered, task.covered, item.neighbor, uint8_t);
         uint32_t neighbor_priority =
@@ -587,6 +724,19 @@ void attempt_priority_updates(void *mem_covered, void *mem_priority,
             toLock.write(req);
             update_awaiting_response.write(item.neighbor);
         }
+    }
+
+    // One nextFChar add for the whole chunk. Both counts are already complete by
+    // now: each is written after its producer's sentinel, and we only get here
+    // after draining the stream fed from those sentinels.
+    uint32_t total = root_count.read() + neighbour_count.read();
+    if (total != 0)
+    {
+        lock_req req = make_lock_req(task.nextFChar, (ap_uint<64>)total,
+                                     LOCK_OP_ADD_N_RETURN_CURRENT, true,
+                                     ATOMIC_MODE_DOUBLEWORD);
+        toLock.write(req);
+        update_awaiting_response.write(0);
     }
 
     update_awaiting_response.write(STREAM_END);
@@ -612,12 +762,10 @@ void drain_priority_update_responses(hls::stream<uint32_t> &update_awaiting_resp
     updates_done.write(1);
 }
 
-void finish_mis_loop_helper(hls::stream<uint8_t> &buffer_done,
-                            hls::stream<uint8_t> &updates_done,
+void finish_mis_loop_helper(hls::stream<uint8_t> &updates_done,
                             hls::stream<uint64_t> &argOut,
                             mis_loop_helper_args &task)
 {
-    buffer_done.read();
     updates_done.read();
 
     bool sent = false;
@@ -628,9 +776,6 @@ void finish_mis_loop_helper(hls::stream<uint8_t> &buffer_done,
     }
 }
 
-// ---------------------------------------------------------
-// Top Level MIS Loop Helper
-// ---------------------------------------------------------
 
 void mis_loop_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3,
                      void *mem_4, void *mem_5, void *mem_6,
@@ -682,40 +827,58 @@ void mis_loop_helper(void *mem_0, void *mem_1, void *mem_2, void *mem_3,
 
     hls::stream<uint32_t> vertices("mis_vertices");
     hls::stream<uint32_t> selected_vertices("selected_vertices");
+    hls::stream<uint32_t> root_awaiting_response("root_awaiting_response");
+    hls::stream<uint32_t> confirmed_for_expand("confirmed_for_expand");
+    hls::stream<uint32_t> confirmed_for_update("confirmed_for_update");
+    hls::stream<uint32_t> root_count("root_count");
     hls::stream<uint32_t> cover_candidates("cover_candidates");
     hls::stream<uint32_t> cover_awaiting_response("cover_awaiting_response");
-    hls::stream<uint32_t> newly_covered_for_buffer("newly_covered_for_buffer");
     hls::stream<uint32_t> newly_covered_for_update("newly_covered_for_update");
+    hls::stream<uint32_t> neighbour_count("neighbour_count");
     hls::stream<neighbor_item> neighbors_to_update("neighbors_to_update");
     hls::stream<uint32_t> update_awaiting_response("update_awaiting_response");
-    hls::stream<uint8_t> buffer_done("buffer_done");
     hls::stream<uint8_t> updates_done("updates_done");
 
-#pragma HLS STREAM variable = vertices depth = 64
-#pragma HLS STREAM variable = selected_vertices depth = 64
+// A 64-vertex chunk can emit 64 entries plus a sentinel, so these must exceed
+// 65. confirm_selected_roots feeds two streams; if one filled it could never
+// write the other's sentinel, stalling read_newly_covered_neighbors on its
+// first source and closing a dataflow cycle back through the cover claims.
+#pragma HLS STREAM variable = vertices depth = 128
+#pragma HLS STREAM variable = selected_vertices depth = 128
+#pragma HLS STREAM variable = root_awaiting_response depth = 128
+#pragma HLS STREAM variable = confirmed_for_expand depth = 128
+#pragma HLS STREAM variable = confirmed_for_update depth = 128
+#pragma HLS STREAM variable = root_count depth = 2
 #pragma HLS STREAM variable = cover_candidates depth = 256
 #pragma HLS STREAM variable = cover_awaiting_response depth = 256
-#pragma HLS STREAM variable = newly_covered_for_buffer depth = 128
 #pragma HLS STREAM variable = newly_covered_for_update depth = 128
+#pragma HLS STREAM variable = neighbour_count depth = 2
 #pragma HLS STREAM variable = neighbors_to_update depth = 256
 #pragma HLS STREAM variable = update_awaiting_response depth = 128
-#pragma HLS STREAM variable = buffer_done depth = 2
 #pragma HLS STREAM variable = updates_done depth = 2
 
+    // Lock port allocation:
+    //   toLock1 = the root's own claim  (gates membership AND expansion)
+    //   toLock0 = neighbour cover claims
+    //   toLock2 = nghCount decrements + ONE nextFChar add per chunk
 #pragma HLS DATAFLOW
     mis_read_vertices(vertices, task);
     select_uncovered_zero_vertices(mem_0, mem_5, vertices, selected_vertices,
                                    task);
-    expand_selected_vertices(mem_1, selected_vertices, cover_candidates, task);
+    claim_selected_roots(selected_vertices, root_awaiting_response, task, toLock1);
+    confirm_selected_roots(mem_3, root_awaiting_response, confirmed_for_expand,
+                           confirmed_for_update, root_count, task, fromLock1);
+    expand_selected_vertices(mem_1, confirmed_for_expand, cover_candidates, task);
     attempt_cover_vertices(cover_candidates, cover_awaiting_response, task, toLock0);
-    receive_cover_responses(cover_awaiting_response, newly_covered_for_buffer,
-                            newly_covered_for_update, task, fromLock0, toLock1);
-    write_newly_covered(mem_3, newly_covered_for_buffer, buffer_done, task, fromLock1);
-    read_newly_covered_neighbors(mem_2, newly_covered_for_update,
-                                 neighbors_to_update, task);
-    attempt_priority_updates(mem_4, mem_6, neighbors_to_update,
-                             update_awaiting_response, task, toLock2);
+    receive_cover_responses(cover_awaiting_response, newly_covered_for_update,
+                            neighbour_count, task, fromLock0);
+    read_newly_covered_neighbors(mem_2, confirmed_for_update,
+                                 newly_covered_for_update, neighbors_to_update,
+                                 task);
+    attempt_priority_updates(mem_4, mem_6, neighbors_to_update, root_count,
+                             neighbour_count, update_awaiting_response, task,
+                             toLock2);
     drain_priority_update_responses(update_awaiting_response, updates_done,
                                     fromLock2);
-    finish_mis_loop_helper(buffer_done, updates_done, argOut, task);
+    finish_mis_loop_helper(updates_done, argOut, task);
 }

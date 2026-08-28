@@ -174,19 +174,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                     (isScheduler ? "sched:" : "spawner:") + taskDescriptor.name + ":" +
                         std::to_string(runtimeServer.index));
                 
-                // Zero-fill the backing store. xrt-smi reset does NOT clear HBM, so
-                // a stale slot read (a slot counted in currLen but never written, or
-                // a read-before-write) dispatches a garbage task whose `cont` field
-                // is garbage -> its argOut decrements a random HBM address and the
-                // BFS join counter is left short forever (the intermittent hang).
-                // Zeroing makes any such stale read benign.
-                //
-                // Done in fixed-size chunks from one reusable buffer: a full
-                // queue-sized host vector (up to ~217 MB for as-skitter) is what
-                // "took forever" -- the device transfer itself is cheap (~0.24s for
-                // two 217 MB queues). The real fix is to stop the stale read in the
-                // scheduler/spawner bookkeeping; this keeps the backing store
-                // well-defined until then.
+                // Zero out the HBM
                 {
                     uint64_t queueBytes = scheduler_capacity * taskDescriptor.widthTask/8;
                     uint64_t paddedQueueBytes = roundUpSchedulerWrite(queueBytes);
@@ -219,9 +207,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                     }
                 }
 
-                // Hold the server paused while programming its queue metadata.
-                // Some generated scheduler servers reset with rPause=0 and only
-                // self-pause after their FSM advances, so do not wait here.
+
                 const uint64_t base_address = runtimeServer.baseAddress;
                 memory_->writeReg64(base_address + scheduler_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(base_address + scheduler_server_raddr_shift, addr);

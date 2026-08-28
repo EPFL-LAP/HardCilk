@@ -247,17 +247,15 @@ public:
     }
 
     // ── Size the closure pool ───────────────────────────────────────────────
-    // The pool recycles in hardware now: a continuation's address goes back on
-    // the free list the moment it resolves. So the pool no longer has to hold
-    // every closure the run will ever take, only the peak number alive at once,
-    // and a graph that used to need slicing runs in a single pass. Slicing is
-    // gone with it -- there is nothing left for a slice boundary to reclaim.
+    // The pool recycles in hardware: a continuation's address goes back on the
+    // free list the moment it resolves, so the pool only has to hold the peak
+    // number alive at once, not every closure the run will take.
     //
     // Peak live cannot be computed from the graph (it depends on how much work
     // the scheduler keeps in flight), so we take the whole-run estimate as an
-    // upper bound and simply cap it at what fits. If that cap is still too
-    // small, the allocator pauses and the run fails with the low-water numbers
-    // needed to size the next one.
+    // upper bound and cap it at what fits. If that cap is still too small, the
+    // allocator pauses and the run fails with the low-water numbers needed to
+    // size the next one.
     const uint64_t pool_available =
         (COMPUTE_HBM_BYTES > staged_bytes + result_bytes)
             ? (COMPUTE_HBM_BYTES - staged_bytes - result_bytes)
@@ -393,14 +391,12 @@ public:
 
     const bool counts_match = (fpga_total % result_divisor == 0) &&
                               (fpga_total / result_divisor == gbbs.triangles);
-    // capacity - low_water is the peak number of simultaneously live closures
-    // this run actually needed. With two continuation types sharing the HBM
-    // budget, comparing their two lines is how you tell whether one pool is
-    // starved while the other sits mostly idle.
-    //
-    // Reported on EVERY outcome, not just PASS. A run that dies on closure
-    // exhaustion is precisely the one whose pool numbers matter, so printing
-    // them only on success hid them from every case worth debugging.
+    // capacity - low_water is the peak number of simultaneously live closures this
+    // run actually needed. With two continuation types sharing the HBM budget,
+    // comparing their two lines is how you tell whether one pool is starved while
+    // the other sits mostly idle. Reported on every outcome, not just PASS: a run
+    // that dies on closure exhaustion is precisely the one whose pool numbers
+    // matter.
     reportContinuationPools("[fullTriangleCountDecoupled]");
 
     if (rc == 0 && not_done == 0 && counts_match)
@@ -634,6 +630,40 @@ private:
   // proceeds normally without telemetry.
   Addr reserveTelemetry()
   {
+    // Do not reserve telemetry HBM for a build that has no watcher.
+    //
+    // The reservation is TELEMETRY_PORT_STRIDE (4 GiB) from TELEMETRY_FIRST_BANK
+    // (16), so it owns banks 16..23 outright. That is harmless while compute
+    // allocations stay inside banks 0..15, but under a RAMA per_memory mapping
+    // spanning all 32 banks every allocation is striped and needs a slice of EVERY
+    // bank, so the first striped allocation dies with "RAMA-striped allocation
+    // exhausted an HBM bank" -- which reads like the graph does not fit when it is
+    // nothing of the sort.
+    //
+    // "pes" is the configured physical STATUS-slot table, so an empty or absent
+    // array means no watcher was built and there is nothing to reserve for.
+    // Reserving anyway could not work in that case either: the span is allocated
+    // linearly but addressed through the striped map, so its zero-fill fails and
+    // telemetry disables itself after having consumed the 4 GiB.
+    //
+    // HARDCILK_TELEMETRY=0 forces the same skip when a watcher IS present.
+    if (const char *t = std::getenv("HARDCILK_TELEMETRY");
+        t != nullptr && (std::string(t) == "0" || std::string(t) == "off"))
+    {
+      std::cout << "[telemetry] disabled by HARDCILK_TELEMETRY=0; "
+                   "no HBM reserved (banks 16+ stay free)\n";
+      return 0;
+    }
+    if (!descriptorHasWatcher())
+    {
+      std::cout << "[telemetry] descriptor declares no watcher (empty \"pes\"); "
+                   "skipping the "
+                << (getTelemetryReserveBytes() >> 20)
+                << " MiB HBM reservation (banks "
+                << TELEMETRY_FIRST_BANK << "+ stay free)\n";
+      return 0;
+    }
+
     XRTMemory *xrtMem = dynamic_cast<XRTMemory *>(memory_);
     if (xrtMem == nullptr)
     {
@@ -1666,11 +1696,11 @@ private:
     auto last_progress = std::chrono::high_resolution_clock::now();
     // A long run should say what it is doing rather than sit silent until the
     // watchdog. Progress is reported in CLOSURES CONSUMED, not retired vertices:
-    // hundreds of vertices are in flight at once, so the vertex count barely
-    // moves for most of the run and then jumps at the very end, which is useless
-    // as a progress bar and useless for an ETA. Closures consumed climbs
-    // smoothly from the first cycle. Vertices are still shown, as the ground
-    // truth that actually ends the run.
+    // hundreds of vertices are in flight at once, so the vertex count barely moves
+    // for most of the run and then jumps at the end, which is useless both as a
+    // progress bar and for an ETA. Closures consumed climbs smoothly from the
+    // first cycle. Vertices are still shown, as the ground truth that ends the
+    // run.
     auto next_status = start + std::chrono::seconds(status_interval_s_);
     uint64_t status_last_closures = 0;
     auto status_last_time = start;
@@ -1753,15 +1783,13 @@ private:
         // rate is bounded by the pump period, not by the design.
         if (pump_resumes != 0)
           std::cout << " alloc_resumes=" << pump_resumes;
-        // Every pool, not just the adder one. allocatorAvailable() hardcodes
+        // Every pool, not just the adder one: allocatorAvailable() hardcodes
         // "adder", and the launcher pool is both the tighter of the two and the
-        // one that empties first when continuations stop being recycled, so a
-        // readout that omits it hides the failure most likely to be happening.
-        // Per-pool detail costs five AXI-lite reads PER POOL. On hardware that is
-        // microseconds and worth it; under hw_emu a register read is seconds, and
-        // three pools turned one status line into ~15 of them -- which became the
+        // one that empties first when continuations stop being recycled.
+        // Per-pool detail costs five AXI-lite reads PER POOL -- microseconds on
+        // hardware, but seconds each under hw_emu, where it would dominate the
         // poll period. The end-of-run and stall reports still print the full
-        // per-pool breakdown, so nothing is lost in emulation but the live view.
+        // per-pool breakdown, so only the live view is reduced in emulation.
         if (!isEmulation())
           std::cout << continuationPoolsCompact();
         else
@@ -1792,15 +1820,13 @@ private:
         dumpStallState(done, count);
         return 1;
       }
-      // With --pause-reset on, pump WHILE waiting out the backoff rather than
-      // once per iteration. Each resume releases at most one pool's worth of
-      // addresses, so the pump period is a hard ceiling on the admission rate,
-      // and `interval` backs off to 250 ms -- which would throttle the design to
-      // ~2k vertices/s. The readback itself cannot run that fast (it DMAs the
+      // With --pause-reset on, pump WHILE waiting out the backoff rather than once
+      // per iteration. Each resume releases at most one pool's worth of addresses,
+      // so the pump period is a hard ceiling on the admission rate, and `interval`
+      // backs off to 250 ms. The readback itself cannot run that fast (it DMAs the
       // whole result array, ~19 MB at orkut scale, which is why the backoff
-      // exists), so only the pump gets the fine cadence. Under emulation a
-      // register read costs seconds, so there it stays at one pump per
-      // iteration. Off (the default) this is a single sleep, as it always was.
+      // exists), so only the pump gets the fine cadence. Under emulation a register
+      // read costs seconds, so there it stays at one pump per iteration.
       const bool fine_pump = pause_reset_ && !isEmulation();
       if (!fine_pump)
       {
@@ -1963,26 +1989,23 @@ private:
     return 0;
   }
 
-  // WORKAROUND, delete once a post-fix bitstream is in use.
+  // WORKAROUND for a recycling AllocatorServer that latches a TERMINAL rPause the
+  // instant its free list cannot cover one burst. For an admission-cap pool that is
+  // not exhaustion: the addresses are alive inside the design and the RecycleWriter
+  // is about to hand them back. The read-ahead engine chases 112 beats (896
+  // addresses), so for any pool smaller than that wantReadBurst is pinned high and
+  // the latch fires during startup, before a single closure retires; the server then
+  // ignores every address that comes home. The RTL fix is to not self-pause while
+  // recycling; delete this once such a bitstream is in use.
   //
-  // A recycling AllocatorServer used to latch a TERMINAL rPause the instant its
-  // free list could not cover one burst. For an admission-cap pool that is not
-  // exhaustion: the addresses are alive inside the design and the RecycleWriter
-  // is about to hand them back. Worse, the read-ahead engine chases 112 beats
-  // (896 addresses), so for any pool smaller than that wantReadBurst is pinned
-  // high and the latch fires during startup -- before a single closure retires.
-  // The server then ignores every address that comes home, which is exactly the
-  // 512-handed-out-and-stop signature. (RTL fix: no self-pause when recycling.)
+  // rPause is a read/write register, so the host can resume the engine -- but only
+  // with a whole burst free, since clearing it on an empty free list re-latches on
+  // the next cycle. Resizing the pool does not help: the buffered addresses are not
+  // a reserve (triangle consumes those too), so the effective cap IS the capacity
+  // and a bigger pool only moves the latch.
   //
-  // rPause is a read/write register, so the host can just resume the engine.
-  // Only with a whole burst free -- clearing it on an empty free list re-latches
-  // on the next cycle and buys nothing. Resizing the pool does NOT work as a
-  // workaround: the buffered addresses are not a reserve (triangle consumes
-  // those too), so the effective cap IS the capacity and a bigger pool only
-  // moves the latch.
-  //
-  // Harmless to leave in against fixed RTL: rPause is never nonzero there, so
-  // this reads one register and writes nothing.
+  // Harmless against fixed RTL: rPause is never nonzero there, so this reads one
+  // register and writes nothing.
   uint64_t pumpAdmissionCapAllocators()
   {
     if (!pause_reset_)
@@ -2010,6 +2033,33 @@ private:
   {
     return s.size() >= suffix.size() &&
            s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+  }
+
+  // True when the build's descriptor declares at least one watcher STATUS slot.
+  // "pes" is that table, so empty or absent means the design carries no watcher and
+  // nothing should be reserved for telemetry. Cached because reserveTelemetry and
+  // the telemetry dump both ask.
+  //
+  // Fails OPEN: if no descriptor can be read at all we reserve anyway, rather than
+  // silently dropping telemetry on a build that does have a watcher.
+  bool descriptorHasWatcher() const
+  {
+    if (descriptor_watcher_known_)
+      return descriptor_has_watcher_;
+    descriptor_watcher_known_ = true;
+    descriptor_has_watcher_ = true;
+    for (const auto &c : hbmDescriptorCandidates())
+    {
+      std::ifstream df(c, std::ios::binary);
+      if (!df)
+        continue;
+      std::ostringstream ss;
+      ss << df.rdbuf();
+      descriptor_has_watcher_ =
+          !hardcilk_telemetry::parseWatcherPes(ss.str()).empty();
+      return descriptor_has_watcher_;
+    }
+    return descriptor_has_watcher_;
   }
 
   static std::string matchingHbmDescriptorPath(const std::string &xclbinPath)
@@ -2045,6 +2095,9 @@ private:
   double watchdog_s_ = 600.0;
   bool fast_mode_ = false;
   bool legacy_single_port_watcher_ = false;
+  // Cache for descriptorHasWatcher(); mutable so the const query can memoise.
+  mutable bool descriptor_watcher_known_ = false;
+  mutable bool descriptor_has_watcher_ = true;
   // Opt-in: stage GBBS's degree-oriented forward-neighbour graph instead of
   // the default full undirected graph. Controlled by --degree-order.
   bool degree_ordering_ = false;

@@ -54,6 +54,7 @@ struct XRTMemory : Memory{
     xrt::ip hardCilk_ip_;
     int defaultFirstBank_ = 0;
     int defaultLastBank_ = NUM_BANKS - 1;
+    bool warnedBankRangeWidened_ = false;
     RamaHostMapping ramaMapping_;
 
 
@@ -143,6 +144,39 @@ struct XRTMemory : Memory{
       if (firstBank < 0 || lastBank >= NUM_BANKS || firstBank > lastBank) {
         throw std::runtime_error("setDefaultBankRange: invalid bank range");
       }
+
+      // Never narrow the default range below the RAMA stripe span.
+      //
+      // allocateMemFPGA() only takes the striped path when the default range
+      // COVERS the whole stripe span. A caller that narrows the range -- e.g. a
+      // benchmark pinning compute to banks 0..15 while RAMA stripes over 0..31 --
+      // silently flips those allocations to a LINEAR allocation, and the address
+      // it returns still lies inside the striped window. copyToDevice then sees
+      // an address the mapping "contains", takes the STRIPED path, and looks up
+      // physical addresses that were never allocated: allocate linear, write
+      // striped, "Missing buffer for device address" at the first big write.
+      //
+      // Under striping the narrowing is meaningless anyway -- every allocation
+      // is spread across every bank in the span by construction -- so widening
+      // back to the span costs nothing and keeps allocation and access on the
+      // same path.
+      if (ramaMapping_.enabled()) {
+        const int stripeFirst = static_cast<int>(ramaMapping_.first_bank);
+        const int stripeLast = static_cast<int>(ramaMapping_.first_bank +
+                                                ramaMapping_.memory_count - 1);
+        if (firstBank > stripeFirst || lastBank < stripeLast) {
+          if (!warnedBankRangeWidened_) {
+            warnedBankRangeWidened_ = true;
+            std::cout << "[RAMA host] default bank range " << firstBank << ".."
+                      << lastBank << " would disable striped allocation; widened to "
+                      << stripeFirst << ".." << stripeLast
+                      << " (every allocation is striped across the span)\n";
+          }
+          firstBank = std::min(firstBank, stripeFirst);
+          lastBank = std::max(lastBank, stripeLast);
+        }
+      }
+
       defaultFirstBank_ = firstBank;
       defaultLastBank_ = lastBank;
     }

@@ -10,9 +10,8 @@ import chisel3.util._
   *
   * A blackbox rather than a `SyncReadMem` because the whole point is the
   * `ram_style = "ultra"` attribute, and Chisel 6 on this project has no route to
-  * attach an SV attribute to an inferred memory (the old firrtl annotation
-  * library is not on the compile classpath). Without the attribute Vivado infers
-  * block RAM for a 128-deep array and the exercise achieves nothing.
+  * attach an SV attribute to an inferred memory. Without the attribute Vivado
+  * infers block RAM for a 128-deep array and the exercise achieves nothing.
   */
 class UramDelayMemIO(addrBits: Int, dataBits: Int) extends Bundle {
   val clk = Input(Clock())
@@ -38,43 +37,31 @@ object DelayLine {
 
   /** Depth at or above which the payload moves to URAM.
     *
-    * DISABLED by default, because it was measured and it loses. On the
-    * fullTriangleCountDecoupled 8-way build a threshold of 64 sent 12 lanes of
-    * 1058 bits to URAM and did everything it promised on paper -- SRL cells
-    * 52,576 -> 21,404, SLR1 CLB occupancy 99.76% -> 97.32%, 180 URAMs of 960 --
-    * and the design then FAILED TO ROUTE, with 186,851 unroutable signals where
-    * the SRL build had merely missed timing by 0.540 ns.
+    * DISABLED by default: it frees the area it promises and then fails to route.
+    * URAM lives in a few fixed narrow columns, so the placer cannot put a lane's
+    * memory next to the lane and ends up splitting them across SLRs. Each lane
+    * pushes 1058 bits in and 1058 out, so a handful of misplaced lanes force
+    * thousands of nets across the boundary, funnelled into the SLL columns beside
+    * the URAM at over 200% of the available SLLs per column. No router setting
+    * fixes that.
     *
-    * The cause is not capacity, it is SLR crossings. URAM lives in a few fixed
-    * narrow columns, so the placer cannot put a lane's memory next to the lane;
-    * it split them 0/123/57 across the three SLRs, which left roughly four
-    * lanes with their memory on the far side of an SLR boundary. Each lane
-    * pushes 1058 bits in and 1058 out, so that is ~8,500 nets forced across,
-    * funnelled into the SLL columns beside the URAM:
+    * Congestion on this design is driven by WIRE DEMAND, not cell occupancy, so
+    * trading distributed placeable SLICEM cells for nets converging on fixed
+    * columns is a bad trade even though it frees area. The same objection applies
+    * to moving any other wide structure into hard blocks.
     *
-    * {{{ SLR[1-2] per-column SLL demand ... 2968 (206%) 2936 (204%) 2895 (201%) }}}
-    *
-    * against 1440 SLLs per column. No router setting fixes 200%.
-    *
-    * The lesson generalises past this module: congestion on this design is
-    * driven by WIRE DEMAND, not by cell occupancy. Trading ~31k distributed,
-    * placeable SLICEM cells for ~25k nets converging on fixed columns is a bad
-    * trade even though it frees area, and the same objection applies to moving
-    * any other wide structure into hard blocks.
-    *
-    * Re-enabling this needs each lane's memory pinned to its lane's SLR, which
-    * is a placement constraint. If that ever becomes acceptable, the economics
-    * of the threshold itself were sound: a URAM costs `ceil(width/72)` blocks
-    * regardless of depth against `width * ceil((delay-1)/32)` SLICEM LUTs for
-    * the shift register, so the return is `72 * ceil((delay-1)/32)` LUTs per
-    * URAM -- 72 at delay <= 32 (never worth it, one SRL32E per bit is the
-    * densest storage on the die), 144 in 33..64, 216 beyond, which is where 64
-    * came from.
+    * Re-enabling this needs each lane's memory pinned to its lane's SLR, which is
+    * a placement constraint. The threshold economics themselves are sound: a URAM
+    * costs `ceil(width/72)` blocks regardless of depth against
+    * `width * ceil((delay-1)/32)` SLICEM LUTs for the shift register, so the
+    * return is `72 * ceil((delay-1)/32)` LUTs per URAM -- 72 at delay <= 32 (never
+    * worth it, one SRL32E per bit is the densest storage on the die), 144 in
+    * 33..64, 216 beyond, which is where 64 came from.
     */
   val defaultUramThreshold: Int = Int.MaxValue
 
-  /** The threshold the URAM variant was validated at, kept so the tests can
-    * still exercise that path explicitly. Not the default -- see above.
+  /** The threshold the URAM variant was validated at, kept so the tests can still
+    * exercise that path explicitly. Not the default -- see above.
     */
   val validatedUramThreshold: Int = 64
 
@@ -90,23 +77,17 @@ object DelayLine {
   *
   * Two implementations, chosen by depth (see [[DelayLine.defaultUramThreshold]]):
   *
-  *  - Shallow: an unconditional shift register, which is what the porch already
-  *    was. Vivado maps it to SRLC32E/SRL16E chains, one LUT per 32 bits per bit
-  *    lane, and there is nothing cheaper.
+  *  - Shallow: an unconditional shift register. Vivado maps it to SRLC32E/SRL16E
+  *    chains, one LUT per 32 bits per bit lane, and there is nothing cheaper.
   *
-  *  - Deep: a circular buffer in URAM. Above ~64 cycles the shift register stops
-  *    being a good deal: the porches in fullTriangleCountDecoupled are 12 lanes
-  *    of 1058 bits at 72-75 cycles, which is ~38k SLICEM LUTs -- 74% of every
-  *    LUT-as-shift-register cell in the design -- competing for CLBM sites that
-  *    are 99.94% occupied in SLR1. The same storage is 180 URAMs of 960, in a
-  *    resource that is otherwise completely idle.
+  *  - Deep: a circular buffer in URAM. Above ~64 cycles a wide shift register
+  *    starts to dominate the design's LUT-as-shift-register budget, which URAM
+  *    avoids entirely.
   *
   * The two are behaviourally identical, including during the first `delay`
-  * cycles: `outValid` is a reset flip-flop chain in both cases, so the garbage
-  * the URAM reads out before the line has filled is never observable. The only
-  * difference is in don't-care data -- the shift register happens to hold the
-  * previous tenant of a slot whose valid bit is low, the URAM holds whatever was
-  * on the input bus -- and neither is readable through the interface.
+  * cycles: `outValid` is a reset flip-flop chain in both cases, so the garbage the
+  * URAM reads out before the line has filled is never observable. The only
+  * difference is in don't-care data, which is not readable through the interface.
   */
 class DelayLine[T <: Data](
     gen: T,

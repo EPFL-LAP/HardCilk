@@ -122,6 +122,18 @@ class HardCilk(
         s"$name: ${resolved.length} resolution branches but " +
           s"${recycleIn.length} recycle inputs"
       )
+      // This is a long cross-module hop: the argument notifier's servers are
+      // ~40,000 leaves each and BRAM-heavy, while a ResolutionCollector is ~300
+      // leaves, so the two sit far apart and the link was the design's critical
+      // path after the scheduler chain was fixed -- servers_N/coupledQs_M/ram_ext
+      // -> collectors_K/leaked, 7 logic levels, 1.18 ns of logic against 6.52 ns
+      // of route, crossing SLR boundaries five times.
+      //
+      // NOT registered. Pipelining this tap is FREE protocol-wise (it is a Valid,
+      // never backpressured) and gave the best placement of the 200 MHz campaign
+      // (-2.560 vs -3.046), but it cost routability on a design already at 85%
+      // SLL: 1,102 signals unrouted where the unpipelined version routes clean.
+      // Worth revisiting if routing headroom ever appears.
       recycleIn.zip(resolved).foreach { case (sink, source) => sink := source }
     }
   }

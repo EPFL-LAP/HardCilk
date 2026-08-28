@@ -23,24 +23,14 @@ class SchedulerNetworkControlUnitIO extends Bundle {
 
 /** One hop of the request ring.
   *
-  * This hop is elastic, and the reason is GUARANTEED LOCAL INJECTION -- not hole preservation on
-  * the data ring. That was the job of the `bubbleIn`/`bubbleOut` sideband, which is gone: the data
-  * ring is elastic now and an injector makes its own hole, so nothing needs a matching request-free
-  * cycle replayed at the next hop.
-  *
-  * The two are easy to conflate, so spell out why the rest has to stay. A plain one-bit
-  * always-flowing hop conserves requests perfectly well -- they carry no payload, so a hop holding
-  * one can refuse a second while still forwarding the one it has, and the count is kept. What it
-  * cannot do is guarantee a node ever gets its OWN request onto the ring: `stealReq.ready` is then
-  * just "my hop is empty", so a node whose hop is busy with other nodes' requests passing through
-  * is simply never able to inject. On a ring, the nodes furthest from the supply lose systematically.
-  *
-  * Measured on the BufferServerInput feedback ring (8 lanes, one seeded source): with the plain hop
-  * the last lane ran 616 of 1000 cycles while lanes 0-6 sat at exactly 1000, and it never recovered
-  * -- it could not get enough steal requests out to be served, and once the ring went quiet its
-  * shortfall was frozen in. With this hop the same test reaches II=1 on all eight lanes. So
-  * `stopOut` -- "a local request has priority over new upstream traffic" -- is load-bearing on its
-  * own, independently of anything the data ring does.
+  * This hop is elastic to guarantee LOCAL INJECTION. A plain one-bit always-flowing hop conserves
+  * requests perfectly well -- they carry no payload, so a hop holding one can refuse a second while
+  * still forwarding the one it has, and the count is kept. What it cannot do is guarantee a node
+  * ever gets its OWN request onto the ring: `stealReq.ready` is then just "my hop is empty", so a
+  * node whose hop is busy with other nodes' requests passing through is never able to inject, and on
+  * a ring the nodes furthest from the supply lose systematically. `stopOut` -- "a local request has
+  * priority over new upstream traffic" -- is what prevents that, independently of anything the data
+  * ring does.
   *
   * stopOut depends only on registered state and the local server, never on stopIn, so closing the
   * ring cannot create a combinational loop. The skid slot (a count of 2) absorbs the one request

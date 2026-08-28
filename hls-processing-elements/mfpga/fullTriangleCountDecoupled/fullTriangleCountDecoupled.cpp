@@ -13,9 +13,9 @@
 #include "hls_task.h"
 #include "hls_burst_maxi.h"
 
-//window_beat lives in util.h: one window is one AXI beat. The alternative, 16
-//scalar reads of the same port, schedules as 16 dependent accesses (measured
-//II=29 against a target of 1).
+//window_beat lives in util.h: one window is one AXI beat. The alternative,
+//ADDER_WINDOW scalar reads of the same port, schedules as that many dependent
+//accesses and will not pipeline.
 
 
 //memReader reads 16 elements at a time into the output argument
@@ -74,27 +74,22 @@ void adder(hls::stream<counter_continuation> &taskIn, hls::stream<adder_done_con
 
     //Everything the post-comparison decisions need, derived from the INCOMING
     //pointers so it settles in parallel with the window read rather than behind
-    //it. Vitis reported two 32-bit icmps back to back on the critical path (1.76
-    //ns of a 2.433 ns budget) because the done and refill tests consumed the
-    //INCREMENTED cursor. An increment is 0 or 1, so "will this step take it past
-    //the end" is knowable up front, and the comparison only has to AND into it.
-    //One subtract per side up front, after which every test is a compare against
-    //0 or 1 -- a few gates, not another 32-bit operation.
+    //it. An increment is 0 or 1, so "will this step take it past the end" is
+    //knowable up front and the comparison only has to AND into it: one subtract
+    //per side, after which every test is a compare against 0 or 1 rather than
+    //another 32-bit operation on the critical path.
     //
-    //Both earlier spellings cost two serial 32-bit ops. (cursor + 1 >= limit)
-    //gave add -> icmp, 1.76 ns of a 2.433 ns budget. Moving the arithmetic to the
-    //limit, (cursor >= limit - 1), gave exactly the same thing: this is a
-    //PIPELINED FUNCTION, not a loop, so every invocation reads a fresh task and
-    //both operands land together on the taskIn read. Neither side is invariant,
-    //so there is nothing to hoist -- the only fix is to stop needing two ops.
+    //This is a PIPELINED FUNCTION, not a loop, so every invocation reads a fresh
+    //task and both operands land together on the taskIn read. Neither side is
+    //invariant, so there is nothing to hoist -- the only fix is to stop needing
+    //two serial ops.
     //
     //Signed: the window difference is <= 0 before the first fetch. Graph lists
-    //are nowhere near 2^31, so the cast cannot overflow.
-    //A cursor never passes its limit or its window top, so both differences are
-    //>= 0 and every test below is "are these bits zero" -- an OR-reduce, a couple
-    //of gates. Spelled as magnitude compares (a_left > 0, a_left <= 1) HLS built
-    //a full 32-bit comparator for each, 0.880 ns apiece, in series behind the
-    //subtract. (~1u) clears bit 0 so "<= 1" is the same shape as "== 0".
+    //are nowhere near 2^31, so the cast cannot overflow. A cursor never passes
+    //its limit or its window top, so both differences are >= 0 and every test
+    //below is "are these bits zero" -- an OR-reduce. (~1u) clears bit 0 so
+    //"<= 1" is the same shape as "== 0"; spelled as magnitude compares HLS
+    //builds a full 32-bit comparator for each instead.
     const uint32_t a_left     = args.a_full_len            - args.a_cur_ptr;
     const uint32_t b_left     = args.b_full_len            - args.b_cur_ptr;
     const uint32_t a_win_left = args.a_storage_top_pointer - args.a_cur_ptr;
@@ -113,7 +108,7 @@ void adder(hls::stream<counter_continuation> &taskIn, hls::stream<adder_done_con
 
     //The window base is always a multiple of ADDER_WINDOW -- a_storage_top_pointer
     //starts at 0 and only ever advances by ADDER_WINDOW -- so the in-window index
-    //is just the low bits of the cursor. A bit-select, not a 0.708 ns subtract.
+    //is just the low bits of the cursor: a bit-select, not a subtract.
     const uint32_t a_index = args.a_cur_ptr & (ADDER_WINDOW - 1);
     const uint32_t b_index = args.b_cur_ptr & (ADDER_WINDOW - 1);
 
@@ -264,10 +259,10 @@ void adder_unit_launcher(void* mem, hls::stream<adder_unit_launcher_continuation
     //Scanning and emitting have to be separate loops. Filtering inside the read
     //loop makes the batch index depend on the size just fetched, and that index
     //is also the loop bound and the count slot -- a carried dependence through
-    //the AXI response, which serialises the loop at the read latency (measured
-    //II=141, 147MHz). The scan below has a fixed trip count and no such
-    //dependence, so it pipelines; the compaction after it touches no memory, so
-    //its dependence on collected is one compare and one increment.
+    //the AXI response, which serialises the loop at the read latency. The scan
+    //below has a fixed trip count and no such dependence, so it pipelines; the
+    //compaction after it touches no memory, so its dependence on collected is one
+    //compare and one increment.
     uint32_t candidates[LAUNCHER_BATCH];
     adj_entry_beat raw[LAUNCHER_BATCH];
     addr_t u_neighbors[LAUNCHER_BATCH];

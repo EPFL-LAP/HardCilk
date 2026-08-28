@@ -42,8 +42,7 @@ class SchedulerServerIO(
   // leave their initial pause on the SAME cycle instead of one-at-a-time as the host
   // clears each rPause over AXI-lite (which, under hw_emu's slow register path,
   // staggers PE start by ~800 cycles per server). Held 0 during init, pulsed to 1
-  // once to release everyone. Absent (== always-run) when the feature is off, so the
-  // generated RTL is byte-identical to the pre-feature design.
+  // once to release everyone. Absent (== always-run) when the feature is off.
   val globalRun = if (enableGlobalStart) Some(Input(Bool())) else None
   val paused = Output(Bool())
   // Telemetry tap: mirrors the internal networkCongested register so the watcher
@@ -84,11 +83,10 @@ class SchedulerServer(
   require(nBeats <= 16)
   // A task may be wider than the ring's AXI port, in which case it occupies
   // beatsPerTask CONSECUTIVE beats of one ring slot. Everything below still
-  // counts TASKS -- the ring is a task array, the head/tail/currLen/maxLength
-  // registers are task indices, and the fifo-end and 4KB caps are applied to
-  // task-sized slots exactly as before. Only the AXI burst length and the two
-  // data channels are expressed in beats, so a burst carries a whole number of
-  // tasks and no task can ever be torn across two bursts.
+  // counts TASKS -- the ring is a task array, and head/tail/currLen/maxLength are
+  // task indices. Only the AXI burst length and the two data channels are
+  // expressed in beats, so a burst carries a whole number of tasks and no task
+  // can ever be torn across two bursts.
   private val portWidth = if (ringPortWidth > 0) ringPortWidth else taskWidth
   require(
     taskWidth % portWidth == 0,
@@ -181,8 +179,7 @@ class SchedulerServer(
     // are (taskWidth/8) B and a burst is up to nBeats long, so a burst that starts
     // within (nBeats-1) slots of a 4KB line would straddle it -> illegal burst ->
     // the HBM/smartconnect mishandles the post-boundary beats and reads/writes the
-    // WRONG ring slots (stale/lost tasks; only shows up once bursts are long, i.e.
-    // at large sizes). Cap at the next 4KB line too. byteAddr is the ABSOLUTE
+    // WRONG ring slots. Cap at the next 4KB line too. byteAddr is the ABSOLUTE
     // device address (rAddr + ptr<<addrShift) so the boundary is in device space;
     // slotsToPageEnd is always >= 1 (== nBeats/page when ptr is page-aligned), so
     // the burst never collapses to length 0. The push split-continuation
@@ -308,15 +305,13 @@ class SchedulerServer(
   //   counter-rotates so our request travels away from our ctrl tap. Either only becomes visible
   //   after a full rotation -- at which point a request genuinely does mean somebody downstream
   //   freed a slot, rather than meaning "I just freed one myself by absorbing". Reading our own hop
-  //   instead (serveStealReq.ready) made the detector self-defeating: relieving congestion
-  //   manufactured the evidence that there was none, and since writeCanIssue is gated on the flag,
-  //   it could never hold long enough to issue a spill (measured: 52 toggles in 1200 cycles, 128
-  //   tasks absorbed, zero written back).
+  //   instead (serveStealReq.ready) makes the detector self-defeating: relieving congestion
+  //   manufactures the evidence that there was none, and since writeCanIssue is gated on the flag,
+  //   it can never hold long enough to issue a spill.
   //
   //   Holding, not handing over. The forwarding signals are gated on being able to move, so they
   //   read zero exactly when the ring is jammed -- maximum congestion would look identical to an
-  //   idle ring. Measured with a task waiting at the door on 250 of 250 cycles: the forwarding tap
-  //   saw zero advances and reported no congestion at all.
+  //   idle ring.
   //
   // Sampled every cycle, deliberately. A task stuck at our door for a hundred cycles is more
   // congested than one that passes through in one, so dwell-weighting is the right measure here --
@@ -358,9 +353,9 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // HBM RING PREFETCH: KEEP THE LOCAL TASK BUFFER WARM WHILE THE NETWORK IS
-  // UNCONGESTED.  THIS IS A SMALL BURST ENGINE, NOT THE OLD GLOBAL FSM: IT ONLY
-  // TRACKS WHETHER A READ BURST IS OUTSTANDING AND HOW MANY RETURN BEATS REMAIN.
+  // HBM ring prefetch: keep the local task buffer warm while the network is
+  // uncongested. A small burst engine -- it tracks only whether a read burst is
+  // outstanding and how many return beats remain.
   // ---------------------------------------------------------------------------
   val writingToHBM = RegInit(false.B)
   val writeBeatsLeft = RegInit(0.U(5.W))
@@ -407,11 +402,11 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // BEAT -> TASK REASSEMBLY.  A returning task arrives as beatsPerTask beats,
+  // Beat -> task reassembly. A returning task arrives as beatsPerTask beats,
   // lowest-order first, and only lands in the local buffer on its last beat.
-  // rxHold shifts each beat down so the task is assembled little-endian, which
-  // is the order the ring was written in. With one beat per task there is no
-  // register and rxTask is the read data itself, so the RTL is unchanged.
+  // rxHold shifts each beat down so the task is assembled little-endian, which is
+  // the order the ring was written in. With one beat per task there is no register
+  // and rxTask is the read data itself.
   // ---------------------------------------------------------------------------
   private val rxBeatIdx =
     if (multiBeatTask) Some(RegInit(0.U(beatIdxWidth.W))) else None
@@ -445,9 +440,9 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // LOCAL BUFFER ENQUEUE ARBITRATION: READ DATA HAS PRIORITY BECAUSE IT IS AN
-  // IN-FLIGHT AXI CHANNEL.  STOLEN TASKS FROM THE NETWORK ARE ACCEPTED WHEN
-  // CONGESTED AND THE SINGLE ENQUEUE PORT IS NOT BEING USED BY READ DATA.
+  // Local buffer enqueue arbitration: read data has priority because it is an
+  // in-flight AXI channel. Stolen tasks from the network are accepted when
+  // congested and the single enqueue port is not being used by read data.
   // ---------------------------------------------------------------------------
   val canTrackReturnedBeat = returnBeatsLeft =/= 0.U || readBurstLens.io.deq.valid
   // Only the last beat of a task claims the enqueue port; the earlier beats of a
@@ -455,14 +450,12 @@ class SchedulerServer(
   val readDataEnq = canTrackReturnedBeat && io.read_data.valid && rxLastBeat
   // Absorbing may not eat the buffer space an in-flight read burst has already claimed.
   //
-  // The read path reserves it (claimedReadTasks = count + inflightReadTasks gates readCanIssue) but
-  // the absorb path used to ignore the reservation, and the two run at different times: a burst is
-  // issued while UNcongested, congestion hits before it returns, and absorbed ring tasks then fill
-  // the buffer to the brim. The returning beats have nowhere to land, so outstandingReads never
-  // falls to zero -- and writeCanIssue waits on exactly that, so the spill that would drain the
-  // buffer can never start. Deadlock, with the ring stuck congested and the server holding 128
-  // tasks it cannot write back. Reproduced by SchedulerCongestionTests: one 16-beat prefetch in
-  // flight, 118 tasks absorbed, buffer at 128, zero HBM writes for the rest of the run.
+  // The read path reserves it (claimedReadTasks = count + inflightReadTasks gates readCanIssue) and
+  // the absorb path must honour the same reservation, because the two run at different times: a
+  // burst is issued while UNcongested, congestion hits before it returns, and absorbed ring tasks
+  // would otherwise fill the buffer to the brim. The returning beats then have nowhere to land, so
+  // outstandingReads never falls to zero -- and writeCanIssue waits on exactly that, so the spill
+  // that would drain the buffer can never start.
   val roomBeyondInflightReads =
     taskQueueBuffer.io.count +& inflightReadTasks < localQueueCapacity
   val availableTaskEnq =
@@ -493,9 +486,9 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // STEAL-CREDIT ACCOUNTING AND TASK OUTPUT: CONTROL CREDITS ARE COUNTED
-  // INDEPENDENTLY FROM DATA-NETWORK BACKPRESSURE.  TASKS ONLY LEAVE THE LOCAL
-  // BUFFER WHEN BOTH A STORED CREDIT AND qOutTask.ready ARE PRESENT.
+  // Steal-credit accounting and task output: control credits are counted
+  // independently from data-network backpressure. Tasks only leave the local
+  // buffer when both a stored credit and qOutTask.ready are present.
   // ---------------------------------------------------------------------------
   val stealCredits = RegInit(0.U(log2Ceil(localQueueDepth + 1).W))
   val canOutputTask =
@@ -521,9 +514,9 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // HBM RING SPILL: WHEN THE NETWORK IS CONGESTED, DRAIN FULL LOCAL BURSTS BACK
-  // TO THE RING.  FIFO-END AND 4KB CAPS ARE PRESERVED BY LATCHING THE CAPPED
-  // BURST LENGTH AT AW FIRE AND USING IT FOR THE W CHANNEL.
+  // HBM ring spill: when the network is congested, drain full local bursts back to
+  // the ring. Fifo-end and 4KB caps are preserved by latching the capped burst
+  // length at AW fire and using it for the W channel.
   // ---------------------------------------------------------------------------
   val writeCanIssue =
     datapathEnabled &&
@@ -547,7 +540,7 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // TASK -> BEAT SPILL.  The head of the local buffer is driven out lowest-order
+  // Task -> beat spill. The head of the local buffer is driven out lowest-order
   // beat first and only dequeued on its last beat, so a burst always carries a
   // whole number of tasks: a burst capped at the fifo end or a 4KB boundary is
   // capped in TASK slots, and the split continuation resumes on a task boundary.
@@ -618,12 +611,11 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // SOFTWARE PAUSE / RESIZE QUIESCE: REQUEST A PAUSE WHEN THE RING IS TOO SMALL
-  // FOR ANOTHER LOCAL BURST, THEN STOP STARTING NEW WORK AND WAIT FOR IN-FLIGHT
-  // HBM TRAFFIC TO DRAIN BEFORE RAISING rPause.  THIS PRESERVES THE OLD EXTERNAL
-  // CONTRACT: WHILE rPause IS NONZERO THE SERVER IS OBSERVABLY PAUSED, SOFTWARE
-  // MAY UPDATE THE RING REGISTERS, AND WRITING rPause BACK TO ZERO RESUMES THE
-  // STREAMING DATAPATHS WITHOUT A GLOBAL FSM.
+  // Software pause / resize quiesce: request a pause when the ring is too small
+  // for another local burst, then stop starting new work and wait for in-flight
+  // HBM traffic to drain before raising rPause. While rPause is nonzero the server
+  // is observably paused, software may update the ring registers, and writing
+  // rPause back to zero resumes the streaming datapaths.
   // ---------------------------------------------------------------------------
   val resizeNeeded =
     maxLength =/= 0.U &&
@@ -658,8 +650,8 @@ class SchedulerServer(
   }
 
   // ---------------------------------------------------------------------------
-  // AXI-LITE MANAGEMENT REPLIES: KEEP REGISTER ACCESS RESPONSIVE IN PARALLEL
-  // WITH THE STREAMING DATAPATHS ABOVE.
+  // AXI-lite management replies: keep register access responsive in parallel with
+  // the streaming datapaths above.
   // ---------------------------------------------------------------------------
   when(regBlock.rdReq) {
     regBlock.rdOk()

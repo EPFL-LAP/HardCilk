@@ -21,8 +21,7 @@ class SchedulerNetworkDataUnitIO(taskWidth: Int, elastic: Boolean) extends Bundl
   //   Want -- soft. A local producer would like this slot. A preference, and an
   //     upstream hop holding forceForward may ignore it.
   //
-  // Present only on an elastic ring; a rigid ring does not carry them at all, so
-  // its generated hardware is byte-for-byte what it was.
+  // Present only on an elastic ring; a rigid ring does not carry them at all.
   val stopInFull = if (elastic) Some(Input(Bool())) else None
   val stopInWant = if (elastic) Some(Input(Bool())) else None
   val stopOutFull = if (elastic) Some(Output(Bool())) else None
@@ -50,11 +49,11 @@ class SchedulerNetworkDataUnitIO(taskWidth: Int, elastic: Boolean) extends Bundl
 
 /** One hop of the task ring. Two builds, selected by `elastic`.
   *
-  * RIGID (default) is the original unconditional shift register. A hop can only be injected into on
-  * a cycle when nothing happens to be passing through it, so an injector downstream of a saturated
-  * injector never gets a turn: with a spawner flooding, the slot at the next injector is occupied
-  * every cycle. Correct and cheap, and injection contention does not arise on the outside-spawn
-  * ring, so that ring stays rigid.
+  * RIGID (default) is an unconditional shift register. A hop can only be injected into on a cycle
+  * when nothing happens to be passing through it, so an injector downstream of a saturated injector
+  * never gets a turn: with a spawner flooding, the slot at the next injector is occupied every
+  * cycle. Correct and cheap, and injection contention does not arise on the outside-spawn ring, so
+  * that ring stays rigid.
   *
   * ELASTIC lets a hop refuse its upstream neighbour, which is how a hole gets made on demand rather
   * than waited for. A node that wants to inject asserts stopOut, its own content advances, and the
@@ -64,9 +63,8 @@ class SchedulerNetworkDataUnitIO(taskWidth: Int, elastic: Boolean) extends Bundl
   * stopOut never depends on stopIn, so closing the ring creates no combinational loop.
   *
   * Liveness does not come from the ring. A fully occupied ring is a good steady state, not a stuck
-  * one: every PE has a task sitting in front of it the moment it is ready to take one, which is the
-  * property that actually matters. Sustained congestion is relieved by the scheduler server
-  * detecting it and absorbing tasks into HBM.
+  * one: every PE has a task sitting in front of it the moment it is ready to take one. Sustained
+  * congestion is relieved by the scheduler server detecting it and absorbing tasks into HBM.
   */
 class SchedulerNetworkDataUnit(taskWidth: Int, elastic: Boolean = false) extends Module {
   val io = IO(new SchedulerNetworkDataUnitIO(taskWidth, elastic))
@@ -82,7 +80,7 @@ class SchedulerNetworkDataUnit(taskWidth: Int, elastic: Boolean = false) extends
     // valid by the elsewhen below, so the handshake is unchanged.
     io.connSS.qOutTask.ready := ~io.validIn
     // Likewise, a task is available exactly when one is present in the slot. Driving valid from
-    // ready hid the task from any client that had not already committed to taking it, which makes
+    // ready would hide the task from any client that had not already committed to taking it, making
     // "is something arriving?" unobservable. Consumption is still gated on ready by the when below.
     io.connSS.availableTask.bits := io.taskIn
     io.connSS.availableTask.valid := io.validIn
@@ -128,9 +126,9 @@ class SchedulerNetworkDataUnit(taskWidth: Int, elastic: Boolean = false) extends
     // A soft stop -- the downstream node merely wanting the slot -- is overridable, and that is the
     // whole of `force`. Without it a producer downstream of us that asserts its want continuously
     // pins our entry here forever: we never forward, so `base` never reaches 0, so our own
-    // qOutTask.ready is never high and our producer is starved outright (measured 796 tasks to 1
-    // over 800 cycles). A hard stop is never overridable, so forcing can only ever fill a slot that
-    // was genuinely free -- no task can be dropped by it.
+    // qOutTask.ready is never high and our producer is starved outright. A hard stop is never
+    // overridable, so forcing can only ever fill a slot that was genuinely free -- no task can be
+    // dropped by it.
     val downstreamBlocked =
       io.stopInFull.get || (io.stopInWant.get && !io.forceForward.get)
     val forwarded = hasTask && !downstreamBlocked && !consumedLocally

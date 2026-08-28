@@ -3,14 +3,11 @@ package NewArgumentNotifier
 import chisel3._
 import chisel3.util._
 
-// ---------------------------------------------------------------------------
 // Shared bundle definitions for the new argument-notifier subsystem.
 //
 // A continuation lives either in an ArgumentServer's cache (fast path) or in
 // HBM (slow path, after eviction). Internally we carry only its compact,
-// line-aligned HBM address. Cache-location metadata is a separate bundle; it
-// is never hidden in otherwise-unused address bits.
-// ---------------------------------------------------------------------------
+// line-aligned HBM address; cache-location metadata is a separate bundle.
 
 object ArgumentNotifierHelpers {
   /** Lane-select width; at least 1 bit so NParallelNew == 1 still elaborates. */
@@ -28,9 +25,8 @@ class ContinuationMetadata(
   val lane = UInt(laneWidth.W)
 }
 
-/** The value carried with a child task to identify its continuation. The
-  * address is the compact line index produced from an AllocatorServer address;
-  * metadata remains structurally visible throughout the datapath.
+/** The value carried with a child task to identify its continuation: the
+  * compact line index produced from an AllocatorServer address, plus metadata.
   */
 class ContinuationReference(
     val lineAddressWidth: Int,
@@ -124,13 +120,10 @@ class EvictedContinuation(val lineAddressWidth: Int, val continuationSize: Int)
 /** An update that missed the cache (line already evicted); handled in memory
   * by a SlowArgumentHandler.
   *
-  * This stays COMPACT -- payload plus slot offset, exactly as it arrived -- for
-  * the whole journey from the cache to the handler. Nothing in between reads the
-  * data (the slow-path demux keys on `address`), so carrying a 2048-bit line to
-  * express a 32-bit payload only inflates every queue on the path: the coupled
-  * FIFO alone was 58 RAMB36 per lane, of which half was this field's zeroes.
-  * `expanded` does the placement once, at the single point of use inside
-  * SlowArgumentHandler.
+  * Stays compact -- payload plus slot offset -- from the cache to the handler:
+  * nothing in between reads the data, so carrying a full line would only inflate
+  * every queue on the path. `expanded` does the placement once, at the single
+  * point of use inside SlowArgumentHandler.
   */
 class SlowUpdate(
     val lineAddressWidth: Int,
@@ -322,8 +315,7 @@ class ArgumentServer(
     cacheDelayCycles: Int = 0,
     // Extra coupledQ slots reserved for missed updates that have NO co-cycle
     // eviction (an update for a line evicted earlier). Sized so the slow-path
-    // backlog never has to backpressure into the eviction pool. Throughput knob:
-    // too small only throttles (memReader stalls, self-limiting), never wrong.
+    // backlog never has to backpressure into the eviction pool.
     missedUpdateExtra: Int = 64,
     // Zero is an internal convenience default for direct ArgumentServer users:
     // it resolves to a full-continuation payload.  Descriptor/config paths pass
@@ -383,69 +375,50 @@ class ArgumentServer(
   private val idleFlushCycles = 10
   private val idleCountWidth = log2Ceil(idleFlushCycles + 1)
 
-  // ---- Non-backpressuring front porch (reservation) ----------------------------
-  // Root cause of the countDecoupled release-loss: when the eviction path (coupledQ)
-  // filled, resolutionHasRoom dropped, the porch stalled INSIDE its shift register,
-  // and a continuation was delayed past the fixed arrival time of its (memReader-
-  // timed) update -> the update missed a not-yet-inserted line and read UNSAVED HBM
-  // (counter 0) -> completes=false -> writeback instead of spawn -> release lost.
-  // Fix: the porch must NEVER stall internally. Move all backpressure to the porch
-  // ENTRANCE (newContInput.req.ready), where the initiator dispatches the
-  // continuation and its memReader task atomically, keeping them synchronized.
+  // ---- Non-backpressuring front porch (reservation) ----
+  // The porch must never stall internally: a continuation delayed past the fixed
+  // arrival time of its memReader-timed update would miss a not-yet-inserted line
+  // and read unsaved HBM. All backpressure lives at the porch ENTRANCE
+  // (newContInput.req.ready), where the initiator dispatches the continuation and
+  // its memReader task atomically.
   //
-  // We guarantee the resolution FIFO always has room for the spawn or eviction an
-  // insert produces. KEY subtlety: an insert only resolves a valid old line once
-  // the cache is full (before
-  // that it fills an empty slot, producing nothing), so we must keep accepting
-  // through fill-up. So the admission cap is (resident_capacity + resolution_pool):
-  // we only
-  // start throttling once the cache is full and resolutions can actually be produced.
-  // Spawns and evictions use the SAME reserved resolution share. Missed updates for
-  // genuinely-evicted (saved) lines ride the same physical FIFO for gater ordering
-  // but draw from a separate logical share so a miss backlog cannot wedge a
-  // resolution. The resolution share is exactly the front-porch reservation: one
-  // slot for every continuation that can be in the porch. There is deliberately no
-  // additional headroom. With no porch, retain two slots so the queue structure can
-  // sustain II=1 without degenerating into a combinational/single-entry corner.
-  // missedUpdateExtra sizes only the independent pure-miss share below.
+  // The resolution FIFO must always have room for the spawn or eviction an insert
+  // produces. An insert only resolves a valid old line once the cache is full --
+  // before that it fills an empty slot and produces nothing -- so the admission
+  // cap is (residentCapacity + resolution pool): throttling starts only once
+  // resolutions can actually be produced. Spawns and evictions share that
+  // reservation. Missed updates for genuinely-evicted lines ride the same physical
+  // FIFO for gater ordering but draw from a separate logical share, so a miss
+  // backlog cannot wedge a resolution. With no porch, retain two slots so the
+  // queue can sustain II=1.
   private val resolutionPoolDepth = math.max(2, cacheDelayCycles)
   private val missedPoolDepth = math.max(1, missedUpdateExtra) // pure missed-update pool
   // Normal insertion resolves id+1, so one ring slot is always the separation
   // point between the insertion head and the far-end resolution: at most
   // (cacheDepth-1) continuations are resident simultaneously.
   private val residentCapacity = cacheDepth - 1
-  // A resolved cache line remains charged to inFlight for four cycles after its
-  // slot is freed: issue the synchronous read, classify/enqueue its result,
-  // then the two stages of the BRAM-backed coupledQ (memory write -> memory
-  // read, then the output stage handshake). Keep those pipeline stages from
-  // stealing capacity from an otherwise-full cache + porch, or steady-state
-  // admission bubbles and II=1 is lost. This also keeps
+  // A resolved cache line stays charged to inFlight for four cycles after its
+  // slot is freed: issue the synchronous read, classify/enqueue the result, then
+  // the two stages of the BRAM-backed coupledQ. Keeping those stages from stealing
+  // capacity from a full cache + porch is what preserves II=1, and it keeps
   //   resolutionInCq <= admitCap - residentCapacity
-  // exact: the credit count and the reserved coupledQ share are the same
-  // number, so lengthening the drain pipeline by a cycle must widen both.
+  // exact.
   private val resolutionTailCredits = 4
   private val admitCap =
     residentCapacity + resolutionPoolDepth + resolutionTailCredits
-  // Admission alone must bound the undrained resolution backlog, because the porch
-  // runs UNGATED (see cacheInsertReadies) and a resolution cannot be backpressured.
-  // inFlight = porch + cache-resident + resolution-pipeline + resolutions-in-coupledQ.
-  // Idle flushes temporarily punch holes in the cache; flushHoles below keeps
-  // those slots charged until a later insertion's clear step absorbs each hole.
-  // Admission holds inFlight + flushHoles at the entrance, so
+  // Admission alone bounds the undrained resolution backlog, because the porch
+  // runs ungated (see cacheInsertReadies) and a resolution cannot be
+  // backpressured. inFlight = porch + cache-resident + resolution-pipeline +
+  // resolutions-in-coupledQ. Idle flushes punch holes in the cache; flushHoles
+  // below keeps those slots charged until a later insertion's clear step absorbs
+  // each hole. Admission holds inFlight + flushHoles at the entrance, so
   //   resolutionInCq <= admitCap - residentCapacity
-  // and this bound is EXACT (not conservative): the cache is necessarily full
-  // whenever resolutionInCq peaks. A resolution is only produced when the ring wraps
-  // onto a VALID slot, so driving the cache below residentCapacity (only the idle
-  // flush can) makes the following inserts land on invalid slots and produce
-  // NOTHING, refilling the cache before resolutionInCq moves again. The peak is
-  // always: burst to admitCap (porch full, cache full), entrance blocks, then the
-  // porch drains ungated and every entry -- plus the resolutionTailCredits, which
-  // are admissions granted BEYOND porch+cache -- converts into a parked resolution.
-  // Those tail credits are exactly what the old reservation missed: it sized this
-  // share against the porch alone (resolutionPoolDepth), leaving it 3 short, and the
-  // porch gate (resolutionInCq <= resolutionPoolDepth-2) was load-bearing cover for
-  // that shortfall -- it "prevented" the overflow only by FREEZING the porch, which
-  // is the release-loss bug. Removing the gate therefore requires this sizing.
+  // and the bound is exact rather than conservative: the cache is necessarily full
+  // whenever resolutionInCq peaks, since a resolution is only produced when the
+  // ring wraps onto a VALID slot. The peak is a burst to admitCap (porch full,
+  // cache full), the entrance blocking, then the porch draining ungated with every
+  // entry -- plus the resolutionTailCredits, which are admissions granted beyond
+  // porch + cache -- converting into a parked resolution.
   private val resolutionQueueDepth = admitCap - residentCapacity
   private val coupledQueueDepth = resolutionQueueDepth + missedPoolDepth
   private val laneW = ArgumentNotifierHelpers.laneWidth(NParallelNew)
@@ -475,23 +448,17 @@ class ArgumentServer(
   // the resolutionQueueDepth sizing argument.
   val flushHoles =
     Seq.fill(NParallelNew)(RegInit(0.U(log2Ceil(cacheDepth + 1).W)))
-  // The TRUE cache deficit: residentCapacity minus the number of valid slots.
-  //
-  // flushHoles above tries to reconstruct this from events ("a flush made a hole",
-  // "an insert filled one"). Event reconstruction can drift: any cycle whose valid
-  // -bit writes are not mirrored exactly by an inc/dec biases the count forever,
-  // and a count that is too LOW over-admits, which breaks the
+  // The true cache deficit: residentCapacity minus the number of valid slots.
+  // Derived from the same events that write cacheValid rather than reconstructed
+  // from flush/insert events, which can drift; a count that reads too low
+  // over-admits and breaks the
   //   resolutionInCq <= admitCap - residentCapacity
-  // sizing argument and silently drops a resolution (a lost release) when the
-  // coupledQ is exactly full. So derive it from the same events that actually
-  // write cacheValid instead, and gate admission on THIS.
+  // sizing argument, silently dropping a resolution when the coupledQ is exactly
+  // full. Admission gates on this.
   //
-  // Maintained as a deficit (not a resident count) so the admission gate keeps the
-  // exact shape it had with flushHoles -- `inFlight + <register>` -- and no new
-  // arithmetic lands on that path.
-  //
-  // Reset: the cache starts empty, so every one of the residentCapacity usable
-  // slots is missing.
+  // Maintained as a deficit rather than a resident count so the admission gate
+  // keeps the shape `inFlight + <register>` and no new arithmetic lands on that
+  // path. Reset: the cache starts empty, so every usable slot is missing.
   val cacheDeficit =
     Seq.fill(NParallelNew)(RegInit(residentCapacity.U(log2Ceil(cacheDepth + 1).W)))
 
@@ -525,22 +492,16 @@ class ArgumentServer(
     Seq.fill(NParallelNew)(Mem(cacheDepth, UInt(lineAddressWidth.W)))
 
   // The update store is a row of `updateSlotCount` payload-sized elements per
-  // cache slot, written with a per-element mask.  A masked element write is a
-  // BRAM write-enable lane, so an update no longer has to READ the row first:
-  // the old read-modify-write is what forced this memory into LUTRAM (a
-  // synchronous read cannot close a same-cycle RMW loop).  One update payload
-  // corresponds to exactly one element, so distinct children never collide and
+  // cache slot, written with a per-element mask. A masked element write is a BRAM
+  // write-enable lane, so an update never has to read the row first. One update
+  // payload is exactly one element, so distinct children never collide and
   // repeated writes to one element are last-write-wins.
   //
-  // The row is split across several memories because Vivado's RAM inference
-  // gives up past a certain number of mask lanes. Measured on xcu55c/2024.1:
-  // sixteen lanes infers a clean simple-dual-port BRAM, but a 2048-bit row with
-  // sixty-four 32-bit lanes reports "[Synth 8-7186] not inferred as ram due to
-  // incorrect usage" and drops the WHOLE array into flip-flops -- 76,759 LUTs
-  // and 258,138 registers for one 128x2048 store, against 28 RAMB36 for the
-  // shape that infers. Splitting keeps every store at or below the lane count
-  // that is known to work; an update still writes exactly one element of
-  // exactly one store, so the semantics are unchanged.
+  // The row is split across several memories because Vivado's RAM inference gives
+  // up past a certain number of mask lanes, dropping the whole array into
+  // flip-flops instead of BRAM. Splitting keeps every store at or below a lane
+  // count that infers; an update still writes exactly one element of exactly one
+  // store, so the semantics are unchanged.
   private val maxSlotsPerStore = 16
   private val slotsPerStore = math.min(updateSlotCount, maxSlotsPerStore)
   private val updateStoreCount = updateSlotCount / slotsPerStore
@@ -559,26 +520,22 @@ class ArgumentServer(
     )
   )
 
-  // The update store has exactly ONE write port. An insert and an update are
-  // independently sourced (porch vs perLaneFIFO) and routinely land in the same
-  // cycle on DIFFERENT slots, so both cannot own that port. The insert's write
-  // was only ever a clear of the recycled slot's stale payloads, so it is
-  // replaced by this per-slot bit: false means "the update row for this slot is
-  // stale, read it as zero". Insert clears it; the first update to the slot sets
-  // it and, in the same access, writes every element (its own payload plus zeros
-  // elsewhere), which IS the deferred clear. Both read sites substitute zero
-  // while it is false, so no stale payload can survive into the resolution
-  // merge. The update is now the memory's only writer, and the bit lives in
-  // registers, which have no write-port limit.
+  // The update store has exactly ONE write port, and an insert and an update are
+  // independently sourced (porch vs perLaneFIFO), routinely landing in the same
+  // cycle on different slots. This per-slot bit stands in for the insert's write:
+  // false means "the update row for this slot is stale, read it as zero". Insert
+  // clears it; the first update to the slot sets it and, in the same access,
+  // writes every element (its own payload plus zeros elsewhere), which is the
+  // deferred clear. Both read sites substitute zero while it is false, so no stale
+  // payload survives into the resolution merge.
   val deltaValid = Seq.fill(NParallelNew)(
     RegInit(VecInit(Seq.fill(cacheDepth)(false.B)))
   )
-  // Same reasoning: the remaining-argument countdown is seeded by the insert and
-  // decremented by the update. As a Mem those are two writers; as a register file
-  // they are independent writes to different indices. It is only cacheDepth x
-  // counterWidth bits, the same shape as the cacheValid/cacheDone vectors above.
-  // With the RMW gone this register file is also the ONLY join-counter record:
-  // the update store holds payload slices only, never an accumulated delta.
+  // Same reasoning for the remaining-argument countdown, seeded by the insert and
+  // decremented by the update: as a Mem those are two writers, as a register file
+  // they are independent writes to different indices. It is only
+  // cacheDepth x counterWidth bits. This register file is also the only
+  // join-counter record; the update store holds payload slices only.
   val remainingCounterRegs = Seq.fill(NParallelNew)(
     RegInit(VecInit(Seq.fill(cacheDepth)(0.U(counterWidth.W))))
   )
@@ -623,11 +580,9 @@ class ArgumentServer(
     if (cacheDelayCycles == 0) {
       // Admission gate: keep accepting while total in-flight work is below cache
       // size + the resolution reservation. This is the only porch backpressure.
-      // The gate must qualify the INSERT as well as the handshake -- gating only
-      // req.ready would let cacheInsertFires (= valid && cacheInsertReadies, and
-      // cacheInsertReadies is unconditionally true) insert an uncharged
-      // continuation while admission is refusing it. See the porch branch below
-      // for the same hazard and why it breaks the resolution reservation.
+      // It must qualify the INSERT as well as the handshake -- gating req.ready
+      // alone would let cacheInsertFires insert an uncharged continuation while
+      // admission is refusing it.
       val admitOk = (inFlight(i) +& cacheDeficit(i)) < admitCap.U
       cacheInsertValids(i) := io.newContInput(i).req.valid && admitOk
       cacheInsertBits(i).id := cacheBaseStoresHead(i)
@@ -637,12 +592,7 @@ class ArgumentServer(
       io.newContInput(i).req.ready := cacheInsertReadies(i) && admitOk
     } else {
       // The porch is a fixed-latency delay line, so it is spelled as one:
-      // Util.DelayLine picks a shift register or a URAM circular buffer from the
-      // depth. At the 72- and 75-cycle depths this design uses, 12 lanes of 1058
-      // bits is ~38k SLICEM LUTs of SRL -- 74% of every LUT-as-shift-register
-      // cell in the kernel -- competing for CLBM sites that came back 99.94%
-      // occupied in SLR1 on the build that missed timing. The same storage is
-      // 180 URAMs, in a resource the design does not otherwise touch.
+      // Util.DelayLine picks its implementation from the depth.
       val porch = Module(
         new Util.DelayLine(delayedNewType, cacheDelayCycles, porchUramThreshold)
       )
@@ -653,42 +603,33 @@ class ArgumentServer(
       porchIn.taskBaseData := io.newContInput(i).req.bits.taskBaseData
       porch.io.in := porchIn
 
-      // MUST be req.fire, not req.valid. req.ready adds the admission gate on
-      // top of porchCanAdvance, so shifting in on `valid` alone lets a
-      // continuation enter the porch while admission is REFUSING it: inFlight
-      // and cacheBaseStoresHead (both advanced on `fire`) never see it. The
-      // gate then throttles only the handshake, never the porch, so up to
-      // cacheDelayCycles uncharged continuations march into the cache and
-      // become resolutions -- breaking
+      // MUST be req.fire, not req.valid. req.ready adds the admission gate on top
+      // of porchCanAdvance, so shifting in on `valid` alone lets a continuation
+      // enter the porch while admission is refusing it: inFlight and
+      // cacheBaseStoresHead (both advanced on `fire`) never see it, and up to
+      // cacheDelayCycles uncharged continuations become resolutions, breaking
       //   resolutionInCq <= admitCap - residentCapacity
-      // and overflowing the coupledQ, which silently drops a resolution (a lost
-      // release). It also re-used the same assignedId, since the source retries
-      // the request it never saw accepted.
+      // and overflowing the coupledQ. It would also re-use assignedId, since the
+      // source retries a request it never saw accepted.
       //
-      // Only the VALID is qualified. The payload rides in unconditionally, which
-      // it could not do when the porch held its own storage under an enable, and
-      // which is what lets the payload path carry neither an enable nor a reset
-      // and so become an SRL or a URAM. It is safe because the tail payload is
-      // read only through cacheInsertBits, and every consumer of that qualifies
-      // on cacheInsertFires -- which, since cacheInsertReadies is unconditionally
-      // true below, is exactly this valid chain.
+      // Only the VALID is qualified; the payload rides in unconditionally, which
+      // is what lets the payload path carry neither an enable nor a reset and so
+      // become an SRL or a URAM. The tail payload is read only through
+      // cacheInsertBits, and every consumer of that qualifies on cacheInsertFires.
       porch.io.inValid := io.newContInput(i).req.fire
 
-      // A bubble advances just like a valid entry.  Only a blocked valid tail
-      // freezes the clock-enabled shift register and backpressures its source.
-      // Admission gate (see admitCap): the ENTRANCE is the only backpressure, so a
-      // continuation never sits in the porch longer than cacheDelayCycles and stays
-      // time-aligned with its memReader update. porchCanAdvance must stay ~always
-      // true (cacheInsertReadies no longer depends on coupledQ occupancy).
+      // A bubble advances just like a valid entry; only a blocked valid tail
+      // freezes the shift register and backpressures its source. The entrance is
+      // the only backpressure, so a continuation never sits in the porch longer
+      // than cacheDelayCycles and stays time-aligned with its memReader update.
       val porchCanAdvance = !porch.io.outValid || cacheInsertReadies(i)
       io.newContInput(i).req.ready := porchCanAdvance &&
         ((inFlight(i) +& cacheDeficit(i)) < admitCap.U)
 
-      // "~always true" is now load-bearing rather than merely intended: a
-      // DelayLine has no enable and cannot be held. The condition is structural
-      // today (cacheInsertReadies is tied high), so this is here to fail loudly
-      // in simulation if that ever stops being the case, rather than silently
-      // dropping a porch entry.
+      // A DelayLine has no enable and cannot be held, so porchCanAdvance must stay
+      // true. The condition is structural today (cacheInsertReadies is tied high);
+      // this fails loudly in simulation rather than silently dropping a porch
+      // entry if that ever changes.
       assert(
         porchCanAdvance,
         "ArgumentServer front porch was asked to stall, but a DelayLine " +
@@ -742,36 +683,29 @@ class ArgumentServer(
         cacheInsertBits(i).id,
         cacheInsertBits(i).address
       )
-      // Retire the recycled slot's update row instead of zeroing updateStores,
-      // and seed the countdown. Both are registers, so neither contends with an
-      // update landing on another slot this cycle. cacheValid for this slot is
-      // set in the same cycle (see the done-count block), so the slot becomes
-      // matchable exactly when its row is declared stale -- an update can
-      // never observe the previous tenant's payloads.
+      // Retire the recycled slot's update row instead of zeroing updateStores, and
+      // seed the countdown. Both are registers, so neither contends with an update
+      // landing on another slot this cycle. cacheValid for this slot is set in the
+      // same cycle, so the slot becomes matchable exactly when its row is declared
+      // stale; an update can never observe the previous tenant's payloads.
       deltaValid(i)(cacheInsertBits(i).id) := false.B
       remainingCounterRegs(i)(cacheInsertBits(i).id) := insertedLine.counter
     }
   }
 
   // One physical queue per cache lane couples resolutions and missed updates.
-  // A one-cycle update staging queue is load-bearing: a resolution collision
-  // is detected in the issue cycle, while SyncReadMem produces its eviction in
-  // the following cycle. Staging aligns the two so the resolution and update can
-  // occupy one atomic coupled entry.
+  // A one-cycle update staging queue is load-bearing: a resolution collision is
+  // detected in the issue cycle, while SyncReadMem produces its eviction in the
+  // following cycle. Staging aligns the two so both can occupy one atomic entry.
   //
   // This is the one deep, continuation-wide FIFO in the lane, so it is a normal
-  // wide queue backed by SyncReadMem (BRAM) rather than a width-banked LUTRAM
-  // queue. The banking existed to keep a LUTRAM address/enable cone off a
-  // thousand payload bits; a block RAM already has exactly one such cone, so
-  // splitting it into 64-bit banks would only multiply the number of BRAMs.
+  // wide queue backed by SyncReadMem (BRAM).
   //
   // BramQueue rather than Queue(useSyncReadMem = true): the stock Chisel queue
-  // reads the slot it writes in the same cycle and so needs cross-port
-  // write-first read-under-write, which a Xilinx BRAM does not provide (see
-  // BramQueue's header for the measured Vivado inference). It costs one extra
-  // cycle of latency on an empty -> nonempty transition -- covered by the
-  // resolutionTailCredits above -- and is otherwise depth-, throughput- and
-  // Decoupled-identical to the BankedQueue it replaces.
+  // reads the slot it writes in the same cycle and so needs cross-port write-first
+  // read-under-write, which a Xilinx BRAM does not provide. It costs one extra
+  // cycle of latency on an empty -> nonempty transition, covered by
+  // resolutionTailCredits.
   val coupledQs = Seq.fill(NParallelNew)(
     Module(new BramQueue(coupledType, coupledQueueDepth))
   )
@@ -803,9 +737,8 @@ class ArgumentServer(
     val missedRoom = missedInCq(i) < missedPoolDepth.U
     coupledQs(i).io.enq.valid := hasResolution || (isPureUpdate && missedRoom)
     // A resolution is a one-cycle pulse off the RegNext pipeline, so a full queue
-    // would SILENTLY DROP it -- and with it a release. Nothing backpressures it;
-    // admitCap + resolutionQueueDepth are what must cover the porch-empty worst
-    // case. Fire loudly in simulation if that sizing ever stops holding.
+    // would silently drop it, and with it a release. admitCap +
+    // resolutionQueueDepth are what cover the porch-empty worst case.
     assert(
       !(hasResolution && !coupledQs(i).io.enq.ready),
       "ArgumentServer: resolution met a full coupledQ; a release would be lost"
@@ -821,31 +754,26 @@ class ArgumentServer(
 
   // Read from back and fire/forward
   //
-  // Resolution is tied to a COMMITTED cache insert: when a matured porch entry
-  // is written at `id`, the line at `id + 1` (the far end of the cache ring)
-  // is inspected one cycle later and either spawned (counter reached zero) or
-  // evicted to the slow path. The result lands in a small skid queue so a
-  // busy consumer can never drop (or double-count) a resolution; instead,
-  // inserts stall via req.ready while a queue could overflow.
+  // Resolution is tied to a committed cache insert: when a matured porch entry is
+  // written at `id`, the line at `id + 1` (the far end of the cache ring) is
+  // inspected one cycle later and either spawned (counter reached zero) or evicted
+  // to the slow path. The result lands in a small skid queue so a busy consumer
+  // can never drop or double-count a resolution.
   for (i <- 0 until NParallelNew) {
     val spawnQ = Module(new BankedQueue(new SpawnedTask(continuationSize), 4))
-    // Reserve room for the one-cycle resolution pipeline as well as entries already
-    // in coupledQ. At count <= depth-2, this cycle and the already-issued prior cycle
-    // can both resolve without overflow. Pure missed updates use their own share and
-    // therefore cannot block this gate.
+    // Reserve room for the one-cycle resolution pipeline as well as entries
+    // already in coupledQ. At count <= depth-2, this cycle and the already-issued
+    // prior cycle can both resolve without overflow. Pure missed updates use their
+    // own share and cannot block this gate.
     val resolutionHasRoom =
       resolutionInCq(i) <= (resolutionPoolDepth - 2).U
-    // The porch NEVER stalls. Room for an insert's resolution is guaranteed by
-    // sizing (admitCap + resolutionQueueDepth), not by gating the porch here.
-    // Gating it on resolutionInCq is what still lost releases on hardware: when a
-    // bursty entrance let the porch drain to a lone straggler at the tail while
-    // real-HBM backpressure stacked resolutions, this gate went false and froze
-    // that straggler. A frozen porch entry is inserted later than dispatch +
-    // cacheDelayCycles, so its memReader-timed update arrives while the line is
-    // still in the porch -- a line with NO HBM backing -- misses, takes the slow
-    // path, reads unsaved (zeroed) HBM, and completes=false drops the release.
-    // Only the idle flush still needs the gate: it resolves WITHOUT an insert and
-    // so is not bounded by admission.
+    // The porch never stalls. Room for an insert's resolution is guaranteed by
+    // sizing (admitCap + resolutionQueueDepth), not by gating the porch here:
+    // gating on resolutionInCq can freeze a lone straggler at the porch tail, and
+    // a frozen porch entry is inserted later than dispatch + cacheDelayCycles, so
+    // its memReader-timed update arrives while the line is still in the porch,
+    // misses, takes the slow path and reads unsaved HBM. Only the idle flush needs
+    // the gate: it resolves without an insert and so is not bounded by admission.
     cacheInsertReadies(i) := true.B
 
     val normalResolution = cacheInsertFires(i)
@@ -892,25 +820,21 @@ class ArgumentServer(
     // If it is new AND valid, we read the continuation
     val completedBase =
       cacheBaseStores(i).read(readAddr).asTypeOf(lineType)
-    // Both payload memories are synchronous, so they are read with the SAME
-    // address in the SAME cycle and their outputs are already aligned one cycle
-    // later. A slot whose row is stale (inserted, never updated) contributes
-    // nothing to the merge below; deltaValid is a register, so it is sampled
-    // through a RegNext to line it up with the two memory outputs.
-    // Every store is read with the same address in the same cycle; their
-    // outputs concatenate back into the flat row in store order.
+    // Both payload memories are synchronous, so they are read with the same
+    // address in the same cycle and their outputs are aligned one cycle later. A
+    // slot whose row is stale contributes nothing to the merge below; deltaValid is
+    // a register, so it is sampled through a RegNext to line it up. Every store's
+    // output concatenates back into the flat row in store order.
     val completedUpdateRow = VecInit(
       updateStores(i).flatMap(store => store.read(readAddr))
     )
     val completedRowValid = RegNext(deltaValid(i)(readAddr), false.B)
     val completedOthers =
       Mux(completedRowValid, completedUpdateRow.asUInt, 0.U).asTypeOf(lineType)
-    // The join counter no longer lives in the update memory at all: it is the
-    // register file's countdown, sampled alongside the two synchronous reads.
-    // Reading the register at `readAddr` in the issue cycle is exactly the value
-    // the removed base-minus-delta subtraction used to reconstruct -- an update
-    // to this same slot in this same cycle is excluded by the resolution-
-    // collision guard in `matches` below, so nothing can slip past the sample.
+    // The join counter is the register file's countdown, sampled alongside the two
+    // synchronous reads. An update to this same slot in this same cycle is excluded
+    // by the resolution-collision guard in `matches` below, so nothing can slip
+    // past the sample.
     val completedRemaining = RegNext(remainingCounterRegs(i)(readAddr))
 
     // Need to OR all the arguments; the counter comes from the countdown.
@@ -929,10 +853,10 @@ class ArgumentServer(
     evictionBits(i).metadata.lane := i.U
 
     // ---- reservation counter maintenance ----
-    // Atomically split the head. A spawn+update entry waits until BOTH consumers can
-    // accept, so neither half can duplicate or outrun the other. Head-of-line spawn
-    // backpressure may delay later evictions, but it cannot stall the porch until the
-    // entire reserved resolution share fills.
+    // Atomically split the head. A spawn+update entry waits until both consumers
+    // can accept, so neither half can duplicate or outrun the other. Head-of-line
+    // spawn backpressure may delay later evictions, but cannot stall the porch
+    // until the entire reserved resolution share fills.
     val coupledHead = coupledQs(i).io.deq
     val headNeedsSpawn = coupledHead.bits.spawnValid
     val headNeedsSlow = coupledHead.bits.evictionValid || coupledHead.bits.updateValid
@@ -1007,15 +931,12 @@ class ArgumentServer(
     Module(new BankedQueue(chiselTypeOf(io.contUpdateInput(0).bits), 3))
   )
 
-  // Each destination lane alternates between its local update input and the
-  // other inputs under contention.  The other half is round-robin across all
-  // non-local inputs.  Preferences are work-conserving: if the preferred class
-  // is idle, the other class uses the cycle, and a sole requester never waits.
-  //
-  // This changes only the narrow selector/control path.  The existing sliced
-  // continuation-data mux below remains the 5x4 routing fabric, so fairness
-  // costs one phase bit plus a tiny RR pointer per destination lane without
-  // adding another continuation-width routing stage.
+  // Each destination lane alternates between its local update input and the other
+  // inputs under contention; the other half is round-robin across all non-local
+  // inputs. Preferences are work-conserving: if the preferred class is idle the
+  // other class uses the cycle, and a sole requester never waits. Only the narrow
+  // selector/control path is involved -- the sliced continuation-data mux below
+  // remains the routing fabric.
   for (j <- 0 until NParallelNew) {
     val selWidth = math.max(1, log2Ceil(NParallelUpdate))
     val selectedInput = WireDefault(0.U(selWidth.W))
@@ -1119,13 +1040,13 @@ class ArgumentServer(
     }
   }
 
-  // Updates stay COMPACT all the way through routing, buffering and the cache
-  // lookup: the cache write is a masked element write, so the payload only ever
-  // has to reach one `effectiveUpdatePayloadWidth`-wide element. A one-entry
-  // pipelined queue per cache lane registers the arbitration result, keeping it
-  // off the cache lookup and BRAM-write timing path. Expansion to a full
-  // continuation width happens exactly once, on the miss path below, where the
-  // slow-path entry genuinely needs a line-shaped write mask.
+  // Updates stay compact through routing, buffering and the cache lookup: the
+  // cache write is a masked element write, so the payload only has to reach one
+  // `effectiveUpdatePayloadWidth`-wide element. A one-entry pipelined queue per
+  // cache lane registers the arbitration result, keeping it off the cache lookup
+  // and BRAM-write timing path. Expansion to a full continuation width happens
+  // once, on the miss path below, where the slow-path entry needs a line-shaped
+  // write mask.
   val stagedUpdatePipes = Seq.fill(NParallelNew)(
     Module(
       new BankedQueue(
@@ -1142,12 +1063,11 @@ class ArgumentServer(
   val matches = Wire(Vec(NParallelNew, Bool()))
   val valids = Wire(Vec(NParallelNew, Bool()))
 
-  // We then need to check whether the address still matches its cache slot and
-  // whether that slot is being inserted/resolved in this exact cycle.
-  //
-  // This closes the lost-update races without permanently excluding the most
-  // recently inserted line. That line must remain updateable when producers
-  // go idle, otherwise it could never become eligible for the fallback flush.
+  // Check whether the address still matches its cache slot and whether that slot
+  // is being inserted/resolved in this exact cycle. This closes the lost-update
+  // races without permanently excluding the most recently inserted line, which
+  // must remain updateable when producers go idle so it can become eligible for
+  // the fallback flush.
   for (i <- 0 until NParallelNew) {
     val update = stagedUpdatePipes(i).io.deq
     val targetId = update.bits.metadata.id
@@ -1271,9 +1191,8 @@ class ArgumentServer(
       (cacheDeficit(i) +& clearsSlot.asUInt) - fillsHole.asUInt
 
     // Diagnostic only (simulation): report the first cycle on which the
-    // event-reconstructed flushHoles disagrees with the true deficit, which is
-    // the accounting miss that let admission over-subscribe. Non-fatal and
-    // one-shot so a run still completes and stays readable.
+    // event-reconstructed flushHoles disagrees with the true deficit. Non-fatal
+    // and one-shot so a run still completes and stays readable.
     val deficitDivergenceSeen = RegInit(false.B)
     when(flushHoles(i) =/= cacheDeficit(i) && !deficitDivergenceSeen) {
       deficitDivergenceSeen := true.B

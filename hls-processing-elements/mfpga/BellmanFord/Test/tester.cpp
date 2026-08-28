@@ -289,6 +289,40 @@ static void lockServer(hls::stream<lock_req> *toLock,
         }
       }
     }
+    else if (op == LOCK_OP_SET_IF_GREATER_AND_RETURN_CURRENT)
+    {
+      // The relaxed[] round stamp: the kernel claims a vertex for the next
+      // frontier with SET_IF_GREATER(relaxed[v], round + 1) and enqueues it only
+      // when the store actually happened. Without this branch every claim falls
+      // through to the plain-read default with write_occurred = false, so the
+      // next frontier is always empty -- one helper runs, the launcher sees a
+      // zero frontier and declares the run done.
+      if (mode == ATOMIC_MODE_WORD)
+      {
+        uint32_t *p = reinterpret_cast<uint32_t *>(mem + addr);
+        uint32_t old_bits = *p;
+        uint32_t new_bits = (uint32_t)value;
+        previous = old_bits;
+        bool should_write = float_compare
+                                ? (bitsToFloat(new_bits) > bitsToFloat(old_bits))
+                                : (new_bits > old_bits);
+        if (should_write)
+        {
+          *p = new_bits;
+          write_occurred = true;
+        }
+      }
+      else
+      {
+        uint64_t *p = reinterpret_cast<uint64_t *>(mem + addr);
+        previous = *p;
+        if (value > previous)
+        {
+          *p = value;
+          write_occurred = true;
+        }
+      }
+    }
     else if (op == LOCK_OP_SET_AND_RETURN_CURRENT)
     {
       if (mode == ATOMIC_MODE_BYTE)

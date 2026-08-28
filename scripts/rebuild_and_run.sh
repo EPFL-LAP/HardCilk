@@ -27,6 +27,9 @@
 #     bash scripts/rebuild_and_run.sh countDecoupled legacyNoCache
 #   JSON=architecture-generator/taskDescriptors/experiments/countDecoupled-small.json \
 #     bash scripts/rebuild_and_run.sh countDecoupled small
+#   JSON=architecture-generator/taskDescriptors/mfpga/fullTriangleCountDecoupled32Adder.json \
+#     REDUCE_AXI_PORTS=32 RAMA_MODE=striped \
+#     bash scripts/rebuild_and_run.sh fullTriangleCountDecoupled 8Way
 #
 # QuestaSim co-simulation instead of Vitis hw_emu:
 #   QUESTA=1 bash scripts/rebuild_and_run.sh countDecoupled
@@ -177,6 +180,11 @@ if [[ ! -v HLS_KERNELS["$BENCHMARK"] ]]; then
   echo "Unknown benchmark '$BENCHMARK'. Valid: ${!HLS_KERNELS[*]}" >&2
   exit 1
 fi
+REDUCE_AXI_PORTS=${REDUCE_AXI_PORTS:-${REDUCE_AXI[$BENCHMARK]}}
+if [[ ! "$REDUCE_AXI_PORTS" =~ ^[1-9][0-9]*$ || "$REDUCE_AXI_PORTS" -gt 32 ]]; then
+  echo "REDUCE_AXI_PORTS must be an integer in [1,32], got '$REDUCE_AXI_PORTS'" >&2
+  exit 1
+fi
 if [[ -n "$WORKSPACE_LABEL" && ! "$WORKSPACE_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "workspaceLabel must contain only letters, digits, '.', '_', or '-' and start with a letter or digit; got '$WORKSPACE_LABEL'" >&2
   exit 1
@@ -237,6 +245,7 @@ echo "HLS_CFLAGS=${HLS_CFLAGS:-<none>}"
 echo "ARCHITECTURE=$ARCHITECTURE"
 echo "ARGUMENT_SERVER=$ARGUMENT_SERVER"
 echo "RAMA_MODE=${RAMA_MODE:-descriptor-only}"
+echo "REDUCE_AXI_PORTS=$REDUCE_AXI_PORTS"
 echo "JSON=$DESCRIPTOR"
 
 if (( START_STEP <= 1 )); then
@@ -332,7 +341,7 @@ if (( START_STEP <= 2 )); then
     no-striping) RAMA_FLAG="--rama-no-striping" ;;
     *) echo "RAMA_MODE must be 'striped', 'no-striping', or empty" >&2; exit 2 ;;
   esac
-  sbt "runMain HardCilk.HardCilkEmitter \"${DESCRIPTOR}\" --benchmark-name ${BENCHMARK} -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI[$BENCHMARK]} -p --architecture ${ARCHITECTURE} --argument-server ${ARGUMENT_SERVER} ${GLOBAL_START_FLAG} ${QUESTA_FLAG} ${RAMA_FLAG}"
+  sbt "runMain HardCilk.HardCilkEmitter \"${DESCRIPTOR}\" --benchmark-name ${BENCHMARK} -o ../HardCilk-output/ -g -c -r ${REDUCE_AXI_PORTS} -p --architecture ${ARCHITECTURE} --argument-server ${ARGUMENT_SERVER} ${GLOBAL_START_FLAG} ${QUESTA_FLAG} ${RAMA_FLAG}"
 fi
 
 if (( START_STEP <= 3 )); then

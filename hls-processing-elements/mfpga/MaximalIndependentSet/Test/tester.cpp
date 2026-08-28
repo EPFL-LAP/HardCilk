@@ -138,7 +138,7 @@ struct Hbm
 };
 
 static void writeLockResp(hls::stream<lock_resp> *fromLock, uint64_t tag,
-                          uint64_t previous, bool success)
+                          uint64_t previous, bool success, uint8_t meta = 0)
 {
   lock_resp resp;
   resp = 0;
@@ -146,6 +146,10 @@ static void writeLockResp(hls::stream<lock_resp> *fromLock, uint64_t tag,
   resp(1, 1) = success ? 1 : 0;
   resp(71, 8) = tag;
   resp(135, 72) = previous;
+  // The real LockServer packs Cat(req3.meta, ...) and the AMU passes the whole
+  // request through (io.resp.bits := table(respSlot).req), so sender metadata
+  // is echoed back. Model that here -- callers correlate responses with it.
+  resp(143, 136) = meta;
   fromLock->write(resp);
 }
 
@@ -162,6 +166,7 @@ static void lockServer(hls::stream<lock_req> *toLock,
     uint64_t addr = (uint64_t)req(63, 0);
     uint64_t value = (uint64_t)req(127, 64);
     uint8_t mode = (uint8_t)req(134, 133);
+    uint8_t meta = (uint8_t)req(143, 136);
     uint64_t previous = 0;
 
     if (op == LOCK_OP_SET_AND_RETURN_CURRENT)
@@ -195,7 +200,7 @@ static void lockServer(hls::stream<lock_req> *toLock,
       }
     }
 
-    writeLockResp(fromLock, addr, previous, true);
+    writeLockResp(fromLock, addr, previous, true, meta);
   }
 }
 
