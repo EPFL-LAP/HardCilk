@@ -3,14 +3,10 @@ package NewArgumentNotifier
 import chisel3._
 import chisel3.util._
 
-// Shared bundle definitions for the new argument-notifier subsystem.
-//
-// A continuation lives either in an ArgumentServer's cache (fast path) or in
-// HBM (slow path, after eviction). Internally we carry only its compact,
-// line-aligned HBM address; cache-location metadata is a separate bundle.
-
 object ArgumentNotifierHelpers {
-  /** Lane-select width; at least 1 bit so NParallelNew == 1 still elaborates. */
+
+  /** Lane-select width; at least 1 bit so NParallelNew == 1 still elaborates.
+    */
   def laneWidth(nParallelNew: Int): Int = math.max(1, log2Ceil(nParallelNew))
 }
 
@@ -25,9 +21,6 @@ class ContinuationMetadata(
   val lane = UInt(laneWidth.W)
 }
 
-/** The value carried with a child task to identify its continuation: the
-  * compact line index produced from an AllocatorServer address, plus metadata.
-  */
 class ContinuationReference(
     val lineAddressWidth: Int,
     val serverTagWidth: Int,
@@ -46,10 +39,6 @@ class NewContinuationReq(val lineAddressWidth: Int, val continuationSize: Int)
   val taskBaseData = UInt(continuationSize.W)
 }
 
-/** A continuation while it traverses the fixed-delay cache front porch.  Its
-  * cache ID is reserved when the request is accepted, before the entry reaches
-  * the searchable cache proper.
-  */
 class DelayedNewContinuation(
     val lineAddressWidth: Int,
     val continuationSize: Int,
@@ -60,10 +49,6 @@ class DelayedNewContinuation(
   val taskBaseData = UInt(continuationSize.W)
 }
 
-/** One "new continuation" lane of an ArgumentServer. The metadata outputs are
-  * valid in the cycle `req` fires; the write-buffer bridge samples them right
-  * then so the released child tasks can be tagged.
-  */
 class NewContinuationPort(
     val lineAddressWidth: Int,
     val continuationSize: Int,
@@ -79,13 +64,6 @@ class NewContinuationPort(
   val assignedLane = Output(UInt(laneWidth.W))
 }
 
-/** A compact continuation update: one child finished, writes its payload into
-  * one aligned payload-sized slot of the continuation, and implicitly
-  * decrements the join counter by one.  Full-line payloads omit `offset`.
-  * Assumes exactly ONE update write per child, and one child per slot: the slot
-  * is WRITTEN, not OR-accumulated, so two children sharing a slot are
-  * last-write-wins.
-  */
 class ContinuationUpdate(
     val lineAddressWidth: Int,
     val serverTagWidth: Int,
@@ -101,38 +79,22 @@ class ContinuationUpdate(
   val offset = if (offsetWidth > 0) Some(UInt(offsetWidth.W)) else None
 }
 
-/** A completed continuation, spawned as a task (the merged line IS the task
-  * payload).
-  */
 class SpawnedTask(val continuationSize: Int) extends Bundle {
   val taskData = UInt(continuationSize.W)
 }
 
-/** A still-counting line pushed out of the cache; must be persisted to HBM by
-  * a CacheEvictionSaver before any slow update for it is processed.
-  */
 class EvictedContinuation(val lineAddressWidth: Int, val continuationSize: Int)
     extends Bundle {
   val address = UInt(lineAddressWidth.W)
   val taskData = UInt(continuationSize.W)
 }
 
-/** An update that missed the cache (line already evicted); handled in memory
-  * by a SlowArgumentHandler.
-  *
-  * Stays compact -- payload plus slot offset -- from the cache to the handler:
-  * nothing in between reads the data, so carrying a full line would only inflate
-  * every queue on the path. `expanded` does the placement once, at the single
-  * point of use inside SlowArgumentHandler.
-  */
 class SlowUpdate(
     val lineAddressWidth: Int,
     val continuationSize: Int,
     val payloadWidth: Int = 0,
     val offsetWidth: Int = 0
 ) extends Bundle {
-  // A full-line payload has one slot and therefore no offset, which is also the
-  // shape this bundle had before it was made compact.
   val effectivePayloadWidth =
     if (payloadWidth == 0) continuationSize else payloadWidth
   require(effectivePayloadWidth <= continuationSize)
@@ -142,9 +104,6 @@ class SlowUpdate(
   val payload = UInt(effectivePayloadWidth.W)
   val offset = if (offsetWidth > 0) Some(UInt(offsetWidth.W)) else None
 
-  /** The payload shifted into its aligned slot of a full continuation line,
-    * zero everywhere else -- what used to be stored in `dataWrite`.
-    */
   def expanded: UInt = {
     if (effectivePayloadWidth == continuationSize) {
       payload
@@ -155,7 +114,7 @@ class SlowUpdate(
   }
 }
 
-/** An eviction plus the cache slot that produced it.  The compact metadata is
+/** An eviction plus the cache slot that produced it. The compact metadata is
   * carried through the eviction ring so the originating EvictionGater can be
   * notified when the HBM write completes.
   */
@@ -182,15 +141,16 @@ class TaggedSlowUpdate(
     val offsetWidth: Int = 0
 ) extends Bundle {
   val update =
-    new SlowUpdate(lineAddressWidth, continuationSize, payloadWidth, offsetWidth)
+    new SlowUpdate(
+      lineAddressWidth,
+      continuationSize,
+      payloadWidth,
+      offsetWidth
+    )
   val metadata =
     new ContinuationMetadata(serverTagWidth, serverIDWidth, laneWidth)
 }
 
-/** One entry of the coupled resolution/slow-path FIFO. A cache resolution is
-  * either a spawn or an eviction (never both) and may share the entry with a
-  * missed update. A pure missed update has neither resolution-valid bit set.
-  */
 class CoupledSlowPathEntry(
     val lineAddressWidth: Int,
     val continuationSize: Int,
@@ -202,9 +162,7 @@ class CoupledSlowPathEntry(
 ) extends Bundle {
   val spawnValid = Bool()
   val evictionValid = Bool()
-  // The evicted line is real data on its way to HBM (or the spawned task's
-  // payload -- the two cases share this field), so it stays continuation-wide.
-  // The update beside it does not: see SlowUpdate.
+
   val eviction = new TaggedEvictedContinuation(
     lineAddressWidth,
     continuationSize,
@@ -224,13 +182,9 @@ class CoupledSlowPathEntry(
   )
 }
 
-/** Layout of a continuation line, both in the cache and in HBM. */
 class ContinuationLine(val counterWidth: Int, val continuationSize: Int)
     extends Bundle {
-  // Chisel packs the first Bundle field into the most-significant bits. The
-  // continuation ABI is a packed C struct whose counter begins at byte zero,
-  // so declare the payload first and the counter last to place counter at
-  // [counterWidth-1:0].
+
   val remainder = UInt((continuationSize - counterWidth).W)
   val counter = UInt(counterWidth.W)
 }
@@ -281,7 +235,7 @@ class ArgumentServerIO(
   // Address of each continuation as it resolves, for the recycler. A resolved
   // line's data has already been merged into the spawned task, so its storage is
   // dead from this moment and the address can go back on the free list. Valid,
-  // never Decoupled: the recycler observes the spawn, it must never gate it.
+  // never Decoupled: the recycler should never reject an address.
   val resolvedAddressOut =
     if (enableRecycling)
       Some(Vec(NParallelNew, Valid(UInt(lineAddressWidth.W))))
@@ -327,7 +281,7 @@ class ArgumentServer(
     enableRecycling: Boolean = false,
     // Depth at which the front porch switches from a shift register to URAM.
     // Effectively off by default -- see Util.DelayLine.defaultUramThreshold for
-    // the measurement that disabled it. Exposed so the URAM path stays testable.
+    // the measurement that disabled it.
     porchUramThreshold: Int = Util.DelayLine.defaultUramThreshold
 ) extends Module {
 
@@ -392,7 +346,8 @@ class ArgumentServer(
   // backlog cannot wedge a resolution. With no porch, retain two slots so the
   // queue can sustain II=1.
   private val resolutionPoolDepth = math.max(2, cacheDelayCycles)
-  private val missedPoolDepth = math.max(1, missedUpdateExtra) // pure missed-update pool
+  private val missedPoolDepth =
+    math.max(1, missedUpdateExtra) // pure missed-update pool
   // Normal insertion resolves id+1, so one ring slot is always the separation
   // point between the insertion head and the far-end resolution: at most
   // (cacheDepth-1) continuations are resident simultaneously.
@@ -460,7 +415,9 @@ class ArgumentServer(
   // keeps the shape `inFlight + <register>` and no new arithmetic lands on that
   // path. Reset: the cache starts empty, so every usable slot is missing.
   val cacheDeficit =
-    Seq.fill(NParallelNew)(RegInit(residentCapacity.U(log2Ceil(cacheDepth + 1).W)))
+    Seq.fill(NParallelNew)(
+      RegInit(residentCapacity.U(log2Ceil(cacheDepth + 1).W))
+    )
 
   private def coupledType = new CoupledSlowPathEntry(
     lineAddressWidth,
@@ -714,13 +671,18 @@ class ArgumentServer(
   )
   val spawnValids = Wire(Vec(NParallelNew, Bool()))
   val evictionValids = Wire(Vec(NParallelNew, Bool()))
-  val evictionBits = Wire(Vec(NParallelNew, new TaggedEvictedContinuation(
-    lineAddressWidth,
-    continuationSize,
-    serverTagWidth,
-    serverIDWidth,
-    laneW
-  )))
+  val evictionBits = Wire(
+    Vec(
+      NParallelNew,
+      new TaggedEvictedContinuation(
+        lineAddressWidth,
+        continuationSize,
+        serverTagWidth,
+        serverIDWidth,
+        laneW
+      )
+    )
+  )
   for (i <- 0 until NParallelNew) {
     spawnValids(i) := false.B
     evictionValids(i) := false.B
@@ -746,10 +708,14 @@ class ArgumentServer(
     coupledQs(i).io.enq.bits.spawnValid := hasSpawn
     coupledQs(i).io.enq.bits.evictionValid := hasEviction
     coupledQs(i).io.enq.bits.eviction := evictionBits(i)
-    coupledQs(i).io.enq.bits.updateValid := hasUpdate && (hasResolution || missedRoom)
+    coupledQs(
+      i
+    ).io.enq.bits.updateValid := hasUpdate && (hasResolution || missedRoom)
     coupledQs(i).io.enq.bits.update := delayedMissQs(i).io.deq.bits
     delayedMissQs(i).io.deq.ready :=
-      coupledQs(i).io.enq.ready && (hasResolution || (isPureUpdate && missedRoom))
+      coupledQs(
+        i
+      ).io.enq.ready && (hasResolution || (isPureUpdate && missedRoom))
   }
 
   // Read from back and fire/forward
@@ -779,7 +745,8 @@ class ArgumentServer(
     val normalResolution = cacheInsertFires(i)
     val idleFlushEnabled = idleCounts(i) === idleFlushCycles.U &&
       doneCounts(i) =/= 0.U
-    val flushResolution = !normalResolution && idleFlushEnabled && resolutionHasRoom
+    val flushResolution =
+      !normalResolution && idleFlushEnabled && resolutionHasRoom
     val readAddr = Mux(
       normalResolution,
       cacheInsertBits(i).id + 1.U,
@@ -859,7 +826,8 @@ class ArgumentServer(
     // until the entire reserved resolution share fills.
     val coupledHead = coupledQs(i).io.deq
     val headNeedsSpawn = coupledHead.bits.spawnValid
-    val headNeedsSlow = coupledHead.bits.evictionValid || coupledHead.bits.updateValid
+    val headNeedsSlow =
+      coupledHead.bits.evictionValid || coupledHead.bits.updateValid
     val spawnAccepted = !headNeedsSpawn || spawnQ.io.enq.ready
     val slowAccepted = !headNeedsSlow || io.coupledSlowPath(i).ready
     coupledHead.ready := spawnAccepted && slowAccepted
@@ -880,7 +848,9 @@ class ArgumentServer(
 
     val admitInc = io.newContInput(i).req.fire
     val resolutionEnq = coupledQs(i).io.enq.fire &&
-      (coupledQs(i).io.enq.bits.spawnValid || coupledQs(i).io.enq.bits.evictionValid)
+      (coupledQs(i).io.enq.bits.spawnValid || coupledQs(
+        i
+      ).io.enq.bits.evictionValid)
     val resolutionDeq = coupledHead.fire &&
       (coupledHead.bits.spawnValid || coupledHead.bits.evictionValid)
     val evictionLeave = coupledHead.fire && coupledHead.bits.evictionValid
@@ -891,7 +861,9 @@ class ArgumentServer(
     val spawnLeave = coupledHead.fire && coupledHead.bits.spawnValid
     val pureEnq = coupledQs(i).io.enq.fire &&
       !coupledQs(i).io.enq.bits.spawnValid &&
-      !coupledQs(i).io.enq.bits.evictionValid && coupledQs(i).io.enq.bits.updateValid
+      !coupledQs(i).io.enq.bits.evictionValid && coupledQs(
+        i
+      ).io.enq.bits.updateValid
     val pureDeq = coupledHead.fire && !coupledHead.bits.spawnValid &&
       !coupledHead.bits.evictionValid && coupledHead.bits.updateValid
     val flushHoleInc = flushResolution && resolvedSlotWasValid
@@ -1095,7 +1067,9 @@ class ArgumentServer(
     // A resolution collision IS routed here: that line is genuinely leaving the
     // cache, and the one-cycle staging couples the update to its own eviction so
     // the gater fences it behind that eviction's HBM write.
-    delayedMissQs(i).io.enq.valid := valids(i) && !matches(i) && !insertCollision
+    delayedMissQs(i).io.enq.valid := valids(i) && !matches(
+      i
+    ) && !insertCollision
     // A missed update stays compact all the way to the SlowArgumentHandler,
     // which is the only thing that reads the data; it expands there.
     delayedMissQs(i).io.enq.bits.update.address := update.bits.address
@@ -1172,7 +1146,8 @@ class ArgumentServer(
     //   fillsHole  : an INVALID slot becomes valid -> one fewer slot missing
     // An insert onto an already-valid slot would not change the count, so guard
     // on the current valid bit rather than assuming ring order holds.
-    val clearsSlot = resolutionIssued(i) && cacheValid(i)(resolutionAddresses(i))
+    val clearsSlot =
+      resolutionIssued(i) && cacheValid(i)(resolutionAddresses(i))
     val fillsHole = insertFire && !cacheValid(i)(insertId)
 
     when(clearsSlot) {

@@ -65,9 +65,9 @@ class AllocatorServerIO(
   * boundary or straddle the wrap: no runtime burst splitting anywhere.
   */
 class AllocatorServer(
-    dataWidth: Int,       // memory/HBM-beat width (e.g. 256): read_data + packing basis
+    dataWidth: Int, // memory/HBM-beat width (e.g. 256): read_data + packing basis
     sysAddressWidth: Int, // HBM address width (e.g. 34): read_address + compact significant bits
-    burstLength: Int,     // AXI ARLEN (beats - 1); the RVtoAXIBridge issues FIXED bursts of this length
+    burstLength: Int, // AXI ARLEN (beats - 1); the RVtoAXIBridge issues FIXED bursts of this length
     maxOutstandingReadBursts: Int = 8,
     enableRecycling: Boolean = false
 ) extends Module {
@@ -93,9 +93,11 @@ class AllocatorServer(
   // is in flight and the ring can drain a fresh beat EVERY cycle (8 addresses/
   // cycle sustained) instead of trickling one burst at a time.
   private val localQueueDepth = maxOutstandingReadBursts * burstBeats
-  private val readAheadLowWatermark = (maxOutstandingReadBursts - 1) * burstBeats
+  private val readAheadLowWatermark =
+    (maxOutstandingReadBursts - 1) * burstBeats
   private val readCountWidth = log2Ceil(maxOutstandingReadBursts + 1) + 1
-  private val readBeatCountWidth = log2Ceil(localQueueDepth + burstBeats + 1) + 1
+  private val readBeatCountWidth =
+    log2Ceil(localQueueDepth + burstBeats + 1) + 1
   // A beat holds numPackedPerBeat addresses; the region can hold at most one
   // beat per dataWidth/8 bytes of the address space.
   private val perBeatShift = log2Ceil(numPackedPerBeat)
@@ -257,7 +259,11 @@ class AllocatorServer(
   private val recycleCommit =
     io.recycle.map(_.commit).getOrElse(false.B)
   when(io.read_address.fire || recycleCommit) {
-    avaialbleSize := (avaialbleSize +& Mux(recycleCommit, contsPerBurst.U, 0.U)) -
+    avaialbleSize := (avaialbleSize +& Mux(
+      recycleCommit,
+      contsPerBurst.U,
+      0.U
+    )) -
       Mux(io.read_address.fire, contsPerBurst.U, 0.U)
   }
 
@@ -304,8 +310,10 @@ class AllocatorServer(
   // Track the low-water mark once addresses are actually circulating. Occupancy
   // is zero before the host programs the region, hence the guard; zero therefore
   // reads back as "never observed".
-  when(rPause === 0.U && avaialbleSize =/= 0.U &&
-    (lowWaterSize === 0.U || avaialbleSize < lowWaterSize)) {
+  when(
+    rPause === 0.U && avaialbleSize =/= 0.U &&
+      (lowWaterSize === 0.U || avaialbleSize < lowWaterSize)
+  ) {
     lowWaterSize := avaialbleSize
   }
 

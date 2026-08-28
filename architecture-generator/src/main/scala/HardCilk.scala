@@ -34,15 +34,13 @@ class HardCilk(
     unitedHbm: Boolean,
     isSimulation: Boolean,
     argumentNotifierCutCount: Int,
-    override val addressTransformFlag: Boolean = false, // Made public for trait
-    // CLI RAMA modes apply to ports whose task descriptor omits generateRAMA.
+    override val addressTransformFlag: Boolean = false,
     override val enableRamaByDefault: Boolean = false,
     override val ramaStripingEnabled: Boolean = false,
-    override val generatorProfile: GeneratorProfile =
-      GeneratorProfile(Util.ArchitectureMode.Updated, Util.ArgumentServerMode.Cached),
-    // Opt-in kernel-global start broadcast (default OFF -> byte-identical to the
-    // pre-feature design). When ON: one host-writable register releases all
-    // scheduler servers on the same cycle and anchors the watcher start gate.
+    override val generatorProfile: GeneratorProfile = GeneratorProfile(
+      Util.ArchitectureMode.Updated,
+      Util.ArgumentServerMode.Cached
+    ),
     override val enableGlobalStart: Boolean = false
 ) extends Module
     with HasHBMInterconnect
@@ -82,7 +80,13 @@ class HardCilk(
   val cfgXDMA = axi4.Config(wId = 4, wAddr = 64, wData = 512)
 
   val builder =
-    new HardCilkBuilder(fullSysGenDescriptor, debug, argumentNotifierCutCount, enableGlobalStart, generatorProfile)
+    new HardCilkBuilder(
+      fullSysGenDescriptor,
+      debug,
+      argumentNotifierCutCount,
+      enableGlobalStart,
+      generatorProfile
+    )
 
   val blueprint = builder.defineBlueprint()
 
@@ -98,17 +102,14 @@ class HardCilk(
   val notifierMap = blueprint.argNotifierFactories.map { case (name, factory) =>
     name -> Module(factory())
   }
-  val newNotifierMap = blueprint.newArgNotifierFactories.map { case (name, factory) =>
-    name -> Module(factory())
+  val newNotifierMap = blueprint.newArgNotifierFactories.map {
+    case (name, factory) =>
+      name -> Module(factory())
   }
   val memAllocatorMap = blueprint.memAllocatorFactories.map {
     case (name, factory) => name -> Module(factory())
   }
 
-  // Continuation recycling: every resolution in the argument notifier hands its
-  // freed address to that task's allocator, which packs, rings and writes them
-  // back into its own free list. Index order matches on both sides (cache lanes
-  // then slow handlers), so this is a straight zip.
   for ((name, allocator) <- allocatorMap) {
     allocator.io_recycle.foreach { recycleIn =>
       val resolved = newNotifierMap(name).resolvedAddresses.getOrElse(
@@ -122,18 +123,6 @@ class HardCilk(
         s"$name: ${resolved.length} resolution branches but " +
           s"${recycleIn.length} recycle inputs"
       )
-      // This is a long cross-module hop: the argument notifier's servers are
-      // ~40,000 leaves each and BRAM-heavy, while a ResolutionCollector is ~300
-      // leaves, so the two sit far apart and the link was the design's critical
-      // path after the scheduler chain was fixed -- servers_N/coupledQs_M/ram_ext
-      // -> collectors_K/leaked, 7 logic levels, 1.18 ns of logic against 6.52 ns
-      // of route, crossing SLR boundaries five times.
-      //
-      // NOT registered. Pipelining this tap is FREE protocol-wise (it is a Valid,
-      // never backpressured) and gave the best placement of the 200 MHz campaign
-      // (-2.560 vs -3.046), but it cost routability on a design already at 85%
-      // SLL: 1,102 signals unrouted where the unpipelined version routes clean.
-      // Worth revisiting if routing headroom ever appears.
       recycleIn.zip(resolved).foreach { case (sink, source) => sink := source }
     }
   }
@@ -158,39 +147,35 @@ class HardCilk(
     notifierMap,
     remoteStreamToMemMap
   )
-  // ---- Kernel-global start broadcast register --------------------------------
-  // One host-writable 64-bit register whose bit0 ("globalRun") fans out to every
-  // scheduler server's io_globalRun AND to the telemetry watcher's start_gate. The
-  // host clears each server's rPause while this is 0, then writes it 1 once so ALL
-  // servers leave pause on the SAME cycle (instead of one-at-a-time as each rPause
-  // write lands over the slow hw_emu AXI-lite path). Sits on the last demux port
-  // (index == getNumConfigPorts), host address (getNumConfigPorts << 6) + base.
-  //
-  // Resets to 0: the system is HELD until the host's single release write, so
-  // startSystem() MUST write this to 1 (it does). This 0->1 edge is also the
-  // watcher's start gate (see connectWatcher) -- a deterministic "compute starts
-  // now" anchor, so cycle_count 0 == release and the first accept can never be
-  // dropped (the gate leads the first dispatch by many cycles).
+
   val globalRunGate: Option[Bool] =
     if (!enableGlobalStart) None
-    else Some {
-      val globalRunReg = RegInit(0.U(64.W))
-      val globalRunBlock =
-        new axi4.lite.components.RegisterBlock(wAddr = 6, wData = 64, wMask = 6)
-      demux.m_axil(fullSysGenDescriptor.getNumConfigPorts()) :=> globalRunBlock.s_axil
-      globalRunBlock.base(0x00)
-      globalRunBlock.reg(
-        globalRunReg,
-        read = true,
-        write = true,
-        desc = "Kernel-global start broadcast: bit0 releases all scheduler servers + watcher"
-      )
-      when(globalRunBlock.rdReq) { globalRunBlock.rdOk() }
-      when(globalRunBlock.wrReq) { globalRunBlock.wrOk() }
-      val gr = globalRunReg(0)
-      schedulerMap.values.foreach { sched => sched.io_globalRun.get := gr }
-      gr
-    }
+    else
+      Some {
+        val globalRunReg = RegInit(0.U(64.W))
+        val globalRunBlock =
+          new axi4.lite.components.RegisterBlock(
+            wAddr = 6,
+            wData = 64,
+            wMask = 6
+          )
+        demux.m_axil(
+          fullSysGenDescriptor.getNumConfigPorts()
+        ) :=> globalRunBlock.s_axil
+        globalRunBlock.base(0x00)
+        globalRunBlock.reg(
+          globalRunReg,
+          read = true,
+          write = true,
+          desc =
+            "Kernel-global start broadcast: bit0 releases all scheduler servers + watcher"
+        )
+        when(globalRunBlock.rdReq) { globalRunBlock.rdOk() }
+        when(globalRunBlock.wrReq) { globalRunBlock.wrOk() }
+        val gr = globalRunReg(0)
+        schedulerMap.values.foreach { sched => sched.io_globalRun.get := gr }
+        gr
+      }
 
   connectPEs(peMap)
   connectNewArgumentNotifiers(newNotifierMap, peMap)
@@ -217,7 +202,13 @@ class HardCilk(
     sendArgumentWBMap
   )
 
-  connectGlobalSignals(schedulerMap, allocatorMap, memAllocatorMap, notifierMap, newNotifierMap)
+  connectGlobalSignals(
+    schedulerMap,
+    allocatorMap,
+    memAllocatorMap,
+    notifierMap,
+    newNotifierMap
+  )
 
   // This call now invokes the method from the HasHBMInterconnect trait
   buildAndConnectHBM(
@@ -312,12 +303,9 @@ class HardCilk(
 
   private def instantiateManagementDemux(): axi4.lite.components.Demux = {
     val registerBlockSize = 6
-    // +1 master for the kernel-global start-broadcast register (a RegisterBlock at
-    // demux index == getNumConfigPorts(), connected in the body below) ONLY when the
-    // feature is enabled. All existing server config ports keep their indices/
-    // addresses; this one lands right after. Off -> unchanged master count.
     val numMasters =
-      fullSysGenDescriptor.getNumConfigPorts() + (if (enableGlobalStart) 1 else 0)
+      fullSysGenDescriptor.getNumConfigPorts() + (if (enableGlobalStart) 1
+                                                  else 0)
     val axiCfgCtrl = axi4.Config(
       wAddr = numMasters + registerBlockSize,
       wData = 64,
@@ -416,8 +404,6 @@ class HardCilk(
       }
       j += task.getNumServers("scheduler")
 
-      // Commit-2469686 spawners are HBM-backed management servers. Updated
-      // spawners are on-chip and therefore expose no entries here.
       taskSched.legacySpawnerMgmt.zipWithIndex.foreach { case (port, index) =>
         demux.m_axil(j + index) :=> port
       }
@@ -514,24 +500,26 @@ class HardCilk(
     done := (oldDone ++ newDone).reduceOption(_ || _).getOrElse(false.B)
   }
 
-  /** Wire the two PE-side write streams and the explicit metadata channels.
-    * Source ordering is descriptor order followed by PE index, the same order
-    * used by FullSysGenDescriptor.getPortCount.
-    */
   private def connectNewArgumentNotifiers(
       networks: Map[String, ArgumentNetworks],
       pes: Map[String, Seq[VitisWriteBufferModule]]
   ): Unit = {
     networks.foreach { case (targetName, network) =>
       val newSources = fullSysGenDescriptor.taskDescriptors.flatMap { source =>
-        if (fullSysGenDescriptor.spawnNextList.getOrElse(source.name, Nil).contains(targetName))
+        if (
+          fullSysGenDescriptor.spawnNextList
+            .getOrElse(source.name, Nil)
+            .contains(targetName)
+        )
           pes.getOrElse(source.name, Nil)
         else Nil
       }
       require(newSources.size == network.cfg.nSourcePEs)
       newSources.zipWithIndex.foreach { case (pe, index) =>
-        val spawnWrite = pe.getPort("m_axi_spawnNext")
-          .asInstanceOf[axi4.RawInterface].asFull
+        val spawnWrite = pe
+          .getPort("m_axi_spawnNext")
+          .asInstanceOf[axi4.RawInterface]
+          .asFull
         val newCont = network.s_axi_newCont(index).asFull
         // The wrapper's historical AXI declaration includes unused read
         // channels; NewArgumentNotifier is deliberately write-only.
@@ -539,21 +527,29 @@ class HardCilk(
         spawnWrite.w :=> newCont.w
         newCont.b :=> spawnWrite.b
 
-        val meta = pe.getPort("continuationMetaIn").asInstanceOf[chext.amba.axi4s.Interface]
+        val meta = pe
+          .getPort("continuationMetaIn")
+          .asInstanceOf[chext.amba.axi4s.Interface]
         val returned = network.m_continuation(index)
         meta.TVALID := returned.valid
         meta.TDATA := returned.bits.metadata.asUInt.pad(32)
         returned.ready := meta.TREADY
       }
 
-      val updateSources = fullSysGenDescriptor.taskDescriptors.flatMap { source =>
-        if (fullSysGenDescriptor.sendArgumentList.getOrElse(source.name, Nil).contains(targetName))
-          pes.getOrElse(source.name, Nil)
-        else Nil
+      val updateSources = fullSysGenDescriptor.taskDescriptors.flatMap {
+        source =>
+          if (
+            fullSysGenDescriptor.sendArgumentList
+              .getOrElse(source.name, Nil)
+              .contains(targetName)
+          )
+            pes.getOrElse(source.name, Nil)
+          else Nil
       }
       require(updateSources.size == network.cfg.nUpdatePEs)
       updateSources.zipWithIndex.foreach { case (pe, index) =>
-        val packet = pe.getPort("argOut").asInstanceOf[chext.amba.axi4s.Interface]
+        val packet =
+          pe.getPort("argOut").asInstanceOf[chext.amba.axi4s.Interface]
         val payloadLo = 96
         val offsetLo = payloadLo + network.cfg.updatePayloadWidth
         val semanticWidth = offsetLo + network.cfg.updateOffsetWidth
@@ -561,16 +557,19 @@ class HardCilk(
         // offset ends mid-byte therefore has zero padding above its semantic
         // fields (for example, 132 bits is emitted as a 136-bit port).
         val physicalWidth = ((semanticWidth + 7) / 8) * 8
-        require(packet.cfg.wData == physicalWidth,
+        require(
+          packet.cfg.wData == physicalWidth,
           s"$targetName argOut must be {address[64], metadata[32], " +
             s"payload[${network.cfg.updatePayloadWidth}], " +
             s"offset[${network.cfg.updateOffsetWidth}]} padded to " +
-            s"$physicalWidth AXIS bits; got ${packet.cfg.wData} bits")
+            s"$physicalWidth AXIS bits; got ${packet.cfg.wData} bits"
+        )
         val sink = network.s_update(index)
         sink.valid := packet.TVALID
         sink.bits.address := network.cfg.lineAddressOf(packet.TDATA(63, 0))
         val metaWidth = sink.bits.metadata.getWidth
-        sink.bits.metadata := packet.TDATA(64 + metaWidth - 1, 64)
+        sink.bits.metadata := packet
+          .TDATA(64 + metaWidth - 1, 64)
           .asTypeOf(network.cfg.metadataType)
         sink.bits.payload := packet.TDATA(offsetLo - 1, payloadLo)
         sink.bits.offset.foreach { offset =>
@@ -590,9 +589,6 @@ class HardCilk(
       peMap: Map[String, Seq[VitisWriteBufferModule]]
   ): Unit = {
 
-    // --- A. Deterministic lane assignment ---
-    // Walk taskDescriptors (stable order), not peMap, so lanes are reproducible.
-    // BFS: the 16 sparse_edgemap_helper PEs become lanes 0..15.
     val lockPEs: Seq[(VitisWriteBufferModule, TaskDescriptor)] =
       fullSysGenDescriptor.taskDescriptors
         .filter(_.participatesInLock)
@@ -605,12 +601,8 @@ class HardCilk(
       number_of_needed_lanes
         == lc.N,
       s"lock lanes ${number_of_needed_lanes} must equal lockConfig.N ${lc.N}"
-    ) // tripwire; validate() guarantees it
+    )
 
-    // --- B. Instantiate and tie off every lane (unconnected lanes stay safely idle) ---
-    // addrW matches the HBM port address width (widthAXIAddress, 34) so the lock
-    // tags, tag store, and AMU master are all native HBM-width -- no 64->34 address
-    // transition, and the tag-store comparators are 34-bit instead of 64-bit.
     val lockServer = Module(
       new LockServer(
         n = lc.N,
@@ -627,7 +619,6 @@ class HardCilk(
       lockServer.io.resp(i).ready := false.B
     }
 
-    // --- C. Connect endpoints (last-connect semantics override the tie-off above) ---
     for (
       (pe, hasMultiplePorts, index, lane) <-
         (for {
@@ -659,13 +650,6 @@ class HardCilk(
       fromLock.TDATA := resp.bits.tdata
     }
 
-    // --- D. Export io.gmem as its own dedicated m_axi_NN ---
-    // STRATEGY #2 (direct wire): connect gmem straight to its own HBM port with
-    // NO ProtocolConverter (so no IdSerialize id-collapse) and NO Widen. The
-    // exported port matches gmem EXACTLY (64-bit data, full amuId+lane id width),
-    // so every outstanding atomic keeps a UNIQUE HBM id => at most one in flight
-    // per id => the per-id response-ordering assumption can never be violated.
-    // The platform's AXI-compliant HBM adapter performs the 64->256 width step.
     val gmemYanked = AxiUserYanker(lockServer.io.gmem.asFull)
     val outputCfg = gmemYanked.cfg
     val portName = f"m_axi_${numHbmPortExports}%02d"
@@ -689,17 +673,11 @@ class HardCilk(
 
     axiOuts.addOne(axiOut)
     // LockServer has no task-level override, so it inherits the CLI RAMA mode.
-    if (enableRamaByDefault) ramaPortIndices = ramaPortIndices :+ numHbmPortExports
+    if (enableRamaByDefault)
+      ramaPortIndices = ramaPortIndices :+ numHbmPortExports
     numHbmPortExports += 1
   }
 
-  /** Instantiate the free-running telemetry watcher, wire the twenty-two generic
-    * status taps selected by the descriptor, tie start_addr to the configured
-    * constant, and export its two HBM masters as the topmost m_axi ports.
-    *
-    * The watcher is purely observational: it only READS the PEs' AXIS valid/ready
-    * (no `<>`), so PE<->scheduler connectivity is untouched.
-    */
   private def connectWatcher(
       wc: WatcherConfig,
       peMap: Map[String, Seq[VitisWriteBufferModule]],
@@ -709,15 +687,8 @@ class HardCilk(
     val maxStatusSlots = 22
     require(wc.statusSlots.size <= maxStatusSlots)
 
-    // Number of per-HBM-port bandwidth/address pin groups on the watcher (matches
-    // the kernel MAX_HBM_PORTS). The actual exported compute masters are wired below;
-    // any remaining pins are tied to 0.
     val maxHbmPorts = 31
 
-    // Fixed AXI config matching the synthesized watcher.v gmem master: 256b data
-    // (a 256-bit beat = two 128-bit telemetry bundles), 3-bit id, 64b address, 1-bit
-    // user on every channel, full AXI4 (ARLEN=8 => axi3Compat off, qos/prot/cache/
-    // region/lock on). Must match watcher.v C_M_AXI_GMEM_DATA_WIDTH.
     val gmemCfg = axi4.Config(
       wId = 3,
       wAddr = 64,
@@ -762,22 +733,29 @@ class HardCilk(
       watcher.getPort(watcher.memBasePin(ch)).asInstanceOf[UInt] :=
         BigInt("200000000", 16).U(64.W)
     }
-    watcher.io.elements("start_addr").asInstanceOf[UInt] := BigInt(wc.startAddr).U(64.W)
+    watcher.io.elements("start_addr").asInstanceOf[UInt] := BigInt(wc.startAddr)
+      .U(64.W)
 
     def encodingWidth(encoding: String): Int = encoding match {
-      case "boolean1" => 1
+      case "boolean1"    => 1
       case "readyValid2" => 2
-      case other => throw new RuntimeException(s"unknown watcher encoding '$other'")
+      case other         =>
+        throw new RuntimeException(s"unknown watcher encoding '$other'")
     }
 
     def resolveField(field: WatcherStatusField): UInt = {
       val target = field.target
       target.kind match {
         case "pe" =>
-          val pes = peMap.getOrElse(target.taskName,
-            throw new RuntimeException(s"watcher references missing PE task '${target.taskName}'"))
+          val pes = peMap.getOrElse(
+            target.taskName,
+            throw new RuntimeException(
+              s"watcher references missing PE task '${target.taskName}'"
+            )
+          )
           require(target.index >= 0 && target.index < pes.size)
-          val (valid, ready) = pes(target.index).getWatcherStatusHandshake(target.port)
+          val (valid, ready) =
+            pes(target.index).getWatcherStatusHandshake(target.port)
           chisel3.util.Cat(ready, valid)
 
         case "schedulerServer" =>
@@ -785,18 +763,21 @@ class HardCilk(
 
         case "slowUpdateHandler" | "evictionSaver" | "argumentServer" =>
           newArgumentNotifierMap.get(target.taskName) match {
-            case None => 0.U(2.W)
-            case Some(network) => target.kind match {
-              case "slowUpdateHandler" => network.watcherSlowUpdates(target.index)
-              case "evictionSaver" => network.watcherEvictions(target.index)
-              case "argumentServer" =>
-                val flatIndex = target.index * network.cfg.newLanesPerServer + target.lane
-                network.watcherFastSpawns(flatIndex)
-            }
+            case None          => 0.U(2.W)
+            case Some(network) =>
+              target.kind match {
+                case "slowUpdateHandler" =>
+                  network.watcherSlowUpdates(target.index)
+                case "evictionSaver"  => network.watcherEvictions(target.index)
+                case "argumentServer" =>
+                  val flatIndex =
+                    target.index * network.cfg.newLanesPerServer + target.lane
+                  network.watcherFastSpawns(flatIndex)
+              }
           }
 
-        case other => throw new RuntimeException(
-          s"unknown watcher target kind '$other'")
+        case other =>
+          throw new RuntimeException(s"unknown watcher target kind '$other'")
       }
     }
 
@@ -820,25 +801,12 @@ class HardCilk(
       watcher.getPort(watcher.statusPinName(slotIndex)) := 0.U(4.W)
     }
 
-    // --- Start gate ---
-    // With the global-start feature ON: drive the gate from the kernel-global
-    // broadcast (globalRunGate). globalRun is the host's single "go" write in
-    // startSystem(): it resets to 0 (watcher idle, all scheduler servers held) and
-    // rises exactly once when the host releases the system. That 0->1 edge is a
-    // DETERMINISTIC compute-start anchor -- cycle_count 0 == release -- and it leads
-    // the first task dispatch by many cycles (servers must read HBM, fill buffers,
-    // and serve a steal before any accept), so the first accept has a wide margin
-    // and can never be dropped.
-    //
-    // With the feature OFF (default): fall back to the original heuristic -- the
-    // gate opens on the first scheduler dispatch, driven a cycle EARLY by OR-ing the
-    // registered latch with the combinational firstDispatch so the T+1 accept isn't
-    // lost to the watcher HLS's internal sampling skew. This path is byte-identical
-    // to the pre-feature design.
     val startGate: Bool = globalRunGate.getOrElse {
       val firstDispatch =
         schedulerMap.values
-          .flatMap(s => s.io_export.taskOut.map(t => t.TVALID.asBool && t.TREADY.asBool))
+          .flatMap(s =>
+            s.io_export.taskOut.map(t => t.TVALID.asBool && t.TREADY.asBool)
+          )
           .toSeq
           .reduceOption(_ || _)
           .getOrElse(false.B)
@@ -848,24 +816,11 @@ class HardCilk(
     }
     watcher.getPort("start_gate") := startGate.asUInt
 
-    // --- Per-HBM-port bandwidth + address taps ---
-    // For each exported compute master we register, with reset-init 0 (same X-startup
-    // hazard avoidance as the status taps): the per-cycle write bytes (popcount WSTRB),
-    // the per-cycle read bytes ((ARLEN+1)<<ARSIZE of an issued burst), and the most-
-    // recent AW/AR address bits [39:20] (1 MB granularity, tapped now, used later for
-    // region stats). NB: HBM addresses live at ~0x1_0000_0000.. so the *top* 20 bits
-    // [63:44] are always zero -- bits [39:20] are the ones that actually distinguish
-    // regions (graph vs scheduler) while still covering the full 16 GB map. This
-    // only READS axiOuts (the exported masters) and never drives them, so the compute
-    // datapath is untouched. axiOuts already holds the compute masters here (the
-    // watcher's own port is appended afterwards). Pins beyond the exported count are 0.
     val nCompute = numHbmPortExports
     for (p <- 0 until maxHbmPorts) {
       if (p < nCompute) {
         val m = axiOuts(p).asFull
-        // Some internal masters (notably CacheEvictionSaver) are deliberately
-        // write-only. Never ask chext for a channel disabled by the AXI config:
-        // its accessor correctly throws `Not supported: read/write`.
+
         if (m.cfg.write) {
           val wb = Wire(UInt(8.W))
           wb := Mux(m.w.fire, chisel3.util.PopCount(m.w.bits.strb), 0.U)
@@ -877,7 +832,10 @@ class HardCilk(
           val addrLo = addrHi - 19
           watcher.getPort(watcher.awaddrPin(p)) :=
             chisel3.util.RegEnable(
-              m.aw.bits.addr(addrHi, addrLo), 0.U(20.W), m.aw.fire)
+              m.aw.bits.addr(addrHi, addrLo),
+              0.U(20.W),
+              m.aw.fire
+            )
         } else {
           watcher.getPort(watcher.wbytesPin(p)) := 0.U
           watcher.getPort(watcher.awaddrPin(p)) := 0.U
@@ -893,7 +851,10 @@ class HardCilk(
           val addrLo = addrHi - 19
           watcher.getPort(watcher.araddrPin(p)) :=
             chisel3.util.RegEnable(
-              m.ar.bits.addr(addrHi, addrLo), 0.U(20.W), m.ar.fire)
+              m.ar.bits.addr(addrHi, addrLo),
+              0.U(20.W),
+              m.ar.fire
+            )
         } else {
           watcher.getPort(watcher.rbytesPin(p)) := 0.U
           watcher.getPort(watcher.araddrPin(p)) := 0.U
@@ -906,10 +867,6 @@ class HardCilk(
       }
     }
 
-    // --- Export both gmem masters as dedicated topmost m_axi_NN ports ---
-    // Port A (m_axi_gmem) is exported first so it gets the lower index; port B
-    // (m_axi_gmem1) is next. renderConnCfg maps the last two masters to the two
-    // watcher HBM windows (port A -> HBM[16:23], port B -> HBM[24:31]).
     def exportGmemMaster(pinName: String): Unit = {
       val gmem =
         watcher.getPort(pinName).asInstanceOf[axi4.RawInterface].asFull

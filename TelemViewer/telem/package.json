@@ -1,0 +1,31 @@
+{
+  "name": "telem",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "native:build": "cargo build --release --manifest-path native/trace_decoder/Cargo.toml",
+    "dev": "pnpm native:build && NODE_OPTIONS=--max-old-space-size=4096 vite",
+    "build": "pnpm native:build && tsc --noEmit && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "start": "vite preview --host 0.0.0.0 --port 4173 --strictPort"
+  },
+  "dependencies": {
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.12"
+  }
+}

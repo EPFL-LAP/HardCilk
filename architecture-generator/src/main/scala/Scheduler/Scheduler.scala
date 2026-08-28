@@ -20,6 +20,7 @@ case class SchedulerOutsideRingLayout(
 )
 
 object SchedulerOutsideRingLayout {
+
   /** Place outside-ring sources and spawners.
     *
     * With grouped argument lanes, sources retain their natural order and each
@@ -89,11 +90,13 @@ object SchedulerOutsideRingLayout {
       val laneSlots = spawners.take(groupedSourceCount)
       val leftoverSlots =
         (spawners.drop(groupedSourceCount) ++
-          Vector.tabulate(networkSize)(identity).filterNot(spawners.contains))
-          .iterator
+          Vector
+            .tabulate(networkSize)(identity)
+            .filterNot(spawners.contains)).iterator
 
       val sources = Array.fill(sourceCount)(-1)
-      for (k <- laneSlots.indices) sources(groupedSourceStart + k) = laneSlots(k)
+      for (k <- laneSlots.indices)
+        sources(groupedSourceStart + k) = laneSlots(k)
       for (j <- 0 until sourceCount if sources(j) < 0)
         sources(j) = leftoverSlots.next()
 
@@ -205,7 +208,11 @@ class Scheduler(
 
   val spawnerServer =
     if (outsideSpawn)
-      Some(Seq.fill(spawnerServerNumber)(Module(new SpawnerServer(taskWidth, queueDepth = spawnerQueueDepth))))
+      Some(
+        Seq.fill(spawnerServerNumber)(
+          Module(new SpawnerServer(taskWidth, queueDepth = spawnerQueueDepth))
+        )
+      )
     else None
 
   val outsideSpawnSourceCount = peCountGlobalTaskIn + argRouteServersNumber
@@ -237,13 +244,6 @@ class Scheduler(
   val bufferServerInputs =
     Seq.fill(pairedIndices.size)(Module(new BufferServerInput(taskWidth)))
 
-  // Elastic, not rigid. The premise for leaving this ring rigid was that it has
-  // "one injector per node and no contention"; the first half is true and the
-  // second is not. Several sources inject here -- every incoming-spawn buffer
-  // and every fast/slow continuation lane that did not draw a co-located spawner
-  // slot -- and on a rigid ring a hole can only be taken by whoever it drifts
-  // past first, so an injector one hop downstream of a busy one never gets a
-  // turn. See the injectWanted/forceForward policy at the bottom of this module.
   val getOutsideSpawnNetwork =
     if (outsideSpawn)
       Some(
@@ -344,28 +344,26 @@ class Scheduler(
   //   assert when the sum reaches ~82% of the window
   //   clear  when it falls back to ~59%
   //
-  // The gap between them is deliberately wide. A narrow one lets the flag drop on the strength of
-  // relief the scheduler itself caused: it starts absorbing, the ring eases, the sum dips a little,
-  // and it flips back to injecting before anything has reached HBM. Since writeCanIssue is gated on
-  // networkCongested, every such flip aborts the spill. For the 17-node countDecoupled ring this is
-  // assert at 14, clear at 10 (it was 14 and 12).
   //
   // SchedulerServer takes a midpoint and a delta rather than the two points, so convert -- and clamp
   // the assert point to peCount + vasCount, which its own require() bounds it by.
   val contentionWindow_ = schedulerLocalNetworkLength
   val contentionVasCount_ = argRouteServersNumber + peCountGlobalTaskIn
   val contentionAssertAt_ =
-    max(min(math.ceil(contentionWindow_ * 0.82).toInt, peCount + contentionVasCount_), 1)
+    max(
+      min(
+        math.ceil(contentionWindow_ * 0.82).toInt,
+        peCount + contentionVasCount_
+      ),
+      1
+    )
   val contentionClearAt_ =
     max(math.floor(contentionWindow_ * 0.59).toInt, 0)
-  // Floor the half-gap at 2 (so assert and clear are at least 4 apart). The proportional gap is
-  // 0.82 - 0.59 = 0.23 of the window, which integer-rounds to 2 on a 9-node ring and lets the flag
-  // drop after a couple of quiet cycles -- measured 22 toggles per run there against 2 on a 17-node
-  // ring. Clamped so the clear point stays non-negative, which SchedulerServer's require() needs.
-  // Half-gap: at least 2 (so assert and clear sit >= 4 apart), but never more than half the assert
-  // point, or the clear point would go negative -- SchedulerServer requires it non-negative.
   val contentionDelta_ =
-    min(max((contentionAssertAt_ - contentionClearAt_) / 2, 2), contentionAssertAt_ / 2)
+    min(
+      max((contentionAssertAt_ - contentionClearAt_) / 2, 2),
+      contentionAssertAt_ / 2
+    )
   val contentionThreshold_ = contentionAssertAt_ - contentionDelta_
 
   val schedulerServers = Seq.fill(schedulerServersNumber)(
@@ -395,12 +393,6 @@ class Scheduler(
     )
   )
 
-  // Management AXI-lite config for the per-server register blocks. Derived from
-  // the fixed RegisterBlock geometry (see SchedulerServer.regBlock) rather than
-  // indexing schedulerServers(0), so io_internal is well-defined even when this
-  // task has zero scheduler servers (a non-root task fed purely by spawn).
-  // Matches SchedulerServer.regBlock.cfgAxi (RegisterBlock(wAddr=6, wData=64).cfgAxi)
-  // built directly so no RegisterBlock (and its dangling s_axil Wire) is created.
   private val schedulerMgmtCfg =
     axi4.Config(wAddr = 6, wData = 64, lite = true)
 
@@ -416,7 +408,10 @@ class Scheduler(
 
   val io_paused = IO(Output(Bool()))
   // reduceOption: with zero scheduler servers there is nothing to pause.
-  io_paused := schedulerServers.map(_.io.paused).reduceOption(_ || _).getOrElse(false.B)
+  io_paused := schedulerServers
+    .map(_.io.paused)
+    .reduceOption(_ || _)
+    .getOrElse(false.B)
 
   // Per-server networkCongested tap, exported in server order for the watcher's
   // "sched_congested" telemetry group (see HardCilk.connectWatcher).
@@ -442,9 +437,6 @@ class Scheduler(
     Vec(argRouteServersNumber, new SchedulerNetworkClientIO(taskWidth))
   )
 
-  // Kernel-global start broadcast (opt-in; see SchedulerServer.globalRun). Driven
-  // from the HardCilk top by a single host-writable register and fanned to every
-  // server so they all un-pause on the same cycle. Absent when the feature is off.
   val io_globalRun = if (enableGlobalStart) Some(IO(Input(Bool()))) else None
 
   for (i <- 0 until schedulerServersNumber) {
@@ -456,11 +448,6 @@ class Scheduler(
       schedulerServers(i).io.globalRun.get := io_globalRun.get
   }
 
-  // Plain in-order AXI adapter (no chext.elastic) replacing RVtoAXIBridge +
-  // AxiWriteBuffer on the scheduler's HBM ring port. The elastic Arrival/
-  // SinkBuffer write path was the suspected source of the memReader wrap
-  // corruption (read-after-write settling margin had zero effect on HW, ruling
-  // out a read-side cause).
   val vssAdapter = Seq.fill(schedulerServersNumber)(
     Module(new SchedulerAXIAdapter(taskWidth, addrWidth, vssPortWidth))
   )
@@ -638,20 +625,6 @@ class Scheduler(
   // ---- Outside-spawn ring admission policy -----------------------------------
   // Must come after every connectOutsideSpawnSource call, since it reads the
   // valid each source drives onto its slot.
-  //
-  // The two classes on this ring are NEW work (spawns arriving from another
-  // task) and CONTINUATIONS (the argument networks' fast and slow lanes, work
-  // already in flight that retires when it lands). New work only adds; a
-  // continuation is what frees a closure, a cache line and a scheduler entry.
-  // So a continuation must never be made to wait behind new work.
-  //
-  // The rigid ring got this exactly backwards, by position rather than by
-  // policy: holes travel with the data, so the node just behind a consumer sees
-  // them first and the node just after a busy injector never does. Measured on
-  // fullTriangleCountDecoupled/com-orkut, the fast lane sitting one hop
-  // downstream of triangle's incoming-spawn buffer moved 2 tasks and was then
-  // stuck valid/!ready from cycle 8339 to the end of the run, while the lane one
-  // hop behind a spawner kept going.
   if (outsideSpawn) {
     val ntw = getOutsideSpawnNetwork.get
     val spawnerSlots = spawnerIndices.toSet
@@ -682,12 +655,7 @@ class Scheduler(
       // "Forward past the downstream hop's want anyway." Set on every
       // continuation lane and on nothing else, so the override runs one way
       // only: a lane can push past new work, new work can never push past a
-      // lane. Deliberately blanket rather than only where it is load-bearing
-      // today -- elastic redistributes priority instead of preserving ring
-      // order, so which lane needs it moves with the layout, and a missing force
-      // is a permanent starvation where a redundant one costs nothing between
-      // two sparse producers. Only the SOFT want is overridden; stopInFull stays
-      // unconditional, so this can reorder who gets a slot but never drop a task.
+      // lane.
       ntw.io.forceForward.get(slot) := contLaneSlots.contains(slot).B
     }
   }

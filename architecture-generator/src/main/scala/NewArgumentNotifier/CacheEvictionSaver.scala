@@ -12,8 +12,7 @@ class CacheEvictionSaverIO(
     serverTagWidth: Int,
     serverIDWidth: Int,
     laneWidth: Int
-)
-    extends Bundle {
+) extends Bundle {
   val evictionIn = Flipped(
     Decoupled(
       new TaggedEvictedContinuation(
@@ -32,13 +31,6 @@ class CacheEvictionSaverIO(
   )
 }
 
-/** Address-agnostic eviction writer.
-  *
-  * The originating EvictionGater counts the line before it enters the ring;
-  * the returned completion advances that server's ordered completion fence.
-  * Constant-ID AXI B responses are ordered, so a metadata FIFO associates each
-  * response with its completion notification.
-  */
 class CacheEvictionSaver(
     memoryAddressWidth: Int,
     lineAddressWidth: Int,
@@ -53,7 +45,8 @@ class CacheEvictionSaver(
   require(lineAddressWidth + lineShift == memoryAddressWidth)
   require(queueDepth >= 1 && responseQueueDepth >= 1)
 
-  private val axiDataWidth = if (continuationSize == 2048) 1024 else continuationSize
+  private val axiDataWidth =
+    if (continuationSize == 2048) 1024 else continuationSize
   private val beatsPerWrite = continuationSize / axiDataWidth
 
   val cfgAxi = axi4.Config(

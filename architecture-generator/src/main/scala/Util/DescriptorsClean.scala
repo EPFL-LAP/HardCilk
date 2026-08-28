@@ -95,16 +95,8 @@ case class MemStats(
     interconnectDescriptors: List[InterconnectDescriptor]
 )
 
-// inflightDepth = per-PE in-flight credit budget: how many lock requests a PE
-// may have unresolved inside the server at once. 1 mimics the original
-// one-request-at-a-time behaviour; raise it to let a PE pipeline locks.
 case class LockConfig(N: Int, P: Int, tagStoreSize: Int, inflightDepth: Int = 1)
 
-// --- Watcher (telemetry) configuration ---
-// Optional and default-off: when present, the generator builds and wires the
-// free-running shared `watcher` HLS kernel. Each source is self-describing:
-// `kind` names the hardware object, while the
-// remaining fields identify one instance and, where needed, one port/signal/lane.
 case class WatcherStatusTarget(
     kind: String,
     taskName: String,
@@ -114,9 +106,6 @@ case class WatcherStatusTarget(
     lane: Int = 0
 )
 
-// Fields pack into their physical four-bit slot in array order, low-to-high.
-// The encoding name carries its width: boolean1 is one bit; readyValid2 is two
-// bits with bit0=valid and bit1=ready. Unused upper slot bits are tied to zero.
 case class WatcherStatusField(
     encoding: String,
     target: WatcherStatusTarget
@@ -129,7 +118,7 @@ case class WatcherStatusSlot(
 case class WatcherConfig(
     hdlPath: String = "../hls-kernel-output/watcher/watcher",
     moduleName: String = "watcher",
-    startAddr: Long = 0L,                  // kernel-relative base tie-off (HBM[16:31] window => 0)
+    startAddr: Long = 0L,
     statusSlots: List[WatcherStatusSlot] = Nil
 )
 
@@ -157,53 +146,19 @@ case class SideConfig(
     portWidth: Int = 32,
     virtualEntrtyWidth: Int = 0,
     numSpawnerServer: Int = 0,
-    // Internal resolved-mode bit. GeneratorProfile overwrites any decoded value;
-    // descriptors select the implementation through --argument-server instead.
     useNewArgumentNotifier: Boolean = false,
     slowArgumentHandlerCount: Int = 1,
-    // Number of independent CacheEvictionSaver / eviction AXI ports. Each also
-    // becomes one lane of the EvictionGater's completion-ordering fence (one
-    // pendingCount/doneCount pair per lane, all the same width -- there is no
-    // separate per-lane JSON knob, this single count sizes every lane
-    // uniformly). Independent of slowArgumentHandlerCount: evictions and slow
-    // updates are demuxed by address separately, so the two counts need not
-    // match.
     cacheEvictionSaverCount: Int = 1,
     newContinuationLanesPerServer: Int = 1,
-    // Number of adjacent, private cache lanes used round-robin by each
-    // continuation-source PE. A value of 1 preserves the historical static
-    // source-to-lane mapping. The physical lane count must be divisible by this
-    // factor so every source owns one disjoint lane group within a server.
     newContinuationLaneStripingFactor: Int = 1,
     directUpdateLanesPerServer: Int = 1,
-    // Cut count for the slow-update collection network (servers -> slow
-    // handlers).
     argumentNotifierCutCount: Int = 1,
-    // Cut count for the eviction collection network (servers -> eviction-saver
-    // lanes). Same trade-off as argumentNotifierCutCount.
     evictionCutCount: Int = 1,
     argumentServerIdWidth: Int = 6,
-    // AXI id width of this task's SlowArgumentHandler master, which is also its
-    // in-flight capacity (1 << width concurrent read-modify-writes).
-    //
-    // It doubles as the HBM port-sharing knob. The interconnect needs
-    // log2(masters) id bits above a master's native width to mux it, against a
-    // 6-bit HBM cap, so a 6-bit master must own a whole port -- three
-    // continuation tasks means three ports spent on a path that is idle in a
-    // healthy run. Dropping to 5 lets two share, to 4 lets four share. Lower it
-    // only where the slow path is genuinely cold; it is real concurrency.
     slowAxiIdWidth: Int = 6,
     cacheDelayCycles: Int = 0,
-    // Extra ArgumentServer coupledQ slots for missed updates with no co-cycle
-    // eviction. Throughput knob for the non-backpressuring front porch; too small
-    // only throttles (never incorrect). See ArgumentServer.scala.
     missedUpdateExtra: Int = 64,
     slowRequestQueueDepth: Int = 64,
-    // Allocator sides only. Turns the free-address pool into a circular FIFO
-    // that resolved continuations are written back into, so the pool is sized by
-    // PEAK LIVE closures rather than by every closure the run will ever take.
-    // Requires the cached (new) argument notifier, which is where resolutions
-    // are observed; it is silently dropped under the legacy profile.
     enableContinuationRecycling: Boolean = false,
     legacyOverrides: Option[LegacySideOverrides] = None
 ) {
@@ -223,13 +178,13 @@ case class SideConfig(
     require(affinityQueueDepth >= 0)
     require(affinityTagBits >= 0)
     if (useAffinity) {
-      require(sideType == "scheduler", "Affinity is only valid on scheduler sides")
+      require(
+        sideType == "scheduler",
+        "Affinity is only valid on scheduler sides"
+      )
       require(affinityQueueDepth > 0)
       require(affinityTagBits > 0)
     } else if (affinityQueueDepth != 0 || affinityTagBits != 0) {
-      // Tolerate affinity fields left in the JSON with useAffinity=false so the
-      // knobs can be toggled by flipping a single flag. They carry no meaning
-      // here -- `normalized` strips them from the version passed forward.
       DescriptorLogger.logger.warn(
         s"Task side '$sideType' has affinityQueueDepth/affinityTagBits set but " +
           "useAffinity=false; these fields are ignored and stripped."
@@ -272,9 +227,6 @@ case class SideConfig(
     }
   }
 
-  // Strip affinity sizing knobs when the feature is disabled so downstream
-  // consumers never see stale queue-depth/tag-bit values. Lets the JSON keep
-  // those fields around for easy toggling via a single `useAffinity` flag.
   def normalized: SideConfig =
     if (useAffinity) this
     else copy(affinityQueueDepth = 0, affinityTagBits = 0)
@@ -283,22 +235,24 @@ case class SideConfig(
     val selected = if (profile.isLegacy) {
       legacyOverrides.fold(this) { legacy =>
         copy(
-          numVirtualServers = legacy.numVirtualServers.getOrElse(numVirtualServers),
-          capacityVirtualQueue = legacy.capacityVirtualQueue.getOrElse(capacityVirtualQueue),
-          capacityPhysicalQueue = legacy.capacityPhysicalQueue.getOrElse(capacityPhysicalQueue),
+          numVirtualServers =
+            legacy.numVirtualServers.getOrElse(numVirtualServers),
+          capacityVirtualQueue =
+            legacy.capacityVirtualQueue.getOrElse(capacityVirtualQueue),
+          capacityPhysicalQueue =
+            legacy.capacityPhysicalQueue.getOrElse(capacityPhysicalQueue),
           portWidth = legacy.portWidth.getOrElse(portWidth)
         )
       }
     } else this
-    selected.copy(
-      useNewArgumentNotifier = profile.usesCachedArgumentServer,
-      // Recycling observes resolutions inside the cached argument server, so the
-      // legacy notifier simply cannot feed it. Drop it rather than fail: the same
-      // descriptors are built under both profiles.
-      enableContinuationRecycling =
-        enableContinuationRecycling && profile.usesCachedArgumentServer,
-      legacyOverrides = None
-    ).normalized
+    selected
+      .copy(
+        useNewArgumentNotifier = profile.usesCachedArgumentServer,
+        enableContinuationRecycling =
+          enableContinuationRecycling && profile.usesCachedArgumentServer,
+        legacyOverrides = None
+      )
+      .normalized
   }
 }
 
@@ -311,7 +265,6 @@ case class TaskDescriptor(
     isCont: Boolean,
     dynamicMemAlloc: Boolean,
     numProcessingElements: Int,
-    // Drive the HLS PE's ap_none `peIndex` input with its physical PE-array index.
     injectPeIndex: Boolean = false,
     peIndexBits: Int = 0,
     widthTask: Int,
@@ -320,65 +273,22 @@ case class TaskDescriptor(
     sidesConfigs: List[SideConfig],
     var mgmtBaseAddresses: MemSystemDescriptor = MemSystemDescriptor(),
     spawnServersCount: Int = 0, // Defaulted
-    // Per-SpawnerServer on-chip taskQueue depth. Sizes the outside-spawn injection
-    // buffer on this task's local ring. Smaller depths backpressure the upstream
-    // spawner (and, through it, the injecting PE) sooner -> fewer tasks outstanding
-    // -> tighter cache working set. Default preserves the historical hardcoded 16.
     spawnerQueueDepth: Int = 16,
-    // Depth of this task's co-located spawnNext write buffer -- the staging queue
-    // that holds each released child task pending its closure write + argument-
-    // notifier metadata assignment. VCD-measured as the dominant reservoir of
-    // outstanding child (e.g. memReader) tasks; shrinking it backpressures the
-    // spawning PE sooner and caps how many children (and downstream continuations)
-    // are in flight. Default 128 preserves the historical WriteBufferCounter depth.
     spawnNextWriteBufferDepth: Int = 128,
     hasAXI: Boolean = true,
-    // When true, every PE instance of this task gets its OWN reserved HBM port
-    // for its main compute master (m_axi_gmem) -- never muxed with any other
-    // master. One port per PE instance. Use for bandwidth-critical PEs (e.g.
-    // countDecoupled's memReader) so they are never throttled by port sharing.
     dedicatedAxiPort: Boolean = false,
-    // Tri-state RAMA override for every PE instance's main m_axi_gmem master:
-    // omitted/None -> inherit the command-line RAMA mode
-    // false        -> never attach RAMA
-    // true         -> always attach RAMA (striped only with --rama-striping)
     generateRAMA: Option[Boolean] = None,
-    // When > 0, the main compute masters (m_axi_gmem) of ALL this task's PE
-    // instances are CONSOLIDATED onto exactly this many reserved HBM ports,
-    // regardless of the PE count. The reserved port(s) form a flat mux carrying
-    // only these masters (each keeps a fair 1/k share) and are never re-muxed
-    // with unrelated masters. Use for PEs whose main port fires rarely (e.g.
-    // countDecoupled's taskInitiator reentry, which only writes on "done").
-    // Mutually exclusive with dedicatedAxiPort.
     totalAxiPorts: Int = 0,
-    participatesInLock: Boolean =
-      false, // Whether this task's PEs get lock req/resp lanes
+    participatesInLock: Boolean = false,
     lockPorts: Int = 1,
     isAIE: Boolean = false,
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
-    // The PE re-enters its own ring through a `spawnNextLocal` port instead of
-    // `taskOut`. Both carry a task to this task's local scheduler queue, but
-    // `taskOut` is one of the streams the spawnNext write buffer gates: it is
-    // released by an allow count in a spawnNext packet, which is what a recursive
-    // task wants when its children carry the continuation it just allocated.
-    // `spawnNextLocal` is the path for a re-entry that allocates nothing -- it
-    // waits on no closure, so it goes straight through with no buffer at all.
-    // Requires the task to appear in its own spawnList, which is the edge it
-    // takes over from `taskOut`.
     spawnNextLocal: Boolean = false,
     argumentSizeList: List[Int] = List(),
-    // Width of the aligned payload-slot selector carried by argOut when its
-    // target uses NewArgumentNotifier.  It is intentionally explicit in JSON,
-    // but FullSysGenDescriptor.validate derives the required value and rejects
-    // any mismatch.  A full-continuation payload has zero offset bits and omits
-    // the field from the physical packet.
     argumentOffsetWidth: Option[Int] = None,
-    // Payload width stored by the no-cache argDataOut write buffer. This applies
-    // to both updated-no-cache and legacy-2469686 builds. It is independent from
-    // argumentSizeList, which describes cached update payloads.
     argumentWriteDataWidth_NoCache: Int = 0,
-    taskId: Int = 0, // Defaulted
+    taskId: Int = 0,
     peHDLVariants: Map[String, String] = Map.empty,
     legacyOverrides: Option[LegacyTaskOverrides] = None
 ) {
@@ -399,17 +309,20 @@ case class TaskDescriptor(
     val argumentKey = profile.argumentServer.cliName
     val selectedPath =
       if (peHDLVariants.isEmpty) peHDLPath
-      else peHDLVariants.getOrElse(
-        argumentKey,
-        throw new IllegalArgumentException(
-          s"Task '$name': peHDLVariants is mode-specific but has no '$argumentKey' path"
+      else
+        peHDLVariants.getOrElse(
+          argumentKey,
+          throw new IllegalArgumentException(
+            s"Task '$name': peHDLVariants is mode-specific but has no '$argumentKey' path"
+          )
         )
-      )
     val selected = if (profile.isLegacy) {
       legacyOverrides.fold(this) { legacy =>
         copy(
-          spawnServersCount = legacy.spawnServersCount.getOrElse(spawnServersCount),
-          spawnerQueueDepth = legacy.spawnerQueueDepth.getOrElse(spawnerQueueDepth)
+          spawnServersCount =
+            legacy.spawnServersCount.getOrElse(spawnServersCount),
+          spawnerQueueDepth =
+            legacy.spawnerQueueDepth.getOrElse(spawnerQueueDepth)
         )
       }
     } else this
@@ -418,9 +331,6 @@ case class TaskDescriptor(
       generateArgOutWriteBuffer = selected.generateArgOutWriteBuffer ||
         (!profile.usesCachedArgumentServer && selected.argumentWriteDataWidth_NoCache > 0),
       sidesConfigs = selected.sidesConfigs.map(_.resolved(profile)),
-      // Address assignment mutates this legacy container during elaboration.
-      // Give the resolved build its own instance so the parsed source descriptor
-      // remains reusable for another profile in the same JVM.
       mgmtBaseAddresses = MemSystemDescriptor(),
       peHDLVariants = Map.empty,
       legacyOverrides = None
@@ -447,10 +357,6 @@ case class TaskDescriptor(
     sidesConfigs.foreach(_.validate())
 
     getSideConfig("scheduler").foreach { scheduler =>
-      // The scheduler's HBM ring stores whole tasks, but a task may be wider than
-      // the port that carries it: the server then moves it as widthTask/portWidth
-      // consecutive beats. A burst must still hold a whole number of tasks, hence
-      // the power-of-two divisor and the cap at the server's 16-beat burst.
       require(
         widthTask % scheduler.portWidth == 0,
         s"Task '$name': widthTask=$widthTask must be a whole number of " +
@@ -537,12 +443,6 @@ case class TaskDescriptor(
       )
     }
 
-    // A scheduler server is the HBM-backed virtual queue that seeds/persists a
-    // task's tasks. Root tasks are seeded by the host into that backing store, so
-    // they REQUIRE at least one. A non-root task is fed purely by spawn/outside-
-    // spawn and can run with zero scheduler servers: its local ring + spawner hold
-    // and backpressure all in-flight work (no HBM spill), which is exactly what we
-    // want on hot rings like countDecoupled's memReader.
     require(
       getNumServers("scheduler") > 0 || !isRoot,
       s"Task '$name': only root tasks may omit scheduler servers (isRoot=true needs > 0)"
@@ -741,7 +641,8 @@ case class FullSysGenDescriptor(
       // Both ports land on the same per-PE local queue; they differ only in
       // whether the spawnNext write buffer holds the task back until a closure
       // write lands. See TaskDescriptor.spawnNextLocal.
-      val selfSpawnPort = if (task.spawnNextLocal) "spawnNextLocal" else "taskOut"
+      val selfSpawnPort =
+        if (task.spawnNextLocal) "spawnNextLocal" else "taskOut"
       val selfSpawnedConnections = (0 until selfSpawnedCount(task.name)).map {
         i =>
           ConnectionDescriptor(
@@ -752,10 +653,6 @@ case class FullSysGenDescriptor(
           )
       }
 
-      // Number global spawn inputs PE-major: all output ports from PE 0, then
-      // all output ports from PE 1, and so on. This keeps duplicated targets
-      // (for example two memReader launches per reentry PE) adjacent at the
-      // destination scheduler.
       val globalSpawnedTasks = spawnedTasks.filterNot(_ == task.name)
       val spawnedConnections =
         (0 until task.numProcessingElements).flatMap { i =>
@@ -848,7 +745,9 @@ case class FullSysGenDescriptor(
     taskDescriptors.map(_.getNumServers("scheduler")).sum + taskDescriptors
       .map(_.getNumServers("memoryAllocator"))
       .sum + taskDescriptors.map(_.getNumServers("allocator")).sum +
-      (if (resolvedArchitecture == "legacy") taskDescriptors.map(_.spawnServersCount).sum else 0) +
+      (if (resolvedArchitecture == "legacy")
+         taskDescriptors.map(_.spawnServersCount).sum
+       else 0) +
       {
         if (mFPGASynth || mFPGASimulation) 1 else 0
       } +
@@ -950,8 +849,6 @@ case class FullSysGenDescriptor(
 
     require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
 
-    // spawnNextLocal takes over the task's self-spawn edge, so there has to be
-    // one. Without this the port would elaborate and connect to nothing.
     taskDescriptors.filter(_.spawnNextLocal).foreach { task =>
       require(
         spawnList.getOrElse(task.name, Nil).contains(task.name),
@@ -960,11 +857,6 @@ case class FullSysGenDescriptor(
       )
     }
 
-    // A NewArgumentNotifier update is a compact OR payload plus an aligned
-    // payload-slot selector.  Every source feeding one target shares the same
-    // physical packet type, so both widths must agree.  Keeping the selector
-    // width explicit in JSON makes the ABI visible while these checks prevent
-    // it from drifting away from the continuation/payload geometry.
     taskDescriptors.filter(_.usesNewArgumentNotifier).foreach { target =>
       val sources = taskDescriptors.filter(source =>
         sendArgumentList.getOrElse(source.name, Nil).contains(target.name)
@@ -1034,7 +926,6 @@ case class FullSysGenDescriptor(
 
     }
 
-    // No task may opt into locking unless a lockConfig is present to serve it.
     if (lockConfig.isEmpty) {
       val orphans = taskDescriptors.filter(_.participatesInLock).map(_.name)
       require(
@@ -1054,9 +945,7 @@ case class FullSysGenDescriptor(
         lc.N % (2 * lc.P) == 0,
         "lockConfig.N must be a multiple of 2*P (AMU bucketing)"
       )
-      // N must equal the total number of lock-participating PE lanes. A task opts in
-      // via participatesInLock=true; each of its PEs gets one lane. For BFS only
-      // the helper participates: 16 helper PEs = 16 lanes.
+
       val lockLanes = taskDescriptors
         .filter(_.participatesInLock)
         .map(x => x.numProcessingElements * x.lockPorts)
@@ -1075,83 +964,130 @@ case class FullSysGenDescriptor(
     // references. Port existence and NewArgumentNotifier vector bounds are
     // re-checked at elaboration when the corresponding modules exist.
     watcherConfig.foreach { wc =>
-      require(wc.statusSlots.nonEmpty, "watcherConfig.statusSlots must not be empty")
+      require(
+        wc.statusSlots.nonEmpty,
+        "watcherConfig.statusSlots must not be empty"
+      )
       require(
         wc.statusSlots.size <= 22,
         s"watcherConfig.statusSlots has ${wc.statusSlots.size} entries; the 88-bit STATUS field holds at most 22"
       )
       wc.statusSlots.zipWithIndex.foreach { case (slot, slotIndex) =>
-        require(slot.fields.nonEmpty,
-          s"watcher status slot $slotIndex must contain at least one field")
+        require(
+          slot.fields.nonEmpty,
+          s"watcher status slot $slotIndex must contain at least one field"
+        )
         def encodingWidth(encoding: String): Int = encoding match {
-          case "boolean1" => 1
+          case "boolean1"    => 1
           case "readyValid2" => 2
-          case other => throw new IllegalArgumentException(
-            s"watcher status slot $slotIndex has unknown encoding '$other' (expected boolean1 or readyValid2)")
+          case other         =>
+            throw new IllegalArgumentException(
+              s"watcher status slot $slotIndex has unknown encoding '$other' (expected boolean1 or readyValid2)"
+            )
         }
         val packedWidth = slot.fields.map(f => encodingWidth(f.encoding)).sum
-        require(packedWidth <= 4,
-          s"watcher status slot $slotIndex packs $packedWidth bits; a physical slot holds 4")
+        require(
+          packedWidth <= 4,
+          s"watcher status slot $slotIndex packs $packedWidth bits; a physical slot holds 4"
+        )
 
         slot.fields.zipWithIndex.foreach { case (field, fieldIndex) =>
           val target = field.target
           val task = taskDescriptors.find(_.name == target.taskName)
           target.kind match {
             case "pe" =>
-              require(field.encoding == "readyValid2",
-                s"watcher slot $slotIndex field $fieldIndex PE targets require readyValid2")
-              require(task.nonEmpty,
-                s"watcher slot $slotIndex field $fieldIndex references unknown PE task '${target.taskName}'")
-              require(target.index >= 0 && target.index < task.get.numProcessingElements,
-                s"watcher slot $slotIndex field $fieldIndex PE index ${target.index} is outside ${target.taskName}[0,${task.get.numProcessingElements})")
-              require(target.port.nonEmpty,
-                s"watcher slot $slotIndex field $fieldIndex PE target requires port")
+              require(
+                field.encoding == "readyValid2",
+                s"watcher slot $slotIndex field $fieldIndex PE targets require readyValid2"
+              )
+              require(
+                task.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references unknown PE task '${target.taskName}'"
+              )
+              require(
+                target.index >= 0 && target.index < task.get.numProcessingElements,
+                s"watcher slot $slotIndex field $fieldIndex PE index ${target.index} is outside ${target.taskName}[0,${task.get.numProcessingElements})"
+              )
+              require(
+                target.port.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex PE target requires port"
+              )
 
             case "schedulerServer" =>
-              require(field.encoding == "boolean1",
-                s"watcher slot $slotIndex field $fieldIndex schedulerServer targets require boolean1")
-              require(target.signal == "congested",
-                s"watcher slot $slotIndex field $fieldIndex schedulerServer signal must be congested")
-              require(task.nonEmpty,
-                s"watcher slot $slotIndex field $fieldIndex references unknown scheduler task '${target.taskName}'")
+              require(
+                field.encoding == "boolean1",
+                s"watcher slot $slotIndex field $fieldIndex schedulerServer targets require boolean1"
+              )
+              require(
+                target.signal == "congested",
+                s"watcher slot $slotIndex field $fieldIndex schedulerServer signal must be congested"
+              )
+              require(
+                task.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references unknown scheduler task '${target.taskName}'"
+              )
               val n = task.get.getNumServers("scheduler")
-              require(target.index >= 0 && target.index < n,
-                s"watcher slot $slotIndex field $fieldIndex scheduler index ${target.index} is outside ${target.taskName}[0,$n)")
+              require(
+                target.index >= 0 && target.index < n,
+                s"watcher slot $slotIndex field $fieldIndex scheduler index ${target.index} is outside ${target.taskName}[0,$n)"
+              )
 
             case "slowUpdateHandler" | "evictionSaver" | "argumentServer" =>
-              require(field.encoding == "readyValid2",
-                s"watcher slot $slotIndex field $fieldIndex ${target.kind} targets require readyValid2")
-              require(task.nonEmpty,
-                s"watcher slot $slotIndex field $fieldIndex references unknown argument task '${target.taskName}'")
+              require(
+                field.encoding == "readyValid2",
+                s"watcher slot $slotIndex field $fieldIndex ${target.kind} targets require readyValid2"
+              )
+              require(
+                task.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references unknown argument task '${target.taskName}'"
+              )
               val side = task.get.getSideConfig("argumentNotifier")
-              require(side.nonEmpty,
-                s"watcher slot $slotIndex field $fieldIndex references task '${target.taskName}' without an argumentNotifier side")
+              require(
+                side.nonEmpty,
+                s"watcher slot $slotIndex field $fieldIndex references task '${target.taskName}' without an argumentNotifier side"
+              )
               // Cached-only observer fields retain their physical slot in
               // no-cache/legacy builds and are tied to zero at elaboration.
               // Bounds that describe cached hardware are therefore meaningful
               // only when that hardware is selected.
               if (task.get.usesNewArgumentNotifier) target.kind match {
                 case "slowUpdateHandler" =>
-                  require(target.port == "input",
-                    s"watcher slowUpdateHandler port must be input")
-                  require(target.index >= 0 && target.index < side.get.slowArgumentHandlerCount,
-                    s"watcher slowUpdateHandler index ${target.index} is outside ${target.taskName}[0,${side.get.slowArgumentHandlerCount})")
+                  require(
+                    target.port == "input",
+                    s"watcher slowUpdateHandler port must be input"
+                  )
+                  require(
+                    target.index >= 0 && target.index < side.get.slowArgumentHandlerCount,
+                    s"watcher slowUpdateHandler index ${target.index} is outside ${target.taskName}[0,${side.get.slowArgumentHandlerCount})"
+                  )
                 case "evictionSaver" =>
-                  require(target.port == "input",
-                    s"watcher evictionSaver port must be input")
-                  require(target.index >= 0 && target.index < side.get.cacheEvictionSaverCount,
-                    s"watcher evictionSaver index ${target.index} is outside ${target.taskName}[0,${side.get.cacheEvictionSaverCount})")
+                  require(
+                    target.port == "input",
+                    s"watcher evictionSaver port must be input"
+                  )
+                  require(
+                    target.index >= 0 && target.index < side.get.cacheEvictionSaverCount,
+                    s"watcher evictionSaver index ${target.index} is outside ${target.taskName}[0,${side.get.cacheEvictionSaverCount})"
+                  )
                 case "argumentServer" =>
-                  require(target.port == "fastSpawn",
-                    s"watcher argumentServer port must be fastSpawn")
-                  require(target.index >= 0 && target.index < side.get.numVirtualServers,
-                    s"watcher argumentServer index ${target.index} is outside ${target.taskName}[0,${side.get.numVirtualServers})")
-                  require(target.lane >= 0 && target.lane < side.get.newContinuationLanesPerServer,
-                    s"watcher argumentServer lane ${target.lane} is outside [0,${side.get.newContinuationLanesPerServer})")
+                  require(
+                    target.port == "fastSpawn",
+                    s"watcher argumentServer port must be fastSpawn"
+                  )
+                  require(
+                    target.index >= 0 && target.index < side.get.numVirtualServers,
+                    s"watcher argumentServer index ${target.index} is outside ${target.taskName}[0,${side.get.numVirtualServers})"
+                  )
+                  require(
+                    target.lane >= 0 && target.lane < side.get.newContinuationLanesPerServer,
+                    s"watcher argumentServer lane ${target.lane} is outside [0,${side.get.newContinuationLanesPerServer})"
+                  )
               }
 
-            case other => throw new IllegalArgumentException(
-              s"watcher slot $slotIndex field $fieldIndex has unknown target kind '$other'")
+            case other =>
+              throw new IllegalArgumentException(
+                s"watcher slot $slotIndex field $fieldIndex has unknown target kind '$other'"
+              )
           }
         }
       }

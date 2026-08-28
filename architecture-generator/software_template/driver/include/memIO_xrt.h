@@ -2,9 +2,6 @@
 #include <memIO.h>
 #include <rama_striping.h>
 
-// hardCilkDriver.h includes THIS header, so it cannot be included back here.
-// Long-running memory operations still need to be interruptible, so the one bit
-// they need is forwarded through this shim (defined in hardCilkDriver.cpp).
 namespace hardcilk_interrupt
 {
 bool stopRequested();

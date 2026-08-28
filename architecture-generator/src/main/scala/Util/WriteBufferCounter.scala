@@ -19,7 +19,7 @@ class WriteBufferCounterConfig(
     val wId: Int = 6,
     val bufferDepth: Int = 128,
     // When true, replace the rotating-ID WriteROB with a single-ID pass-through
-    // (WriteROBBypass). Experiment toggle; default false => unchanged RTL.
+    // (WriteROBBypass).
     val bypassRob: Boolean = false,
     val externalWriteSink: Boolean = false,
     val releaseMetadataWidth: Int = 0,
@@ -87,9 +87,6 @@ class WriteBufferCounter(
   private val robCfgOut = cfgAxi.copy(read = false)
   private val m_axi_single_id = Wire(axi4.Master(cfg = robCfgIn))
 
-  // Rotating-ID reorder buffer, or (experiment) a single-ID pass-through. Both
-  // present the identical from_master/to_slave IO, so the surrounding wiring and
-  // the one-token-per-write release logic below are untouched either way.
   if (externalWriteSink) {
     m_axi_single_id.asFull.aw :=> m_axi.asFull.aw
     m_axi_single_id.asFull.w :=> m_axi.asFull.w

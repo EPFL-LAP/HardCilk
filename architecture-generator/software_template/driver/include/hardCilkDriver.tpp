@@ -73,11 +73,6 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             // Log which task is being initialized
             printf("Initializing task %s\n", taskDescriptor.name.c_str());
 
-            // Split the root tasks across ALL of this task's scheduler servers
-            // (not just the first) so every steal-ring injection point is seeded
-            // from cycle 0 -- otherwise the servers/PEs downstream of the sole
-            // seeded server starve until work migrates around the steal ring.
-            // Contiguous split: servers [0, remainder) get one extra task.
             std::vector<HardCilkManagementServer> schedulerServers;
             std::vector<HardCilkManagementServer> queueServers;
             if (buildDescriptor_.loaded) {
@@ -143,15 +138,6 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                         scheduler_capacity = physical_capacity;
                     }
                 }
-                // Expand the initial backing-store size. A mid-run resize copies +
-                // zeroes the queue inside the timed execution window, which hurts
-                // timing; provisioning extra headroom up front avoids most resizes.
-                // HW already starts from the large virtual queue, so 2x is enough.
-                // hw_emu intentionally starts from the smaller physical queue to
-                // avoid huge zero-fills, so pre-apply several resize doublings at
-                // init time instead of servicing the queue mid-run. This is still
-                // tiny for emu-sized physical queues (e.g. memReader 64 -> 1024
-                // entries) and remains capped by the virtual queue size.
                 scheduler_capacity =
                     is_emulation
                         ? std::min<uint64_t>(scheduler_capacity * 16,
@@ -178,13 +164,6 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 {
                     uint64_t queueBytes = scheduler_capacity * taskDescriptor.widthTask/8;
                     uint64_t paddedQueueBytes = roundUpSchedulerWrite(queueBytes);
-                    // HARDCILK_SKIP_SCHED_ZEROFILL=1 skips this when device memory is
-                    // already known-zero. A simulation memory model powers up zeroed,
-                    // so the stale-slot hazard above cannot occur there -- unlike a
-                    // real card, where xrt-smi reset leaves HBM untouched. Under RTL
-                    // co-simulation the fill is thousands of 4 KB DPI transactions and
-                    // dominates setup time, so it is worth skipping; on hardware leave
-                    // it on (the default).
                     static const bool skipZeroFill = [] {
                         const char *v = std::getenv("HARDCILK_SKIP_SCHED_ZEROFILL");
                         return v && v[0] == '1';
@@ -231,11 +210,6 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 if (isScheduler) ++schedulerServerIndex;
             }
             if(taskDescriptor.isRoot && !no_base_task){
-                // Seed EVERY scheduler server with its contiguous slice of the
-                // root tasks (see the rootShareOf/rootStartOf split above), so
-                // all steal-ring injection points -- and hence all initiator PEs
-                // -- have work from cycle 0. Each server writes to its own backing
-                // queue (raddr) and sets its own fifoTail/currLen to its share.
                 uint64_t seedServerIndex = 0;
                 for(const auto &runtimeServer : rootSeedServers){
                     const uint64_t share = rootShareOf(seedServerIndex);
@@ -282,21 +256,10 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             for(const auto &runtimeServer : allocationServers){
                 const uint64_t base_address = runtimeServer.baseAddress;
                 const bool recycling = taskDescriptor.recyclesContinuations();
-                // The runtime descriptor wins. The sidecar's queueCapacity is
-                // frozen from the JSON at build time, so taking max() of the two
-                // silently floors the pool at the JSON value -- which defeats a
-                // host that deliberately sized it DOWN (e.g. countDecoupled's
-                // --closure-pool, used to prove recycling actually recycles). In
-                // normal operation the runtime value is already the larger of the
-                // two, so this changes nothing.
                 uint64_t allocator_capacity =
                     taskDescriptor.getCapacityVirtualQueue("allocator") != 0
                         ? taskDescriptor.getCapacityVirtualQueue("allocator")
                         : runtimeServer.queueCapacity;
-                // A recycling pool is circular, and the read pointer moves a whole
-                // burst at a time, so the region has to be an exact number of
-                // bursts or the wrap would land mid-burst. Round down: the few
-                // spare closures are cheaper than a misaligned FIFO.
                 if (recycling)
                 {
                     const uint64_t rounded =
@@ -315,18 +278,13 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 }
                 const uint64_t continuation_entry_bytes = taskDescriptor.widthTask / 8;
 
-                // Continuations are indirect through this address list. In HBM
-                // distribution mode the FIFO is interleaved across bank-local
-                // blocks, so consecutive allocations land on different 512 MB
-                // pseudo-channel windows instead of marching through one bank.
+                
                 std::vector<uint64_t> addresses = allocateContinuationAddressPool(
                     taskDescriptor, base_address, allocator_capacity,
                     continuation_entry_bytes, fpgaId);
 
                 uint64_t continuation_queue_bytes = packedAllocatorAddressBytes(allocator_capacity, descriptor.widthAddress);
-                // Region key pins the allocator FIFO to its own read port's bank, so
-                // the allocator's read never traverses the crossbar laterally (which
-                // is what queued it behind the closure writes in the earlier freeze).
+                
                 uint64_t continuation_queue_addr = allocateDriverWriteRegion(
                     continuation_queue_bytes, 512, "allocator address FIFO",
                     "alloc:" + taskDescriptor.name + ":" +
@@ -338,9 +296,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 
                 memory_->writeReg64(base_address + alloc_server_rpause_shift, 0xFFFFFFFFFFFFFFFF);
                 memory_->writeReg64(base_address + alloc_server_raddr_shift, continuation_queue_addr);
-                // Capacity must be programmed before the pause is released. Left at
-                // zero the pool is walked once and never wraps, which is exactly the
-                // non-recycling behaviour every other benchmark relies on.
+                
                 memory_->writeReg64(base_address + alloc_server_capacity_shift,
                                     recycling ? allocator_capacity : 0);
                 memory_->writeReg64(base_address + alloc_server_availableSize_shift, allocator_capacity);

@@ -52,23 +52,19 @@ class ClosureAllocatorAxiIO(
   */
 
 class Allocator(
-    addrWidth: Int,   // HBM address width (e.g. 34): read address + compact continuation packing
+    addrWidth: Int, // HBM address width (e.g. 34): read address + compact continuation packing
     peCount: Int,
     vcasCount: Int,
     queueDepth: Int,
     pePortWidth: Int, // output pointer width to the PE (e.g. 64); addresses zero-extended to it
-    // Number of resolution branches feeding freed addresses back in (every
-    // ArgumentServer spawn lane plus every SlowArgumentHandler). Zero disables
-    // recycling entirely and the allocator is exactly as it was: a one-shot
-    // pool the host refills on pause.
+    // Number of resolution branches feeding freed addresses back in. Zero disables
+    // recycling completely.
     recycleSourceCount: Int = 0
-) extends Module with AllocatorModule {
+) extends Module
+    with AllocatorModule {
 
   require(vcasCount >= 1 && peCount >= 1)
-  // HBM beat / task width; continuations pack at addrWidth - log2(memDataWidth/8)
-  // significant bits (closures are memDataWidth-bit aligned) -- see AllocatorServer.
-  // The distribution ring carries whole packed beats; each VCAS server has ONE
-  // injection leg and the per-PE BeatUnpackers do the unpacking at the edge.
+
   private val memDataWidth = 256
 
   val continuationNetwork = Module(
@@ -96,11 +92,6 @@ class Allocator(
       )
     )
 
-  // One AXI master per server, split at the port into an independent read half
-  // (allocation) and write half (recycling). They run concurrently on their own
-  // channels: the free list keeps a head/tail gap and a recycled beat only
-  // becomes readable on its B response, so no read-after-write ordering is
-  // needed between them.
   val vcasRvmRO = Seq.fill(vcasCount)(
     Module(
       new AllocatorAXIAdapter(
@@ -138,7 +129,7 @@ class Allocator(
   // ---- Continuation recycling -------------------------------------------------
   // Freed addresses are packed into beats at each resolution branch, ride a
   // closed ring, and are written back into a server's own region through the
-  // write half of that server's port. No extra AXI ports.
+  // write half of that server's port.
   override val io_recycle =
     if (enableRecycling)
       Some(IO(Vec(recycleSourceCount, Flipped(Valid(UInt(addrWidth.W))))))

@@ -3,13 +3,6 @@ package Allocator
 import chisel3._
 import chisel3.util._
 
-// PE tap unit of the allocator address ring.
-//
-// This is a registered shift-register stage (like SchedulerNetworkDataUnit): it
-// carries an (address, valid) pair one hop around the closed ring each cycle.
-// When a valid address passes and the local PE can accept it, the address is
-// tapped off to the PE and the slot is cleared; otherwise it is passed along so
-// it can circulate to another PE.
 class AllocatorNetworkUnitIO(addrWidth: Int) extends Bundle {
   val addressIn = Input(UInt(addrWidth.W))
   val validIn = Input(Bool())

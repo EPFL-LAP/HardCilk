@@ -186,7 +186,6 @@ class SchedulerClient(
     require(io.connQ.isEmpty, "DO NOT INSTANTIATE A DEQUE")
     require(io.toPE.isDefined)
 
-    // Instantiate Queue and other variables
     val taskQueue = Module(
       new Queue(UInt(taskWidth.W), queueMaxLength)
     )
@@ -196,13 +195,6 @@ class SchedulerClient(
       case x => Some(Module(new Queue(UInt(taskWidth.W), x)))
     }
     // 32 bits, not log2Ceil(queueMaxLength * 2 + 1) + 1.
-    //
-    // The old width was sized as though desiredSteals were bounded by the queue, which held only
-    // while every arrival was one-for-one with a request we had sent. The spawner now floods the
-    // ring, so a task can land here that we never asked for: each one is a free +1 through peDidPop
-    // with no matching send to spend it. At the old 6 bits (signed, -32..+31) that walks off the
-    // top after ~31 net unrequested arrivals, wraps to -32, and the client stops asking for the
-    // rest of the run -- the exact silent death this whole change exists to remove.
     val countWidth = 32
 
     // At the start, we want to fill up to the min steal threshold. We only pull
@@ -321,26 +313,6 @@ class SchedulerClient(
       serveCredits := serveCredits - 1.U
     }
 
-    // desiredSteals counts how many steal requests we still want to put on the ring. It moves on
-    // exactly two events, and taking a task off the network is NOT one of them:
-    //
-    //   -1  when we successfully inject a steal request  (that slot is now spoken for)
-    //   +1  when a task leaves our queue                 (that slot needs filling again)
-    //
-    // Every wanted slot is then in exactly one of three places -- still to be asked for
-    // (desiredSteals), asked for (a token on the ring), or on its way (a task on the ring):
-    //
-    //   sum of (minLengthThresh - count) = sum of desiredSteals + tokensOnRing + tasksOnRing
-    //
-    // and an arrival moves a slot from "task on the ring" into our queue, dropping both sides by one
-    // on their own. So the counter must not move, and the sum holds no matter which node ends up
-    // taking which task.
-    //
-    // This used to decrement when the arriving task answered somebody else's request, which burns
-    // two credits for one delivered task -- the requester already spent its own when it sent. The
-    // sum then drifts by one on every such arrival, monotonically. Measured on hw_emu: all eight
-    // adder clients reached zero with EMPTY queues and stopped asking, the ring emptied at cycle
-    // ~40000, and 18 tasks sat undeliverable for the remaining 35000 cycles.
     val ringNet =
       Mux(stealReqConsumedThisCycle, 1.S(countWidth.W), 0.S(countWidth.W)) -
         Mux(stealReqSentThisCycle, 1.S(countWidth.W), 0.S(countWidth.W))

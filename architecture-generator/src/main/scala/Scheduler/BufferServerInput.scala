@@ -16,8 +16,6 @@ class BufferServerInput(taskWidth: Int) extends Module {
 
   val tinyQueueFromBuffer = Module(new Queue(UInt(taskWidth.W), 1, pipe = true))
 
-  // Connect the buffer queue to the buffer so it thinks it looks like the network
-
   io.connTaskSource.data.availableTask.bits := DontCare
   io.connTaskSource.data.availableTask.valid := false.B
   tinyQueueFromBuffer.io.enq.bits := io.connTaskSource.data.qOutTask.bits

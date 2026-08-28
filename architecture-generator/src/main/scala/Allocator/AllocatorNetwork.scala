@@ -3,23 +3,16 @@ package Allocator
 import chisel3._
 import chisel3.util._
 
-class AllocatorNetworkIO(beatWidth: Int, pePortWidth: Int, peCount: Int, vcasCount: Int)
-    extends Bundle {
+class AllocatorNetworkIO(
+    beatWidth: Int,
+    pePortWidth: Int,
+    peCount: Int,
+    vcasCount: Int
+) extends Bundle {
   val connVCAS = Vec(vcasCount, Flipped(DecoupledIO(UInt(beatWidth.W))))
   val connPE = Vec(peCount, DecoupledIO(UInt(pePortWidth.W)))
 }
 
-// Beat-granularity allocator distribution ring.
-//
-// The ring slots carry whole packed HBM beats (numPackedPerBeat continuation
-// addresses each), NOT individual addresses. Each VCAS injection leg feeds raw
-// beats straight from its server's read FIFO; each PE tap grabs one whole beat
-// when its local BeatUnpacker has room and unpacks it privately at the PE's own
-// drain rate. One leg sustains 1 beat/cycle = numPackedPerBeat addresses/cycle
-// aggregate, and a flat-out PE only needs a beat every numPackedPerBeat cycles,
-// so the taps' first-come-first-served greed is rate-capped by construction and
-// no tap can starve the ones behind it (the old 1-address slots let an upstream
-// PE swallow the whole stream).
 class AllocatorNetwork(
     beatWidth: Int,
     sysAddressWidth: Int,
@@ -37,7 +30,9 @@ class AllocatorNetwork(
   private val beatQueueDepth =
     ((queueDepth + numPackedPerBeat - 1) / numPackedPerBeat).max(2)
 
-  val io = IO(new AllocatorNetworkIO(beatWidth, pePortWidth, peCount, vcasCount))
+  val io = IO(
+    new AllocatorNetworkIO(beatWidth, pePortWidth, peCount, vcasCount)
+  )
 
   val vcasNetworkUnits =
     Seq.fill(vcasCount)(Module(new AllocatorServerNetworkUnit(beatWidth)))

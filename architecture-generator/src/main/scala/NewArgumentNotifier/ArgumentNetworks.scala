@@ -10,39 +10,6 @@ import chext.elastic.ConnectOp._
 
 import Util._
 
-//Top-level routing for cache updates, evictions, slow memory updates and spawns.
-//
-// Internal networks:
-//  1. Update-redirect ring: an update that arrived at the wrong server
-//     (metadata server # mismatch) is injected here and circulates until the
-//     matching server taps it off on its extra (ring) update lane.
-//  2. Coupled slow-path FIFOs + EvictionGaters: each cache lane preserves the
-//     order between its evictions and missed updates; the per-server gater keeps
-//     one ordered completion fence PER EVICTION-SAVER LANE (see evictionSaverOf)
-//     to hold an update behind the retirement of its own line's eviction.
-//  3. Eviction cut/demux network: still-counting lines are address-demuxed
-//     across the CacheEvictionSaver lanes and written to HBM. A backpressured
-//     merge, NOT a ring -- a ring can let a same-source entry overtake an
-//     earlier one during a lap, reordering that source's writes and silently
-//     invalidating the per-lane completion fence above.
-//  4. Cut collection lines: released cache-missed updates terminate in one
-//     demux per cut and are sent to the SlowArgumentHandler owning the address.
-//
-// External connections:
-//  * s_axi_newCont  - one write-only AXI slave per continuation-source PE.
-//    Terminates the PE spawnNext write buffer in place of its WriteROB; the
-//    write becomes a cache insert at the statically attached server and the
-//    B response is the accept. m_continuation returns the compact line address
-//    and explicit (server #, id, lane) metadata captured at fire time.
-//  * s_update       - one compact OR-update packet per update-source PE:
-//    compact address, explicit metadata, a payload, and (for narrow payloads)
-//    an aligned payload-slot offset. It connects directly to PE argOut.
-//  * m_axi_slow / m_axi_evict - 1 AXI port per SlowArgumentHandler and 1 per
-//    CacheEvictionSaver; saver completions return metadata to the originating
-//    EvictionGater.
-//  * connStealNtw   - one spawner-network client per server and per slow
-//    handler (servers first), replacing the old ArgumentServer spawn path.
-
 case class ArgumentNetworksConfig(
     nServers: Int,
     /** Physical continuation-cache lanes per server. */
@@ -62,7 +29,7 @@ case class ArgumentNetworksConfig(
     continuationSize: Int,
     /** Width of the compact OR payload carried by PE argOut. */
     updatePayloadWidth: Int,
-    /** Width of the aligned payload-slot selector.  Must be exactly
+    /** Width of the aligned payload-slot selector. Must be exactly
       * log2(continuationSize / updatePayloadWidth); zero omits the field.
       */
     updateOffsetWidth: Int,
@@ -135,7 +102,8 @@ case class ArgumentNetworksConfig(
   require(lineAddressWidth >= 1)
 
   /** The 2048-bit continuation case is transferred as two 1024-bit beats. */
-  val memoryAxiDataWidth = if (continuationSize == 2048) 1024 else continuationSize
+  val memoryAxiDataWidth =
+    if (continuationSize == 2048) 1024 else continuationSize
 
   def metadataType =
     new ContinuationMetadata(serverTagWidth, serverIDWidth, laneWidth)
@@ -177,12 +145,6 @@ class RoutedContinuationUpdate(cfg: ArgumentNetworksConfig) extends Bundle {
   )
 }
 
-/** One registered stage of a closed ring (same shift-register style as the
-  * scheduler/allocator networks). A passing entry that `matches` is offered to
-  * `tap`; if the tap is not ready the entry keeps circulating. When the slot is
-  * (or becomes) empty, a pending `inject` entry fills it. Occupied slots always
-  * have priority so in-flight entries are never dropped.
-  */
 class ArgumentRingNode[T <: Data](gen: T, matches: T => Bool) extends Module {
   val io = IO(new Bundle {
     val dataIn = Input(gen)
@@ -343,13 +305,6 @@ class ArgumentCutDemuxNetwork[T <: Data](
   }
 }
 
-/** Replaces the WriteROB of a continuation-source PE's spawnNext
-  * WriteBufferCounter. The single-ID write master lands here instead of at the
-  * memory: each AW+W pair becomes a cache insert at the statically attached
-  * ArgumentServer, and the B response is returned when the server accepts. The
-  * compact line address and assigned metadata are captured in the fire cycle
-  * and emitted on `continuationOut`, one token per write.
-  */
 class NewContinuationBridge(cfg: ArgumentNetworksConfig, serverIndex: Int)
     extends Module {
   import cfg._
@@ -379,9 +334,6 @@ class NewContinuationBridge(cfg: ArgumentNetworksConfig, serverIndex: Int)
     }
   }
 
-  // The request, its B response and its metadata token fire in the SAME
-  // cycle: assignedId/assignedLane are only meaningful right when the server
-  // accepts (the head pointer moves on the next edge).
   private val bQ = Module(new Queue(Bool(), 4))
   private val continuationQ = Module(new Queue(referenceType, 4))
 
@@ -406,8 +358,7 @@ class NewContinuationBridge(cfg: ArgumentNetworksConfig, serverIndex: Int)
 }
 
 /** Adapts one completed-continuation lane to one independent scheduler-ring
-  * client. No arbitration belongs here: preserving one adapter per cache lane
-  * is what lets separately configured lanes enter the ring at different points.
+  * client.
   */
 class SpawnLaneAdapter(taskWidth: Int) extends Module {
   val io = IO(new Bundle {
@@ -445,20 +396,10 @@ class SpawnLaneAdapter(taskWidth: Int) extends Module {
 class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
   import cfg._
 
-  // ---- External connections ------------------------------------------------
-  /** Per continuation-source PE: terminates the spawnNext write buffer's
-    * single-ID master (the slot its WriteROB used to occupy).
-    */
   val s_axi_newCont = IO(Vec(nSourcePEs, axi4.Slave(cfgAxiNewCont)))
 
-  /** Per continuation-source PE: compact address plus explicit metadata for
-    * each accepted write, in write order, for tagging released child tasks.
-    */
   val m_continuation = IO(Vec(nSourcePEs, Decoupled(referenceType)))
 
-  /** Per update-source PE: one compact OR-update packet. This is intentionally
-    * not AXI; narrow payloads stay narrow through routing and arbitration.
-    */
   val s_update = IO(
     Vec(
       nUpdatePEs,
@@ -504,10 +445,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     )
   )
 
-  /** Spawner-network clients: one independent leg per ArgumentServer cache
-    * lane, followed by one independent leg per slow handler. Fast-lane index is
-    * `server * newLanesPerServer + lane`.
-    */
   private val nFastSpawnLegs = nServers * newLanesPerServer
   val connStealNtw = IO(
     Vec(
@@ -518,13 +455,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
 
   val done = IO(Output(Bool()))
 
-  /** Continuation addresses as they resolve, for the allocator's recycler. Same
-    * index convention as `connStealNtw`: fast lanes first, then slow handlers.
-    * Byte addresses, so the allocator needs none of this module's line-address
-    * geometry. Valid-only -- the recycler observes resolutions, never gates
-    * them, because backpressuring a spawn would stall the resolution credits
-    * and wedge the server.
-    */
   val resolvedAddresses =
     if (enableRecycling)
       Some(
@@ -536,9 +466,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       )
     else None
 
-  /** Observational ready/valid taps for the telemetry watcher. Each UInt is
-    * packed as {ready, valid}; these outputs never participate in flow control.
-    */
   val watcherSlowUpdates = IO(Output(Vec(nSlowHandlers, UInt(2.W))))
   val watcherEvictions = IO(Output(Vec(nEvictionSavers, UInt(2.W))))
   val watcherFastSpawns =
@@ -565,11 +492,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     )
   }
 
-  // ---- New-continuation path (replaces the spawnNext ROB) --------------------
-  // Each source owns one disjoint group of adjacent cache lanes within its
-  // statically selected server. The group-local pointer advances only when the
-  // server accepts the insertion, so a stalled Decoupled request cannot change
-  // its destination or the metadata captured by NewContinuationBridge.
   for (s <- 0 until nServers; source <- 0 until newSourcesPerServer) {
     val idx = s * newSourcesPerServer + source
     val laneBase = source * newLaneStripingFactor
@@ -615,7 +537,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     }
   }
 
-  // ---- Update path (replaces the argOut ROB + old notifier network) ----------
   private val updateRingNodes = Seq.tabulate(nServers) { s =>
     Module(
       new ArgumentRingNode(
@@ -659,11 +580,7 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
       direct.bits := out.bits
       wrong.valid := out.valid && !isLocal
       wrong.bits.upd := out.bits
-      // AXIS/HLS payload bits are don't-care while valid is low. In particular,
-      // the PE may drive metadata.server as X in RTL simulation while idle. Do
-      // not let that invalid routing key contaminate TREADY (and observational
-      // taps such as the watcher): an idle Decoupled input can always advertise
-      // ready. Valid packets still select exactly the same local/redirect sink.
+
       out.ready := !out.valid || Mux(isLocal, direct.ready, wrong.ready)
     }
 
@@ -707,11 +624,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     updateOffsetWidth
   )
 
-  // Address -> eviction-saver-lane function. MUST be the same function the
-  // eviction network below uses to physically route a write, so each gater's
-  // per-lane completion fence (EvictionGater) matches the lane order that
-  // actually retires. Not tied to the slow-handler count/demux: they are
-  // independent, each with its own demux (see slowNetwork below).
   private val evictSaverWidth = math.max(1, log2Ceil(nEvictionSavers))
   private def evictionSaverOf(address: UInt): UInt =
     if (nEvictionSavers == 1) 0.U(evictSaverWidth.W)
@@ -759,16 +671,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     watcherFastSpawns(s * newLanesPerServer + lane) :=
       Cat(spawn.ready, spawn.valid)
   }
-
-  // ---- Eviction network -> CacheEvictionSavers -------------------------------
-  // Order-preserving cut/demux network (same topology as the slow-update
-  // network below), NOT a ring: a ring lets a blocked entry recirculate a
-  // full lap while a later same-source entry slips through on a free lap,
-  // reordering that source's evictions -- which silently breaks the gater's
-  // completion fence (it assumes each lane's B responses retire in the order
-  // its evictions were accepted). A backpressured merge preserves per-source
-  // order into each sink, matching what EvictionGater's per-lane fence
-  // requires.
 
   val evictionSavers = Seq.tabulate(nEvictionSavers) { k =>
     val saver = Module(
@@ -822,8 +724,7 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
   }
 
   // Each server gater contributes one source. Sources are split into cutCount
-  // collection lines; each line ends in one address demux, exactly like the
-  // old ArgumentNotifierNetwork.
+  // collection lines; each line ends in one address demux.
   private val slowNetwork = Module(
     new ArgumentCutDemuxNetwork(
       slowType,
@@ -854,12 +755,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     )
   }
 
-  // Saver B responses return the compact key to the gater belonging to the
-  // originating server, on the writeCompleted(saverIndex) lane matching the
-  // saver that produced it. No arbitration needed: a completion belongs to
-  // exactly one (server, lane) pair, and every gater lane is always-ready
-  // (see EvictionGater), so this path can never contend with or be blocked
-  // by the coupled FIFO.
   for (saverIndex <- 0 until nEvictionSavers) {
     val saver = evictionSavers(saverIndex)
     val owner = saver.io.writeCompleted.bits.server
@@ -872,7 +767,6 @@ class ArgumentNetworks(val cfg: ArgumentNetworksConfig) extends Module {
     }
   }
 
-  // ---- Spawn path (replaces the old notifier-to-spawner connection) ----------
   private val doneReg = RegInit(false.B)
   done := doneReg
 

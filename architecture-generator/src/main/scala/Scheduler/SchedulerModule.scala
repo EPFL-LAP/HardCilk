@@ -5,11 +5,6 @@ import chext.amba.axi4
 import chext.amba.axi4s
 import Util.SchedulerNetworkClientIO
 
-/** Stable top-level scheduler surface shared by the updated and commit-2469686
-  * implementations. The legacy implementation deliberately supports the
-  * single-FPGA datapath only; generator validation rejects legacy global-start
-  * and legacy mFPGA before elaboration.
-  */
 trait SchedulerModule extends Module {
   val taskWidth: Int
   val peCount: Int

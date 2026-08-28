@@ -5,43 +5,51 @@ import chext.amba.axi4
 
 import scala.collection.immutable.SeqMap
 
-/** Blackbox for the free-running `watcher` telemetry kernel (memAccess.cpp).
+/** Blackbox for the free-running `watcher` telemetry kernel (memAccess.cpp). AI
+  * generated to match HLS
   *
   * The generic [[VitisModuleFactory.parseVitisModule]] only recovers
-  * `m_axi_gmem`, AXIS `*_TDATA` ports and the `ap_*` handshake, so it cannot see
-  * the watcher's scalar status / bandwidth pins. We declare the port list
-  * explicitly here to match the synthesized `watcher.v` (Vivado IP flow, NOT the
-  * vitis kernel flow, so `ap_ctrl_none` + discrete `ap_none` pins survive).
+  * `m_axi_gmem`, AXIS `*_TDATA` ports and the `ap_*` handshake, so it cannot
+  * see the watcher's scalar status / bandwidth pins. We declare the port list
+  * explicitly here to match the synthesized `watcher.v` (Vivado IP flow, NOT
+  * the vitis kernel flow, so `ap_ctrl_none` + discrete `ap_none` pins survive).
   *
   * Observed `watcher.v` interface:
   *   - ap_clk, ap_rst_n
-  *   - mem_0, mem_8 [63:0] input -- sole base pointers for gmem and gmem1 in the
-  *                                  default one-writer-per-port build
-  *   - start_addr [63:0]  input  -- byte offset added inside the kernel
-  *   - start_gate [0:0]   input  -- 1 once the spawn scheduler dispatches its first
-  *                                  task; the watcher stays idle until then
-  *   - m_axi_gmem         master -- port A: wId=3, wAddr=64, wData=256, wUser*=1, full
-  *                                  AXI4 (256-bit beat = two 128-bit telemetry bundles)
-  *   - m_axi_gmem1        master -- port B: identical config; telemetry alternates
-  *                                  whole bursts across the two masters
-  *   - status_<i> [3:0] input -- twenty-two generic physical STATUS nibbles; JSON and
-  *                              generator wiring define each nibble's meaning
-  *   - bw_wbytes_<p> [7:0]   input  -- write bytes transferred this cycle on HBM port p
-  *   - bw_rbytes_<p> [15:0]  input  -- read  bytes requested this cycle on HBM port p
-  *   - bw_awaddr_<p> [19:0]  input  -- most-recent AW addr[63:44] on HBM port p (future)
-  *   - bw_araddr_<p> [19:0]  input  -- most-recent AR addr[63:44] on HBM port p (future)
-  *     (p = 0 .. maxHbmPorts-1)
+  *   - mem_0, mem_8 [63:0] input -- sole base pointers for gmem and gmem1 in
+  *     the default one-writer-per-port build
+  *   - start_addr [63:0] input -- byte offset added inside the kernel
+  *   - start_gate [0:0] input -- 1 once the spawn scheduler dispatches its
+  *     first task; the watcher stays idle until then
+  *   - m_axi_gmem master -- port A: wId=3, wAddr=64, wData=256, wUser*=1, full
+  *     AXI4 (256-bit beat = two 128-bit telemetry bundles)
+  *   - m_axi_gmem1 master -- port B: identical config; telemetry alternates
+  *     whole bursts across the two masters
+  *   - status_<i> [3:0] input -- twenty-two generic physical STATUS nibbles;
+  *     JSON and generator wiring define each nibble's meaning
+  *   - bw_wbytes_<p> [7:0] input -- write bytes transferred this cycle on HBM
+  *     port p
+  *   - bw_rbytes_<p> [15:0] input -- read bytes requested this cycle on HBM
+  *     port p
+  *   - bw_awaddr_<p> [19:0] input -- most-recent AW addr[63:44] on HBM port p
+  *     (future)
+  *   - bw_araddr_<p> [19:0] input -- most-recent AR addr[63:44] on HBM port p
+  *     (future) (p = 0 .. maxHbmPorts-1)
   *
   * The gmem config is fixed (not parsed from the `.v`) so the top can elaborate
-  * before the watcher is synthesized; the platform HBM adapter does the 256->256
-  * pass-through. If the kernel's interface changes, re-synthesize and update here.
+  * before the watcher is synthesized; the platform HBM adapter does the
+  * 256->256 pass-through. If the kernel's interface changes, re-synthesize and
+  * update here.
   *
-  * @param statusSlots fixed physical STATUS pin count; currently 22
-  * @param maxHbmPorts number of per-HBM-port bandwidth/address pin groups (kernel
-  *                    MAX_HBM_PORTS); the actual exported compute ports are wired in
-  *                    connectWatcher and any extra pins are tied to 0.
-  * @param memBaseChannels scalar m_axi base-pointer suffixes present in watcher.v;
-  *                        Seq(0, 8) for the default two-writer build
+  * @param statusSlots
+  *   fixed physical STATUS pin count; currently 22
+  * @param maxHbmPorts
+  *   number of per-HBM-port bandwidth/address pin groups (kernel
+  *   MAX_HBM_PORTS); the actual exported compute ports are wired in
+  *   connectWatcher and any extra pins are tied to 0.
+  * @param memBaseChannels
+  *   scalar m_axi base-pointer suffixes present in watcher.v; Seq(0, 8) for the
+  *   default two-writer build
   */
 class WatcherBlackBox(
     val moduleName: String,
@@ -82,10 +90,18 @@ class WatcherBlackBox(
       )
         ++ memBaseChannels.map(i => memBasePin(i) -> Input(UInt(addrWidth.W)))
         ++ statusPins.map(p => p -> Input(UInt(4.W)))
-        ++ (0 until maxHbmPorts).map(p => wbytesPin(p) -> Input(UInt(wbytesWidth.W)))
-        ++ (0 until maxHbmPorts).map(p => rbytesPin(p) -> Input(UInt(rbytesWidth.W)))
-        ++ (0 until maxHbmPorts).map(p => awaddrPin(p) -> Input(UInt(addrWidthTap.W)))
-        ++ (0 until maxHbmPorts).map(p => araddrPin(p) -> Input(UInt(addrWidthTap.W)))
+        ++ (0 until maxHbmPorts).map(p =>
+          wbytesPin(p) -> Input(UInt(wbytesWidth.W))
+        )
+        ++ (0 until maxHbmPorts).map(p =>
+          rbytesPin(p) -> Input(UInt(rbytesWidth.W))
+        )
+        ++ (0 until maxHbmPorts).map(p =>
+          awaddrPin(p) -> Input(UInt(addrWidthTap.W))
+        )
+        ++ (0 until maxHbmPorts).map(p =>
+          araddrPin(p) -> Input(UInt(addrWidthTap.W))
+        )
     )
   })
 

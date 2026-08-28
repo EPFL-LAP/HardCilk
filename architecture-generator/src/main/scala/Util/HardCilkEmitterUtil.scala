@@ -16,23 +16,29 @@ object VerilogResetConverter {
     *   1. Replaces `input reset;` → `input reset_n;\n\twire reset = ~reset_n;`
     *   2. Replaces `input reset,` → `input reset_n,` in the port list header
     *
-    * All internal uses of `reset` are left untouched — the `wire reset = ~reset_n`
-    * handles them transparently.
+    * All internal uses of `reset` are left untouched — the
+    * `wire reset = ~reset_n` handles them transparently.
     *
-    * @param verilogPath  Path to the .sv / .v file to modify in-place
-    * @param moduleName   Name of the top-level module to patch (others untouched)
+    * @param verilogPath
+    *   Path to the .sv / .v file to modify in-place
+    * @param moduleName
+    *   Name of the top-level module to patch (others untouched)
     */
   def convertToActivelow(verilogPath: String, moduleName: String): Unit = {
-    val path    = Paths.get(verilogPath)
+    val path = Paths.get(verilogPath)
     val content = new String(Files.readAllBytes(path))
 
     val patched = patchModule(content, moduleName)
 
     if (patched != content) {
       Files.write(path, patched.getBytes)
-      println(s"[VerilogResetConverter] Patched active-low reset in: $verilogPath")
+      println(
+        s"[VerilogResetConverter] Patched active-low reset in: $verilogPath"
+      )
     } else {
-      println(s"[VerilogResetConverter] WARNING: No reset port found in module '$moduleName' in $verilogPath")
+      println(
+        s"[VerilogResetConverter] WARNING: No reset port found in module '$moduleName' in $verilogPath"
+      )
     }
   }
 
@@ -49,8 +55,8 @@ object VerilogResetConverter {
     if (moduleEnd < 0) return content
 
     val before = content.substring(0, moduleStart)
-    val body   = content.substring(moduleStart, moduleEnd)
-    val after  = content.substring(moduleEnd)
+    val body = content.substring(moduleStart, moduleEnd)
+    val after = content.substring(moduleEnd)
 
     // ── Two patterns to handle both port-list and declaration forms ───────────
 
@@ -77,7 +83,7 @@ object VerilogResetConverter {
   /** Returns the character index of `module <name>` in content, or -1. */
   private def findModuleStart(content: String, moduleName: String): Int = {
     val needle = s"module $moduleName ("
-    val idx    = content.indexOf(needle)
+    val idx = content.indexOf(needle)
     idx
   }
 }
@@ -92,12 +98,19 @@ object HardCilkEmitterUtil {
 
   def basename(path: String): String = path.split("/").last.split("\\.").head
 
-  private def deleteStagedModuleFiles(outputDirPath: String, moduleName: String): Unit = {
+  private def deleteStagedModuleFiles(
+      outputDirPath: String,
+      moduleName: String
+  ): Unit = {
     val dir = new java.io.File(outputDirPath)
     val files = Option(dir.listFiles()).getOrElse(Array.empty)
     files.foreach { file =>
       val fileName = file.getName
-      if (file.isFile && (fileName == s"$moduleName.v" || fileName.startsWith(s"${moduleName}_"))) {
+      if (
+        file.isFile && (fileName == s"$moduleName.v" || fileName.startsWith(
+          s"${moduleName}_"
+        ))
+      ) {
         Files.deleteIfExists(file.toPath)
       }
     }
@@ -115,26 +128,10 @@ object HardCilkEmitterUtil {
     Files.writeString(Path.of(path), data, StandardCharsets.UTF_8)
   }
 
-  /** Undo firtool's single-file packing of blackbox sources.
-    *
-    * When the design is emitted to one .sv, every blackbox that supplies its own
-    * Verilog is appended to the end of it behind a
-    * `// ----- 8< ----- FILE "name" ----- 8< -----` banner, and the run finishes
-    * with a `.f` filelist section whose body is a bare list of file names. That
-    * last section is not Verilog, so anything that parses the whole file (sv2v,
-    * here) fails on it.
-    *
-    * Rewrites `svPath` in place with only the design, and drops each appended
-    * section next to it under its own name. The filelist itself is discarded --
-    * nothing downstream consumes it, and its contents are exactly the files
-    * being written out here.
-    */
   def splitEmittedBlackBoxFiles(svPath: String, outputDirPath: String): Unit = {
     val banner = """^// -+ 8< -+ FILE "(.*)" -+ 8< -+$""".r
     val lines = readFile(svPath).split("\n", -1).toSeq
 
-    // Nothing to do for a design with no self-describing blackboxes, which is
-    // every design that predates Util.UramDelayMem.
     if (!lines.exists(banner.matches(_))) return
 
     var current: Option[String] = None // None = still in the design itself
@@ -161,9 +158,8 @@ object HardCilkEmitterUtil {
     }
   }
 
-  /**
-  * A method to generate RTL called by HardCilk Emitter
-  */
+  /** A method to generate RTL called by HardCilk Emitter
+    */
   def generateRTL(
       systemDescriptor: FullSysGenDescriptor,
       pathInputJsonFile: String,
@@ -174,7 +170,7 @@ object HardCilkEmitterUtil {
     // for task in system descriptor copy all the files in the peHDLPath to the outputDirRTL
     systemDescriptor.taskDescriptors.foreach { task =>
       val peHDLPath = task.peHDLPath
-      if(peHDLPath != ""){
+      if (peHDLPath != "") {
         val peHDLPathFiles = new java.io.File(peHDLPath).listFiles()
         peHDLPathFiles.foreach { file =>
           val fileName = file.getName()
@@ -184,9 +180,7 @@ object HardCilkEmitterUtil {
       }
     }
 
-    // Stage the watcher's HLS Verilog the same way (it is not a task descriptor).
-    // Guarded so elaboration-only runs (before the watcher is synthesized) don't
-    // fail; the blackbox elaborates without the .v, the full build needs it staged.
+    // Stage the watcher's HLS Verilog the same way.
     systemDescriptor.watcherConfig.foreach { wc =>
       val watcherDir = new java.io.File(wc.hdlPath)
       val watcherFiles =
@@ -216,8 +210,9 @@ object HardCilkEmitterUtil {
     new java.io.File(questaDirectory).mkdirs()
 
     val resourcesFiles = new java.io.File(resourcesPath).listFiles()
-    
-    val listOfFilesForRTL = List("DualPortBRAM_sim.v", "DualPortBRAM_xpm.v", "top.v", "u55c.xdc")
+
+    val listOfFilesForRTL =
+      List("DualPortBRAM_sim.v", "DualPortBRAM_xpm.v", "top.v", "u55c.xdc")
     val listOfFilesForQuesta = List("top_sim.sv", "main_sim.sv")
 
     writeFile(s"$outputDirPathRTL/empty.vh", "")
@@ -233,10 +228,7 @@ object HardCilkEmitterUtil {
           writeFile(s"$outputDirPathRTL/DualPortBRAM.v", fileContent)
         }
       } else if (fileName == "UramDelayMem.v") {
-        // Backs Util.DelayLine's deep variant. One body for both flows: it is a
-        // plain inferred array, so simulators read it as written and Vivado maps
-        // it to URAM off the ram_style attribute. Staged next to the kernel RTL
-        // rather than under synth/ because it is instantiated by the design.
+        // Backs Util.DelayLine's deep variant
         writeFile(s"$outputDirPathRTL/$fileName", fileContent)
       } else if (listOfFilesForQuesta.contains(fileName)) {
         writeFile(s"$questaDirectory/$fileName", fileContent)
@@ -271,16 +263,11 @@ object HardCilkEmitterUtil {
     )
 
     // A blackbox that carries its own Verilog (HasBlackBoxResource/Inline, e.g.
-    // Util.UramDelayMem) gets no output file of its own here: firtool appends
-    // every such body to the END of the single emitted .sv, each behind a
-    //   // ----- 8< ----- FILE "name" ----- 8< -----
-    // banner, and closes with a "*.f" filelist section that is a bare list of
-    // names rather than Verilog. sv2v parses the whole file and dies on that
-    // filelist with "unexpected end of file". Split the sections back out first:
-    // real sources become their own files next to the kernel (where the build
-    // already expects UramDelayMem.v to be staged), the filelist is dropped, and
-    // sv2v sees only the design.
-    splitEmittedBlackBoxFiles(s"$outputDirPathRTL/${systemDescriptor.name}.sv", outputDirPathRTL)
+    // Util.UramDelayMem) gets no output file of its own here
+    splitEmittedBlackBoxFiles(
+      s"$outputDirPathRTL/${systemDescriptor.name}.sv",
+      outputDirPathRTL
+    )
 
     // For the file in the outputDirRTL with the name of the systemDescriptor.name run sv2v on it using os.system, then remove the original file
     import sys.process._

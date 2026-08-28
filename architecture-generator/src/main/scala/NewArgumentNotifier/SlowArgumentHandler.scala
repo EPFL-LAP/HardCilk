@@ -7,13 +7,7 @@ import chext.amba.axi4
 import chext.elastic
 import chext.elastic.ConnectOp._
 
-/** Pipelined slow path for updates whose continuation has left the cache.
-  *
-  * This follows the existing ArgumentNotifier.ArgumentServer organization:
-  * AXI IDs index an in-flight table, updates to an address whose read is still
-  * outstanding are coalesced, and unrelated reads continue independently.
-  * Eviction ordering is enforced before this module by EvictionGater.
-  */
+/** Pipelined slow path for updates whose continuation has left the cache. */
 class SlowArgumentHandlerIO(
     lineAddressWidth: Int,
     continuationSize: Int,
@@ -50,7 +44,7 @@ class SlowArgumentHandler(
     // allocator's free list.
     enableRecycling: Boolean = false,
     // Updates arrive compact (payload + aligned slot offset) and are expanded to
-    // a full line here, at their only point of use.
+    // a full line here.
     payloadWidth: Int = 0,
     offsetWidth: Int = 0
 ) extends Module {
@@ -58,7 +52,8 @@ class SlowArgumentHandler(
   require(inputQueueDepth >= 1)
   require(axiIdWidth >= 1)
 
-  private val axiDataWidth = if (continuationSize == 2048) 1024 else continuationSize
+  private val axiDataWidth =
+    if (continuationSize == 2048) 1024 else continuationSize
   private val beatsPerAccess = continuationSize / axiDataWidth
 
   val cfgAxi = axi4.Config(
@@ -82,7 +77,12 @@ class SlowArgumentHandler(
   private val nInflight = 1 << axiIdWidth
 
   private def slowUpdateType =
-    new SlowUpdate(lineAddressWidth, continuationSize, payloadWidth, offsetWidth)
+    new SlowUpdate(
+      lineAddressWidth,
+      continuationSize,
+      payloadWidth,
+      offsetWidth
+    )
   private val inputQ = Module(
     new BankedQueue(slowUpdateType, inputQueueDepth)
   )
@@ -91,19 +91,7 @@ class SlowArgumentHandler(
   object InflightStage extends ChiselEnum {
     val readPending, writePending, spawnPending = Value
   }
-  // The in-flight table is split by how each field is ACCESSED, not by what it
-  // logically belongs to.
-  //
-  // `address` is compared against every entry at once, so it has to be a
-  // register file. `stage` and `decrement` are narrow. `dataWrite` is a whole
-  // continuation -- 2048 bits here -- and is only ever touched at an index that
-  // is already known (`matchId`, `emptyId`, `logicalRId`), so it is a memory.
-  // As part of the register bundle it cost 64 x 2048 flip-flops plus a data mux
-  // in front of every one of them: measured 138,692 LUTs and 133,972 registers
-  // per instance on xcu55c, about a fifth of the whole kernel across the two
-  // instances. As a Mem it is asynchronous-read distributed RAM at the depth
-  // LUTRAM is actually good at (64), which keeps the read combinational and so
-  // costs no latency and no extra pipeline stage.
+
   private class InflightUpdate extends Bundle {
     val address = UInt(lineAddressWidth.W)
     val stage = InflightStage()
@@ -161,13 +149,22 @@ class SlowArgumentHandler(
 
     when(m_axi.r.fire) {
       when(firstReadBeat) {
-        assert(!m_axi.r.bits.last, "first 1024-bit read beat ended a 2048-bit access")
+        assert(
+          !m_axi.r.bits.last,
+          "first 1024-bit read beat ended a 2048-bit access"
+        )
         firstReadData := m_axi.r.bits.data
         firstReadId := m_axi.r.bits.id
         firstReadBeat := false.B
       }.otherwise {
-        assert(m_axi.r.bits.last, "second 1024-bit read beat did not end a 2048-bit access")
-        assert(m_axi.r.bits.id === firstReadId, "RID changed within a 2048-bit read burst")
+        assert(
+          m_axi.r.bits.last,
+          "second 1024-bit read beat did not end a 2048-bit access"
+        )
+        assert(
+          m_axi.r.bits.id === firstReadId,
+          "RID changed within a 2048-bit read burst"
+        )
         firstReadBeat := true.B
       }
     }

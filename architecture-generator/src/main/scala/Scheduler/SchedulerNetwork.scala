@@ -5,25 +5,14 @@ import Scheduler._
 import Util._
 
 // The bundle connection for the stealing network interface.
-class SchedulerNetworkIO(taskWidth: Int, tqNum: Int, vssCount: Int, elasticData: Boolean)
-    extends Bundle {
+class SchedulerNetworkIO(
+    taskWidth: Int,
+    tqNum: Int,
+    vssCount: Int,
+    elasticData: Boolean
+) extends Bundle {
   val connSS = Vec(tqNum, new SchedulerNetworkClientIO(taskWidth))
-  // Observed at the DOOR of each scheduler node: what the upstream hop is HOLDING for it, on each
-  // ring. A node's own injections land in its own slots, so they are invisible to it until they
-  // have travelled all the way round -- which is the point at which a request genuinely means
-  // somebody downstream has a free slot, rather than meaning "I just freed one myself".
-  //
-  // "Holding", not "handing over": the forwarding signals (validOut, reqTaskOut) are gated on being
-  // able to move, so they read zero precisely when the ring is jammed or when this node is
-  // backpressuring its upstream to make itself a hole. Tapping those made maximum congestion
-  // indistinguishable from an idle ring (measured: congestion never detected at all).
-  //
-  // Each ring also reports whether it ADVANCED, and the two are kept separate. On an elastic ring a
-  // sample per CYCLE measures how long an item dwelt rather than what the ring holds -- a stalled
-  // hop is re-counted every cycle. Sampling per advance restores the original meaning, where a
-  // window of ringLength samples is one rotation of distinct content. The rings counter-rotate and
-  // stall independently, so they need independent windows; sharing one would age each ring's
-  // history at the other's rate.
+
   val ntwDataUnitOccupancyVSS = Vec(vssCount, Output(Bool()))
   val ntwReqArrivingVSS = Vec(vssCount, Output(Bool()))
   // Per-node "the producer attached here wants to inject". Must come from the producer itself, not
@@ -45,15 +34,18 @@ class SchedulerNetwork(
     // Elastic data ring: hops can backpressure upstream so an injector can make itself a hole
     // instead of waiting for one. Needed wherever several injectors contend for the same ring --
     // the PE-local steal ring, where a flooding spawner would otherwise starve every injector
-    // downstream of it. The outside-spawn ring has one injector per node and no such contention,
-    // so it stays rigid and pays nothing.
+    // downstream of it.
     elasticData: Boolean = false
 ) extends Module {
-  val io = IO(new SchedulerNetworkIO(taskWidth, tqNum, vssIndicies.size, elasticData))
+  val io = IO(
+    new SchedulerNetworkIO(taskWidth, tqNum, vssIndicies.size, elasticData)
+  )
 
   // Instantiate data units
   val dataUnits =
-    Seq.fill(tqNum)(Module(new SchedulerNetworkDataUnit(taskWidth, elasticData)))
+    Seq.fill(tqNum)(
+      Module(new SchedulerNetworkDataUnit(taskWidth, elasticData))
+    )
   // Instantiate ctrl units
   val ctrlunits = Seq.fill(tqNum)(Module(new SchedulerNetworkControlUnit))
 
@@ -71,8 +63,12 @@ class SchedulerNetwork(
   // Backpressure travels against the data, one hop: hop i tells hop i-1 to hold.
   if (elasticData) {
     def linkStop(upstream: Int, downstream: Int): Unit = {
-      dataUnits(upstream).io.stopInFull.get := dataUnits(downstream).io.stopOutFull.get
-      dataUnits(upstream).io.stopInWant.get := dataUnits(downstream).io.stopOutWant.get
+      dataUnits(upstream).io.stopInFull.get := dataUnits(
+        downstream
+      ).io.stopOutFull.get
+      dataUnits(upstream).io.stopInWant.get := dataUnits(
+        downstream
+      ).io.stopOutWant.get
     }
     for (i <- 1 until tqNum) linkStop(i - 1, i)
     linkStop(tqNum - 1, 0)

@@ -12,19 +12,21 @@ case class SchedulerLocalRingLayout(
 )
 
 object SchedulerLocalRingLayout {
+
   /** Place every injector immediately upstream of the PE group it owns.
     *
-    * Data moves from node i to node i + 1.  When a spawner and a scheduler
+    * Data moves from node i to node i + 1. When a spawner and a scheduler
     * target the same PE, the order is therefore VAS -> VSS -> PE: the scheduler
     * remains adjacent to the PE, while a normally-passive scheduler lets the
-    * spawner's task continue into that same PE.  This makes logical spawner i
+    * spawner's task continue into that same PE. This makes logical spawner i
     * feed logical PE i when their counts match, rather than PE i + 1.
     */
-  def build(peCount: Int, vssCount: Int, vasCount: Int): SchedulerLocalRingLayout = {
+  def build(
+      peCount: Int,
+      vssCount: Int,
+      vasCount: Int
+  ): SchedulerLocalRingLayout = {
     require(peCount >= 1)
-    // vssCount == 0 is valid: a non-root task with zero scheduler servers has no
-    // VSS injection nodes on its local ring (fed purely by VAS spawners). The
-    // placement below already degenerates cleanly (empty vssNodes).
     require(vssCount >= 0)
 
     // Spread fewer-than-PE server counts evenly while retaining the natural
@@ -132,9 +134,6 @@ class SchedulerLocalNetwork(
       taskWidth,
       peCount + vasCount + vssCount,
       vssIndicies,
-      // Several injectors contend for this ring -- every spawner, every scheduler server, and every
-      // client offloading surplus. Without elasticity a flooding spawner starves everything
-      // downstream of it, because the only way in is a hole somebody else happened to leave.
       elasticData = true
     )
   )
@@ -201,17 +200,13 @@ class SchedulerLocalNetwork(
     }
   }
 
-  // Per-node "my producer wants to inject", taken from the producer directly. This is what the
-  // elastic hop turns into stopOut, so it must not pass through anything that derives valid from
-  // ready -- the SchedulerInjectionSwap below does exactly that, which is why this is wired
-  // separately rather than read off connSS.qOutTask.valid inside the network.
-  // Only spawners force; clients and scheduler servers never override a peer's claim.
   stealNet.io.forceForward.get.foreach(_ := false.B)
 
   if (!successiveNetworkConfig) {
     val layoutForInject = interleavedLayout.get
     for (i <- 0 until vasCount)
-      stealNet.io.forceForward.get(layoutForInject.vasNodes(i)) := io.vasForceInject(i)
+      stealNet.io.forceForward.get(layoutForInject.vasNodes(i)) := io
+        .vasForceInject(i)
     for (i <- 0 until peCount)
       stealNet.io.injectWanted.get(layoutForInject.peNodes(i)) :=
         stealServers(i).io.connNetwork.data.qOutTask.valid
@@ -223,14 +218,19 @@ class SchedulerLocalNetwork(
         io.connVSS(j).data.qOutTask.valid
   } else {
     var idx = 0
-    for (j <- 0 until vssCount) { stealNet.io.injectWanted.get(idx) := io.connVSS(j).data.qOutTask.valid; idx += 1 }
+    for (j <- 0 until vssCount) {
+      stealNet.io.injectWanted.get(idx) := io.connVSS(j).data.qOutTask.valid;
+      idx += 1
+    }
     for (i <- 0 until vasCount) {
       stealNet.io.injectWanted.get(idx) := io.connVAS(i).data.qOutTask.valid
       stealNet.io.forceForward.get(idx) := io.vasForceInject(i)
       idx += 1
     }
     for (i <- 0 until peCount) {
-      stealNet.io.injectWanted.get(idx) := stealServers(i).io.connNetwork.data.qOutTask.valid
+      stealNet.io.injectWanted.get(idx) := stealServers(
+        i
+      ).io.connNetwork.data.qOutTask.valid
       idx += 1
     }
   }
@@ -275,15 +275,8 @@ class SchedulerLocalNetwork(
     for (i <- 0 until peCount) {
       stealNet.io.connSS(layout.peNodes(i)) <> stealServers(i).io.connNetwork
     }
-
-    // A co-located spawner (VAS) sits immediately upstream of its scheduler
-    // (VSS) in the VAS -> VSS -> PE layout.  When both inject the same cycle the
-    // PE-adjacent VSS task would reach the PE first and bump the spawner's
-    // locally-generated task to PE i+1, breaking cache locality.  Route just
-    // those two DATA injections through a SchedulerInjectionSwap so the spawner
-    // wins the PE-adjacent slot when both fire; availableTask and the whole
-    // control ring stay wired straight.
-    val vssIndexByNode = (0 until vssCount).map(j => layout.vssNodes(j) -> j).toMap
+    val vssIndexByNode =
+      (0 until vssCount).map(j => layout.vssNodes(j) -> j).toMap
     val swapPairs = (0 until vasCount).flatMap { i =>
       vssIndexByNode.get(layout.vasNodes(i) + 1).map(j => (i, j))
     }
@@ -294,12 +287,23 @@ class SchedulerLocalNetwork(
       val swap = Module(new SchedulerInjectionSwap(taskWidth))
       swap.io.upstreamIn <> io.connVAS(i).data.qOutTask
       swap.io.downstreamIn <> io.connVSS(j).data.qOutTask
-      swap.io.upstreamOut <> stealNet.io.connSS(layout.vasNodes(i)).data.qOutTask
-      swap.io.downstreamOut <> stealNet.io.connSS(layout.vssNodes(j)).data.qOutTask
-      // Everything except qOutTask stays straight for both endpoints.
-      stealNet.io.connSS(layout.vasNodes(i)).data.availableTask <> io.connVAS(i).data.availableTask
+      swap.io.upstreamOut <> stealNet.io
+        .connSS(layout.vasNodes(i))
+        .data
+        .qOutTask
+      swap.io.downstreamOut <> stealNet.io
+        .connSS(layout.vssNodes(j))
+        .data
+        .qOutTask
+      stealNet.io.connSS(layout.vasNodes(i)).data.availableTask <> io
+        .connVAS(i)
+        .data
+        .availableTask
       stealNet.io.connSS(layout.vasNodes(i)).ctrl <> io.connVAS(i).ctrl
-      stealNet.io.connSS(layout.vssNodes(j)).data.availableTask <> io.connVSS(j).data.availableTask
+      stealNet.io.connSS(layout.vssNodes(j)).data.availableTask <> io
+        .connVSS(j)
+        .data
+        .availableTask
       stealNet.io.connSS(layout.vssNodes(j)).ctrl <> io.connVSS(j).ctrl
     }
 
@@ -338,10 +342,6 @@ class SchedulerLocalNetwork(
         )
       }
     }
-
-    // Every injector group must terminate at a PE before another injector of
-    // the same class. This is the liveness invariant that prevents one server
-    // class from forming an injection-only island on the shift ring.
 
     val spawnerSlots = placement.zipWithIndex.collect { case ("vas", i) => i }
     if (spawnerSlots.length > 1 && vasCount <= peCount) {

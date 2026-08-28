@@ -51,23 +51,11 @@ public:
     #include "hardCilkDriver.tpp"
 
     int startSystem();
-    // Address of the kernel-global start-broadcast register (releases all scheduler
-    // servers on one cycle); computed from the descriptor's server layout.
     uint64_t globalRunRegAddr() const;
     void setHbmWriteDistribution(bool enabled, int firstBank = 0,
                                  int lastBank = 15,
                                  uint64_t continuationBankRunEntries = 1);
-    // --- Smart per-region placement (opt-in, layered on hbm_write_distribution_) ---
-    // Restrict the continuation (closure) pool stride to a dedicated sub-range of
-    // banks instead of the whole [first,last] window. Used to keep the hot closure
-    // writes on their own pseudo-channels, disjoint from the scheduler rings and the
-    // allocator FIFO. A range of [-1,-1] (default) means "use the full write range".
     void setContinuationBankRange(int firstBank, int lastBank);
-    // Pin a specific driver write region to an exact HBM bank, keyed by a region
-    // identifier the initSystem allocator passes in (e.g. "sched:memReader:0",
-    // "alloc:taskAdder_cont0:0"). Regions without an override fall back to the
-    // round-robin distribution. This is how "port N's region -> bank N" is realized:
-    // the app driver looks up each server's HBM port and pins its region there.
     void setRegionBankOverride(const std::string &regionKey, int bank);
     void managementLoop();
 
@@ -78,57 +66,15 @@ public:
     static void clearStopRequested();
     static void requestStop(int signal);
 
-    // Arm Ctrl-C handling. Call this ONCE, as early as possible and in particular
-    // BEFORE the xrt::device / load_xclbin that forks the hw_emu simulator; the
-    // driver constructor also calls it, so a late arm still works. Idempotent.
-    //
-    // Why this is not just signal(SIGINT, ...): a terminal Ctrl-C is delivered to
-    // the whole FOREGROUND PROCESS GROUP, and the Vivado simulator XRT forks lives
-    // in ours. xsim's Tcl shell installs its own SIGINT handler (the SIG_IGN we set
-    // before spawning it does NOT survive its launcher scripts), so the Ctrl-C
-    // cancelled `run all` -- "INFO: [Common 17-41] Interrupt caught" / "'run' was
-    // cancelled" in simulate.log -- and dropped the simulator to its `xsim%`
-    // prompt. Simulated time then stops advancing, so the register read the host
-    // happened to be inside never completes and the poll loop never gets back to
-    // its stopRequested() check. That is exactly the reported symptom: the first
-    // Ctrl-C printed the "stopping gracefully" banner and then hung forever, and a
-    // second, forced one was needed -- which of course loses the telemetry and the
-    // waveform we wanted.
-    //
-    // So we stop the TERMINAL from generating the signal at all: disable the VINTR
-    // character on the controlling tty and read the raw ^C byte (0x03) ourselves
-    // from a reader thread. No SIGINT is sent to anyone, the simulator keeps
-    // running, and the graceful path (poll loop returns -> telemetry dump ->
-    // waveform finalize during teardown) completes. Only VINTR is disabled, so ^Z
-    // and ^\ keep working, and the saved termios is restored on every exit path.
-    // When stdin is not a tty (or we are not the foreground group) this is a no-op
-    // and the plain SIGINT/SIGTERM handlers below remain the mechanism.
     static void armInterruptHandling();
 
-    // Tell the interrupt supervisor that the benchmark body has finished and
-    // device teardown has begun. Under hw_emu that is where the waveform is
-    // finalized, which legitimately takes minutes, so from this point the
-    // supervisor stops enforcing its own deadline and leaves the backstop to the
-    // teardown watchdog. Before this point the supervisor DOES enforce one: a
-    // driver whose poll loop forgets to check stopRequested() would otherwise run
-    // to its own multi-minute watchdog with nothing on screen, which reads as
-    // "Ctrl-C printed a message and then hung".
+    
     static void noteTeardownStarted();
 
-    // Kill the hw_emu emulator's ENTIRE descendant process tree (launcher, bash
-    // wrappers, loader, xsim, xsimk -- everything below this host), so a forced
-    // exit never leaves survivors that pin deleted /tmp .vcd files or hold our
-    // inherited stdout/stderr pipe open (which hangs `exec > >(tee ...)` runner
-    // scripts). No-op on real hardware (no descendants exist). Safe to call from
-    // any thread; scoped strictly to our own descendants so a co-user's or
-    // unrelated simulation is untouched.
+    
     static void terminateSimulator(int sig = SIGKILL);
 
-    // Save/restore the controlling terminal. The hw_emu simulator can leave the
-    // tty in a raw / no-echo state (it drops to an interactive prompt on signals);
-    // if it is then force-killed, that state is never restored and the shell shows
-    // no typed input. Call saveTerminalState() once at startup (before the emulator
-    // launches) and restoreTerminalState() on every exit path.
+    
     static void saveTerminalState();
     static void restoreTerminalState();
 
@@ -170,12 +116,7 @@ protected:
     int waitPaused(uint64_t addr);
 
 public:
-    /** Per-allocator-server continuation pool telemetry. Only meaningful for
-      * tasks built with recycling; `lowWater` is the point of it -- on a run that
-      * finished, capacity minus lowWater is how much of the pool was never
-      * needed, which is the only empirical way to size it (peak live closures
-      * cannot be derived up front). `leaked` must be zero.
-      */
+    
     struct ContinuationPoolStats
     {
         std::string task;
@@ -241,10 +182,7 @@ protected:
     const uint8_t scheduler_server_fifoHeadReg_shift = 0x20;
     const uint8_t scheduler_server_processorInterrupt_shift = 0x28;
     const uint8_t scheduler_server_currLen_shift = 0x30;
-    // queuesUtil packs peCount x 8-bit local (BRAM) queue lengths, MSB-first
-    // (PE0 in the highest lane), populated only when peCount <= 8. Next reg after
-    // currLen in the SchedulerServer regBlock. Used by the stall diagnostic to see
-    // tasks stranded in per-PE local buffers, which currLen/head/tail cannot show.
+    
     const uint8_t scheduler_server_queuesUtil_shift = 0x38;
 
     int fpgaId_ = 0;
