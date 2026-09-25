@@ -1,5 +1,6 @@
 package SoftwareUtil.aie
 import Descriptors._
+import KernelPortSupport._
 import java.io.PrintWriter
 import scala.collection.mutable
 
@@ -89,7 +90,7 @@ object ConnectivityTemplate {
 
 		// Sort by key for stable output.
 		descriptor.subPEList.toList.sortBy(_._1).flatMap { case (subPEName, subPE) =>
-			subPE.rwRequest.map { req =>
+			subPE.rwRequest.filter(_ => isExternalPE(descriptor, subPE.peName)).map { req =>
 				val task = taskMap(subPE.peName)
 				val replicationCount = task.numProcessingElements
 				val kernelName = helperKernelName(req.`type`, req.mode, req.portWidth, replicationCount)
@@ -156,94 +157,6 @@ object ConnectivityTemplate {
 		hardCilkSPs
 	}
 
-	private def getHardCilkAxiPortCount(descriptor: FullSysGenDescriptor): Int = {
-		val numHBMPorts = if (descriptor.maximumAXIPorts > 0) descriptor.maximumAXIPorts else 6
-
-		// Match HasHBMInterconnect grouping at descriptor level to estimate exported non-empty m_axi ports.
-		val interfacesPE = getEstimatedPEInterfacesCount(descriptor)
-		val interfacesScheduler = descriptor.taskDescriptors.map(task => task.getNumServers("scheduler") + task.spawnServersCount).sum
-		val interfacesClosureAllocator = descriptor.taskDescriptors
-			.filter(task => descriptor.getPortCount("spawnNext", task.name) > 0)
-			.map(_.getNumServers("allocator"))
-			.sum
-		val interfacesArgumentNotifier = descriptor.taskDescriptors
-			.filter(task => descriptor.getPortCount("sendArgument", task.name) > 0)
-			.map(_.getNumServers("argumentNotifier") * 2)
-			.sum
-		val interfacesMemoryAllocator = descriptor.taskDescriptors
-			.filter(task => descriptor.getPortCount("mallocIn", task.name) > 0)
-			.map(_.getNumServers("memoryAllocator"))
-			.sum
-		val interfacesRemoteMemAccess = descriptor.taskDescriptors
-			.count(task => task.generateArgOutWriteBuffer && (descriptor.mFPGASimulation || descriptor.mFPGASynth))
-
-		val totalPorts =
-			interfacesPE + interfacesMemoryAllocator + interfacesScheduler + interfacesClosureAllocator + interfacesArgumentNotifier + interfacesRemoteMemAccess
-
-		if (totalPorts <= 0) {
-			0
-		} else {
-			val numPortsPerMux = totalPorts.toDouble / numHBMPorts.toDouble
-			val peMux = math.max(1, math.ceil(interfacesPE.toDouble / numPortsPerMux).toInt)
-			val serverMux = math.max(0, numHBMPorts - peMux)
-
-			val pePortsPerMux = if (peMux > 0 && interfacesPE > 0) interfacesPE.toDouble / peMux else 1.0
-			val nonEmptyHBM = scala.collection.mutable.Set[Int]()
-
-			if (interfacesPE > 0) {
-				(0 until interfacesPE).foreach { idx =>
-					val bucket = (idx.toDouble / pePortsPerMux).toInt
-					if (bucket >= 0 && bucket < numHBMPorts) {
-						nonEmptyHBM += bucket
-					}
-				}
-			}
-
-			val serverInterfaces = interfacesMemoryAllocator + interfacesScheduler + interfacesClosureAllocator + interfacesArgumentNotifier + interfacesRemoteMemAccess
-			val serverPortsPerMuxClamped = if (serverInterfaces > 0 && serverMux > 0) serverInterfaces.toDouble / serverMux else 1.0
-
-			if (serverInterfaces > 0 && serverMux > 0) {
-				(0 until serverInterfaces).foreach { idx =>
-					val bucket = peMux + (idx.toDouble / serverPortsPerMuxClamped).toInt
-					if (bucket >= 0 && bucket < numHBMPorts) {
-						nonEmptyHBM += bucket
-					}
-				}
-			}
-
-			nonEmptyHBM.size
-		}
-	}
-
-	private def getEstimatedPEInterfacesCount(descriptor: FullSysGenDescriptor): Int = {
-		descriptor.taskDescriptors.map { task =>
-			val hasPEModule = task.peHDLPath.nonEmpty
-
-			val peCoreAxi = if (task.hasAXI && hasPEModule) task.numProcessingElements else 0
-			val peSpawnNextAxi =
-				if ((descriptor.getPortCount("spawnNext", task.name) > 0 || task.generateSpawnNextWriteBuffer) && hasPEModule)
-					task.numProcessingElements
-				else
-					0
-			val peArgOutAxi =
-				if ((descriptor.getPortCount("sendArgument", task.name) > 0 || task.generateArgOutWriteBuffer) && hasPEModule)
-					task.numProcessingElements
-				else
-					0
-
-			val wbSpawnNextAxi = if (task.generateSpawnNextWriteBuffer && !hasPEModule) task.numProcessingElements else 0
-			val wbArgDataAxi = if (task.generateArgOutWriteBuffer && !hasPEModule) task.numProcessingElements else 0
-			val peIORwAxi =
-				if (!hasPEModule) {
-					descriptor.subPEList.values.count(sub => sub.peName == task.name && sub.rwRequest.nonEmpty) * task.numProcessingElements
-				} else {
-					0
-				}
-
-			peCoreAxi + peSpawnNextAxi + peArgOutAxi + wbSpawnNextAxi + wbArgDataAxi + peIORwAxi
-		}.sum
-	}
-
 	private def buildTaskConnections(
 			descriptor: FullSysGenDescriptor,
 			hardCilkInstance: String,
@@ -256,9 +169,9 @@ object ConnectivityTemplate {
 			val src = connection.srcPort
 			val dst = connection.dstPort
 
-			if (src.parentType == "HardCilk" && dst.parentType == "PE") {
+			if (src.parentType == "HardCilk" && dst.parentType == "PE" && isExternalPE(descriptor, dst.parentName)) {
 				Some((dst.parentName, dst.parentIndex, dst.portType, false))
-			} else if (src.parentType == "PE" && dst.parentType == "HardCilk") {
+			} else if (src.parentType == "PE" && dst.parentType == "HardCilk" && isExternalPE(descriptor, src.parentName)) {
 				Some((src.parentName, src.parentIndex, src.portType, true))
 			} else {
 				None
@@ -400,14 +313,14 @@ object ConnectivityTemplate {
 		val directOutputs = descriptor.getSystemConnectionsDescriptor().connections.flatMap { connection =>
 			val src = connection.srcPort
 			val dst = connection.dstPort
-			if (src.parentType == "PE" && dst.parentType == "HardCilk") {
+			if (src.parentType == "PE" && dst.parentType == "HardCilk" && isExternalPE(descriptor, src.parentName)) {
 				Some(TaskOutputDef(src.parentName, src.parentIndex, src.portType, connection.bitWidth))
 			} else {
 				None
 			}
 		}
 
-		val writeBufferOutputs = descriptor.taskDescriptors.flatMap { task =>
+		val writeBufferOutputs = descriptor.taskDescriptors.filter(_.peHDLPath.isEmpty).flatMap { task =>
 			val spawnNextWidth = getSpawnNextBundleWidthBits(descriptor, task)
 			val argDataOutWidth = getArgDataOutBundleWidthBits(descriptor, task)
 			(0 until task.numProcessingElements).flatMap { peIndex =>
@@ -569,7 +482,7 @@ object ConnectivityTemplate {
 		s"${subPEName}_${peIndex}_$suffix"
 
 	private def getNonLastEndpointsByTask(descriptor: FullSysGenDescriptor): Map[String, Set[String]] = {
-		descriptor.taskDescriptors.map { task =>
+		descriptor.taskDescriptors.filter(_.peHDLPath.isEmpty).map { task =>
 			val orderedSubPEs = getOrderedSubPEEndpointsForTask(descriptor, task.name)
 			val nonLast = if (orderedSubPEs.length > 1) orderedSubPEs.dropRight(1).map(_.normalizedName).toSet else Set.empty[String]
 			task.name -> nonLast
@@ -577,7 +490,7 @@ object ConnectivityTemplate {
 	}
 
 	private def buildAieEndpointByTask(descriptor: FullSysGenDescriptor): Map[String, TaskAieEndpointDef] = {
-		descriptor.taskDescriptors.map { task =>
+		descriptor.taskDescriptors.filter(_.peHDLPath.isEmpty).map { task =>
 			val orderedSubPEs = getOrderedSubPEEndpointsForTask(descriptor, task.name)
 			if (orderedSubPEs.nonEmpty) {
 				val inputByPort = mutable.Map[String, String]()
