@@ -29,6 +29,16 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
 
   import HardCilkBuilder.PortToExport
 
+  // Allow channels follow the PE outputs: taskOut (when present), then each
+  // taskOutGlobal in spawn-list order. Use the destination task's payload width.
+  private val spawnNextAllowConnections = desc.getSystemConnectionsDescriptor().connections
+    .filter { connection =>
+      val port = connection.srcPort
+      port.parentType == "PE" && port.parentIndex == 0 &&
+        (port.portType == "taskOut" || port.portType == "taskOutGlobal")
+    }
+    .groupBy(_.srcPort.parentName)
+
   case class SubsystemBlueprint(
       peFactories: Map[String, () => Seq[VitisWriteBufferModule]],
       schedulerFactories: Map[String, () => Scheduler],
@@ -139,7 +149,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
                 wAddr = desc.widthAddress,
                 wData = desc.spawnNextList(task.name).map(tn => desc.taskDescriptors.find(_.name == tn).get.widthTask).max, // this assumes a single spawnNext type per task
                 wAllow = (if (task.variableSpawn) 0 else 32), // <-- 32 is HARDCODED
-                wAllowData = Seq(task.widthTask)
+                wAllowData = spawnNextAllowConnections.getOrElse(task.name, Seq.empty).map(_.bitWidth)
               )
             ))
             wbSeq += wb
@@ -271,12 +281,16 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       if (srcIsPE && !peExists) {
         val hardcilkPort = getPhysicalPort(connection.dstPort, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs)
         // Connecting WB m_allows to HardCilk and exporting s_allows port
-        // Todo: is s_allows and m_allows always index 0? If yes, why it supports multiple?
         connection.srcPort.portType match {
-          case "taskOut" => {
+          case "taskOut" | "taskOutGlobal" => {
             if (spawnNextWB != null) {
-              spawnNextWB.m_allows(0) <> hardcilkPort
-              portsToExport += PortToExport(PortDescriptor(peName,"spawnNextWB",peIdx,"s_allows",0), connection.srcPort, isSource = false)
+              val allowIndex = spawnNextAllowConnections(peName).indexWhere { allowConnection =>
+                val port = allowConnection.srcPort
+                port.portType == connection.srcPort.portType && port.portIndex == connection.srcPort.portIndex
+              }
+              require(allowIndex >= 0, s"No spawn-next allow channel for ${connection.srcPort}")
+              spawnNextWB.m_allows(allowIndex) <> hardcilkPort
+              portsToExport += PortToExport(PortDescriptor(peName,"spawnNextWB",peIdx,"s_allows",allowIndex), connection.srcPort, isSource = false)
             } else {
               portsToExport += PortToExport(connection.dstPort, connection.srcPort, isSource = false)
             }

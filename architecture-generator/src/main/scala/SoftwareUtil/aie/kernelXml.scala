@@ -469,7 +469,7 @@ object KernelXmlTemplate {
     val wAddr = descriptor.widthAddress
     val wData = getSpawnNextDataWidthBits(descriptor, task)
     val wAllow = if (task.variableSpawn) 0 else 32
-    val nAllow = 1 + descriptor.spawnList.getOrElse(task.name, List.empty).count(_ != task.name)
+    val nAllow = descriptor.spawnList.getOrElse(task.name, List.empty).size
     val totalSize = wAddr + wData + 32 + nAllow * wAllow
     nextPow2(totalSize)
   }
