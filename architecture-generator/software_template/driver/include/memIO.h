@@ -26,6 +26,13 @@ struct Memory : std::enable_shared_from_this<Memory> {
 
     std::shared_ptr<Memory> offset(int64_t offset);
 
+    // Simulated time in nanoseconds, for backends that model one. The
+    // QuestaSim backend returns sc_time_stamp(); every other backend has no
+    // notion of simulated time and returns 0, which callers read as "not
+    // available" and fall back to wall-clock. Having it on the base class keeps
+    // the driver's timing code identical across backends.
+    virtual uint64_t simTimeNs() const { return 0; }
+
     virtual ~Memory() = default;
 };
 

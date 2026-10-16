@@ -17,6 +17,15 @@ struct questaMemory : Memory
     {
     }
 
+    // The QuestaSim backend is the only one that runs against a cycle-accurate
+    // model, so it is the only one that can answer this meaningfully. Reported
+    // in ns to match sc_time's resolution here; the driver converts to cycles
+    // using the design's target frequency.
+    uint64_t simTimeNs() const override
+    {
+        return static_cast<uint64_t>(sc_core::sc_time_stamp().to_seconds() * 1e9);
+    }
+
     private:
     uint64_t free_mem_base_addr = 0x0;
     std::vector<freedMemBlock> freed_mem_blocks;
@@ -131,55 +140,53 @@ struct questaMemory : Memory
             if(transaction_size == 0){
                 continue;
             }
-            for (uint32_t i = 6; i >= 0; i--)
+            // AWSIZE only says how many bytes a beat carries; it does not reposition
+            // the payload. The VIP packs WData starting at the 2^i-aligned lane but
+            // drives WSTRB from the exact address, so a burst whose start address is
+            // not aligned to 2^i lands the bytes on the wrong lanes and silently
+            // drops part of the buffer. Pick the largest beat size the *current
+            // address* is aligned to and that still fits in what is left.
+            while (transaction_size > 0)
             {
-                // burst length is byte size of the transaction divide by 2^burst_size
-                
-                const uint32_t burst_length = (transaction_size / (1<<i)) - 1;
-                uint32_t remaining_bytes = transaction_size % (1<<i);
-
-                if (burst_length == -1 && remaining_bytes > 0)
-                {
-                    continue;
-                }
-                
-
-                if (!(burst_length < 256) ||
-                    !(std::get<2>(transaction) + offset < data_tmp + size) ||
-                    !(std::get<2>(transaction) + offset + burst_length * (1 << i) <= data_tmp + size) ||
-                    !(std::get<0>(transaction) + offset + burst_length * (1 << i) <= dest_addr + size))
-                {
-
-                    std::cout << "Error: " << std::endl;
-                    std::cout << "burst_length: " << burst_length << std::endl;
-                    std::cout << "transaction_size: " << transaction_size << std::endl;
-                    std::cout << "i: " << i << std::endl;
-                    std::cout << "offset: " << offset << std::endl;
-                    std::cout << "remaining_bytes: " << remaining_bytes << std::endl;
-                }
-
-                // Print the details of the transaction
                 uint64_t fpga_address = std::get<0>(transaction) + offset;
                 uint64_t cpu_address = (uint64_t)std::get<2>(transaction) + offset;
 
+                int i = 6;
+                while (i > 0 &&
+                       ((fpga_address & ((1ULL << i) - 1)) != 0 ||
+                        transaction_size < (1u << i)))
+                {
+                    i--;
+                }
+
+                const uint32_t beat_bytes = 1u << i;      // i == 0 always qualifies,
+                uint32_t beats = transaction_size / beat_bytes; // so this makes progress
+                if (beats > 256)
+                {
+                    beats = 256;                          // AWLEN is 8 bits
+                }
+
+                if (!(cpu_address + beats * beat_bytes <= (uint64_t)data_tmp + size) ||
+                    !(fpga_address + beats * beat_bytes <= dest_addr + size))
+                {
+                    std::cout << "Error: " << std::endl;
+                    std::cout << "beats: " << beats << std::endl;
+                    std::cout << "transaction_size: " << transaction_size << std::endl;
+                    std::cout << "i: " << i << std::endl;
+                    std::cout << "offset: " << offset << std::endl;
+                }
+
                 //std::cout << "Transaction Address to FPGA: " << std::hex << fpga_address << ", Size: " << transaction_size << ", Data address from the CPU: " << std::hex << cpu_address << std::endl << std::dec;
-                
+
                 S_AXI_WRITE_MEM(
                     fpga_address,
                     reinterpret_cast<svBitVecVal *>(cpu_address),
-                    burst_length,
+                    beats - 1,
                     i);
 
-                if (remaining_bytes == 0)
-                {
-                    break;
-                }
-                else
-                {
-                    offset += (burst_length + 1) * (1 << i);
-                    transaction_size = remaining_bytes;
-                    //std::cout << "Remaining bytes: " << remaining_bytes << ", new offset: " << offset << std::endl;
-                }
+                const uint32_t done = beats * beat_bytes;
+                offset += done;
+                transaction_size -= done;
             }
         }
     }
@@ -226,13 +233,22 @@ struct questaMemory : Memory
         for (int j = 0; j < transactions.size(); j++)
         {
             auto transaction = transactions[j];
-            uint8_t *transaction_holder = new uint8_t[4096];
+            uint8_t *transaction_holder = new uint8_t[4096 + 128];
 
             uint32_t transaction_size = std::get<1>(transaction);
-            uint32_t burst_length = (transaction_size / (1 << 6)) - 1;
-            uint32_t remaining_bytes = transaction_size % (1 << 6);
 
-            if (burst_length == -1 && remaining_bytes > 0)
+            // Same lane rule as copyToDevice: with ARSIZE=6 the VIP returns data
+            // starting at the 64-byte-aligned lane, so an unaligned start address
+            // would come back shifted. Read from the aligned base that covers the
+            // range and skip the leading bytes when copying out.
+            uint64_t read_addr = std::get<0>(transaction) & ~UINT64_C(63);
+            uint32_t lead = static_cast<uint32_t>(std::get<0>(transaction) - read_addr);
+            uint32_t read_size = transaction_size + lead;
+
+            uint32_t burst_length = (read_size / (1 << 6)) - 1;
+            uint32_t remaining_bytes = read_size % (1 << 6);
+
+            if (burst_length == 0xFFFFFFFFu && remaining_bytes > 0)
             {
                 burst_length = 0;
             }
@@ -250,12 +266,12 @@ struct questaMemory : Memory
             }
 
             S_AXI_READ_MEM(
-                std::get<0>(transaction),
+                read_addr,
                 reinterpret_cast<svBitVecVal *>(transaction_holder),
                 burst_length,
                 6);
 
-            memcpy(data + offset, transaction_holder, transaction_size);
+            memcpy(data + offset, transaction_holder + lead, transaction_size);
             // std::cout << "Copied transaction to address: " << (uint64_t)std::get<2>(transaction) << std::endl;
             delete[] transaction_holder;
             offset += transaction_size;
