@@ -18,6 +18,22 @@
 */
 
 
+/**
+ * @brief The continuation address of a root task. Compiler-generated task structs
+ * name the field `_cont`; the hand-written RTL projects name it `cont`. Overload
+ * resolution picks the `_cont` version when that field exists (int beats long),
+ * which keeps this valid C++11 for sccom.
+ */
+template <typename T> static auto baseTaskContImpl(const T &task, int) -> decltype(uint64_t(task._cont)){
+    return task._cont;
+}
+template <typename T> static uint64_t baseTaskContImpl(const T &task, long){
+    return task.cont;
+}
+template <typename T> static uint64_t baseTaskCont(const T &task){
+    return baseTaskContImpl(task, 0);
+}
+
 template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolean function that is applied to an int64  */ bool (*condition)(int32_t),  const int fpgaId = 0, const int taskId = 0, const bool no_base_task = false){
 
     // set the boolean function in the class
@@ -29,7 +45,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
     // Set the return addresses of the driver
     if(!no_base_task){
         for(auto taskData = base_task_data.begin(); taskData != base_task_data.end(); taskData++){
-            setReturnAddr(taskData->cont);
+            setReturnAddr(baseTaskCont(*taskData));
         }
     }
 

@@ -233,7 +233,7 @@ public:
     memory_->copyToDevice(diffs_addr, reinterpret_cast<const uint8_t *>(diffs),
                           sizeof(float) * vertexCount);
 
-    root_task_0.cont = addr;
+    root_task_0._cont = addr;
     root_task_0.iterationCount = iterationCount;
     root_task_0.vertexCount = vertexCount;
     root_task_0.pGraph = pGraph_addr;

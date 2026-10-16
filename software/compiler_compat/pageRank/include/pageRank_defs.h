@@ -80,7 +80,7 @@ struct __attribute__((packed)) float_arg_out {
 };
 
 struct __attribute__((packed))spawnerFunction_task {
-  addr_t cont;
+  addr_t _cont;
   uint32_t iterationCount;
   uint32_t vertexCount;
   addr_t pGraph;
