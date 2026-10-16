@@ -1,6 +1,8 @@
 package HardCilk
 
 import chext.amba.axi4
+import chext.amba.axi4s
+import chext.amba.axi4s.Casts._
 import chisel3._
 import Descriptors._
 import Scheduler._
@@ -9,6 +11,8 @@ import ArgumentNotifier._
 import HLSHelpers._
 import Util.HardCilkUtil._
 import Util._
+import chisel3.util.ReadyValidIO
+import chext.elastic.{connect => elasticConnect}
 
 
 /**
@@ -226,6 +230,96 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
   // <-- Removed the private getPhysicalPort helper function -->
 
   /**
+   * Streams that get a skid buffer inserted on the driving side: every link
+   * between the hub logic and a PE, in both directions.
+   *
+   * Once a task's PEs are floorplanned across two dice (see
+   * `TclResources.Floorplan`) these nets cross an SLL, and HardCilk drove them
+   * straight from one module's output register into the other module's input
+   * logic. Hub <-> PE is exactly the set that fans between the middle die and
+   * every PE, so it is exactly the set that can cross.
+   *
+   * The whole class is buffered rather than a hand-picked few links: a failing
+   * crossing can have a single logic level, which makes it a distance problem
+   * on whichever link happens to cross, not a depth problem on the busy ones.
+   * Buffering every hub <-> PE link is uniform, needs no knowledge of the
+   * floorplan, and costs a cycle only on links that would otherwise be a bare
+   * wire across the die.
+   *
+   * Bombyx already instantiates a buffer on the *receiving* side of the PE
+   * wrapper's `taskIn`/`argOut`. This adds the launch flop.
+   */
+  private def wantsSkid(c: ConnectionDescriptor): Boolean = {
+    val src = c.srcPort.parentType
+    val dst = c.dstPort.parentType
+    (src == "HardCilk" && dst == "PE") || (src == "PE" && dst == "HardCilk")
+  }
+
+  /**
+   * Wire `src` to `dst` through a two-entry skid buffer, if this connection is one
+   * of [[wantsSkid]] and both ends are elastic.
+   *
+   * [[Util.SkidBuffer]] rather than a `Queue(2)`: a `Queue` drives its port
+   * signals from a pointer comparator and a LUTRAM read, which makes an SLR
+   * crossing ineligible for a Laguna flop (see the header of [[Util.SkidBuffer]]).
+   *
+   * One transfer per cycle sustained, one cycle of latency; the throughput cost
+   * is negligible.
+   *
+   * @return true when the buffered connection was made, false to fall back to a
+   *         plain bulk connect.
+   */
+  private def connectWithSkid(
+      c: ConnectionDescriptor,
+      src: chisel3.Data,
+      dst: chisel3.Data
+  ): Boolean = {
+    if (!wantsSkid(c)) return false
+
+    // Named after the link, so a Vivado timing report says which crossing a
+    // path belongs to rather than just `stage_17`.
+    val linkName =
+      s"${c.srcPort.parentName}_${c.srcPort.portType}${c.srcPort.portIndex}" +
+        s"__${c.dstPort.parentName}_${c.dstPort.portType}${c.dstPort.portIndex}"
+
+    def buffered(source: ReadyValidIO[Data], sink: ReadyValidIO[Data]): Boolean = {
+      elasticConnect(SkidBuffer(source, name = linkName), sink)
+      println(
+        s"[HardCilk:Builder] skid buffer on ${c.srcPort.parentName}.${c.srcPort.portType}" +
+          s"[${c.srcPort.portIndex}] -> ${c.dstPort.parentName}.${c.dstPort.portType}" +
+          s"[${c.dstPort.portIndex}]"
+      )
+      true
+    }
+
+    def notBuffered(why: String): Boolean = {
+      println(
+        s"[HardCilk:Builder] WARNING: wanted a skid buffer on ${c.srcPort} -> ${c.dstPort} " +
+          s"but $why; connecting directly."
+      )
+      false
+    }
+
+    (src, dst) match {
+      // These are AXI-Stream ports. `asLite` views one as ready/valid/bits, which
+      // is lossless only when the stream carries nothing else -- otherwise TLAST,
+      // TKEEP and friends would be silently dropped by the buffer.
+      case (s: axi4s.Interface, d: axi4s.Interface) =>
+        if (s.cfg.onlyRV && d.cfg.onlyRV)
+          buffered(
+            s.asLite.asInstanceOf[ReadyValidIO[Data]],
+            d.asLite.asInstanceOf[ReadyValidIO[Data]]
+          )
+        else
+          notBuffered("the stream carries sideband signals a ready/valid buffer would drop")
+      case (s: ReadyValidIO[_], d: ReadyValidIO[_]) =>
+        buffered(s.asInstanceOf[ReadyValidIO[Data]], d.asInstanceOf[ReadyValidIO[Data]])
+      case _ =>
+        notBuffered("the ports are not elastic")
+    }
+  }
+
+  /**
    * Pure wiring logic — connects instantiated modules.
    */
   def connectSubsystems(
@@ -357,7 +451,7 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
         (physicalSourcePort, physicalDestinationPort) match {
           case (Some(src), Some(dst)) =>
             try {
-              src <> dst
+              if (!connectWithSkid(connection, src, dst)) src <> dst
               recordHC(connection.srcPort)
               recordHC(connection.dstPort)
               println("[HardCilk:Builder:237] Connected " +

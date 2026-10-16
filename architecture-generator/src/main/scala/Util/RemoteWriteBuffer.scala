@@ -80,7 +80,10 @@ class RemoteWriteBuffer(
   val m_allows = cfgAxisAllows.map(c => IO(axi4s.Master(c)))
 
   // Implementation
-  private val m_axi_ = axi4.full.MasterBuffer(m_axi.asFull, axi4.BufferConfig(b = 8))
+  // aw/w/ar/r were 0, leaving the HBM mux's arbiter one combinational hop from
+  // this buffer's RAM write-enable. See the note in WriteBufferLast.
+  private val m_axi_ =
+    axi4.full.MasterBuffer(m_axi.asFull, axi4.BufferConfig(aw = 2, w = 2, b = 8, ar = 2, r = 2))
   private val s_pkg_ = elastic.SourceBuffer(s_pkg.asLite, 4)
   private val s_allows_ = s_allows.map(p => elastic.SourceBuffer(p.asLite, 16))
   private val m_allows_ = m_allows.map(p => elastic.SinkBuffer(p.asLite, 16))

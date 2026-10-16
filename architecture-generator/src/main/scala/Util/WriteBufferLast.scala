@@ -68,7 +68,16 @@ class WriteBufferLast(
   val m_allows = cfgAxisAllows.map(c => IO(axi4s.Master(c)))
 
   // Implementation
-  private val m_axi_ = axi4.full.MasterBuffer(m_axi.asFull, axi4.BufferConfig(b = 8))
+  //
+  // aw/w/ar/r were 0 here, so the only buffered channel was B. That put the PE
+  // end of the hub <-> PE memory link one combinational hop from the HBM mux's
+  // arbiter: the arbiter's ready reached `s_pkg_`'s RAM write-enable with no
+  // flop between them, which showed up as a failing cross-SLR path. Depth 2 on
+  // the address and data channels
+  // puts a register there. B stays deeper because it absorbs write responses,
+  // which is a throughput concern rather than a timing one.
+  private val m_axi_ =
+    axi4.full.MasterBuffer(m_axi.asFull, axi4.BufferConfig(aw = 2, w = 2, b = 8, ar = 2, r = 2))
   private val s_pkg_ = elastic.SourceBuffer(s_pkg.asLite, 4)
   private val s_allows_ = s_allows.map(p => elastic.SourceBuffer(p.asLite, 8))
   private val m_allows_ = m_allows.map(p => elastic.SinkBuffer(p.asLite, 8))
