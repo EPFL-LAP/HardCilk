@@ -2,23 +2,34 @@
 #include <memIO_xrt.h>
 #include <experimental/xrt_xclbin.h>
 #include <experimental/xrt_ip.h>
+#include <iostream>
 #include <string>
 #include <xrt/xrt_device.h>
+
+static void printUsage(const char *program)
+{
+    std::cerr << "Usage: " << program << " <xclbin> <graph_file>\n";
+}
 
 // main parses args
 int main(int argc, char* argv[])
 {
-    assert(argc == 3);
+    if (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
+        printUsage(argv[0]);
+        return 0;
+    }
+    if (argc != 3) {
+        printUsage(argv[0]);
+        return 1;
+    }
 
     std::string xclbin_path = argv[1];
     std::string graph_file = argv[2];
 
     auto pr0_name = "triangleCount_0:{triangleCount_0}";
 
-    std::cout << "Loading xclbin: " << xclbin_path << std::endl;
     xrt::device fpga_card(0);
     auto uuid = fpga_card.load_xclbin(xclbin_path);
-    std::cout << "xclbin loaded with UUID: " << uuid.to_string() << std::endl;
 
     auto triangleCount_0 = xrt::ip(fpga_card, uuid, pr0_name);
 
