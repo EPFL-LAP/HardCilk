@@ -24,19 +24,30 @@ object TclQuestaSim {
       ramaPorts: Set[Int] = Set.empty,
       hbmPortWidths: Seq[Int] = Seq.empty,
       enableRamaStriping: Boolean = false,
-      rawPortLabels: Seq[String] = Seq.empty
+      rawPortLabels: Seq[String] = Seq.empty,
+      rawPortAxi3: Seq[Boolean] = Seq.empty
   ) = {
     val rawMode = rawPortLabels.nonEmpty
     // Which raw masters share each HBM port.
     val assignment =
       if (rawMode) Some(HbmPortDistribution.distribute(rawPortLabels, reduce_axi)) else None
+
+    // A single 256-bit AXI4 master already presents RAMA's bus, so it reaches it
+    // without an aggregating SmartConnect. Only in striping mode: the plain path
+    // drives the HBM's AXI3 slaves and needs the converting SmartConnect.
+    val bypassPorts =
+      if (!enableRamaStriping) Set.empty[Int]
+      else
+        assignment
+          .map(TclGeneralConfigs.rawPortsBypassingSmartConnect(_, hbmPortWidths, rawPortAxi3))
+          .getOrElse(Set.empty[Int])
     // Raw mode shares every HBM port between several masters, so the interconnect
     // reserves no dedicated RAMA port and none is placed here either.
     val effectiveRamaPorts = if (rawMode) Set.empty[Int] else ramaPorts
     if (rawMode && ramaPorts.nonEmpty) {
       println(
         "[TclQuestaSim] WARNING: raw HBM export shares every HBM port between several masters, " +
-          "so no per-port RAMA IP is placed; use --questa-rama-striping for a RAMA on every port."
+          "so no per-port RAMA IP is placed; use --rama-striping for a RAMA on every port."
       )
     }
 
@@ -55,7 +66,7 @@ object TclQuestaSim {
         vipHbmPort + 1 <= 32,
         s"[TclQuestaSim] The design exports $reduce_axi HBM port(s); the QuestaSim testbench needs " +
           s"one more for its memory VIP, which exceeds the 32 HBM slave ports. Reduce the AXI port " +
-          s"count (-r) to at most 31, or use --questa-rama-striping."
+          s"count (-r) to at most 31, or use --rama-striping."
       )
     } else {
       require(
@@ -93,20 +104,16 @@ object TclQuestaSim {
       )
     )
 
-    // Connect the management port from axi_vip_1 to the compute system. A Vitis
-    // descriptor already exposes a 32-bit AXI-Lite slave, so the width converter
-    // is only needed for the 64-bit (non-Vitis) management slave.
-    if (fullSysGenDescriptor.isVitisProject) {
-      tclWriteln(
-        "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins */s_axil_mgmt_hardcilk]"
-      )
-    } else {
-      tclWriteln("create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 axi_dwidth_converter_0")
-      tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_dwidth_converter_0/M_AXI] [get_bd_intf_pins */s_axil_mgmt_hardcilk]")
-      tclWriteln(
-        "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins axi_dwidth_converter_0/S_AXI]"
-      )
-    }
+    // Connect the management port from axi_vip_1 to the compute system. This flow
+    // always builds the design with the native 64-bit AXI-Lite management slave
+    // (the 32-bit Vitis convention belongs to the -x flow, which has its own RTL
+    // elaboration and never reaches this generator), so the width converter is
+    // unconditional.
+    tclWriteln("create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 axi_dwidth_converter_0")
+    tclWriteln("connect_bd_intf_net [get_bd_intf_pins axi_dwidth_converter_0/M_AXI] [get_bd_intf_pins */s_axil_mgmt_hardcilk]")
+    tclWriteln(
+      "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins axi_dwidth_converter_0/S_AXI]"
+    )
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_clk] [get_bd_pins axi_clock_converter_1/s_axi_aclk]")
     tclWriteln("connect_bd_net [get_bd_ports axi_vip_aresetn] [get_bd_pins axi_clock_converter_1/s_axi_aresetn]")
 
@@ -140,14 +147,20 @@ object TclQuestaSim {
           assignment = assignment.get,
           labels = rawPortLabels,
           clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
-          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]"
+          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
+          bypassPorts = bypassPorts
         )
       )
     }
     if (rawMode) {
       println(
         s"[TclQuestaSim] Raw HBM export: ${rawPortLabels.length} master(s) aggregated onto " +
-          s"$reduce_axi SmartConnect(s).\n" + HbmPortDistribution.summary(assignment.get, rawPortLabels)
+          s"${reduce_axi - bypassPorts.size} SmartConnect(s)" +
+          (if (bypassPorts.isEmpty) ""
+           else
+             s"; ${bypassPorts.size} port(s) with a single 256-bit AXI4 master go straight to " +
+               s"their RAMA (${bypassPorts.toSeq.sorted.map(p => f"$p%02d").mkString(", ")})") +
+          ".\n" + HbmPortDistribution.summary(assignment.get, rawPortLabels)
       )
     }
 
@@ -165,9 +178,9 @@ object TclQuestaSim {
           resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
           extMasterPin = "[get_bd_intf_pins axi_clock_converter_0/M_AXI]",
           extCellPrefix = "rama_vip",
-          masterPinOf =
-            if (rawMode) Some((i: Int) => f"[get_bd_intf_pins smartconnect_hbm_${i}%02d/M00_AXI]")
-            else None
+          masterPinOf = assignment.map(a =>
+            TclGeneralConfigs.rawPortMasterPin(fullSysGenDescriptor.name, a, bypassPorts)
+          )
         )
       )
       val stripedPorts = TclGeneralConfigs.getHbmRamaStripingPortCount(reduce_axi)
@@ -272,12 +285,22 @@ object TclQuestaSim {
     // shows up much later as a confusing "cannot open questa_main.cpp" from
     // sccom, because the simulation directory was never created.
     shellFileStringBuilder.append("set -e\n")
+    shellFileStringBuilder.append("HC_BATCH=0\n")
+    shellFileStringBuilder.append("for a in \"$@\"; do [ \"$a\" = --batch ] && HC_BATCH=1; done\n")
+    shellFileStringBuilder.append("export HC_BATCH\n")
     shellFileStringBuilder.append("export XILINX_ROOT=/alpha/tools/Xilinx/\n")
     shellFileStringBuilder.append("source $XILINX_ROOT/Vivado/2024.1/settings64.sh\n")
     shellFileStringBuilder.append(f"vivado -mode batch -source ${fullSysGenDescriptor.name}_questa.tcl\n")
     shellFileStringBuilder.append(f"cp simulate.do ${fullSysGenDescriptor.name}_vivado_project/project_1.sim/sim_1/behav/questa/\n")
     shellFileStringBuilder.append(f"cd ${fullSysGenDescriptor.name}_vivado_project/project_1.sim/sim_1/behav/questa/\n")
-    shellFileStringBuilder.append("vsim -do simulate.do\n")
+    // `--batch` runs the simulation to completion headlessly. The default path
+    // opens the GUI and stops at time 0, which is what you want when debugging
+    // but useless in a script -- and easy to mistake for a finished run.
+    shellFileStringBuilder.append("if [ \"${HC_BATCH:-0}\" = 1 ]; then\n")
+    shellFileStringBuilder.append("    HARDCILK_BATCH=1 vsim -c -do simulate.do\n")
+    shellFileStringBuilder.append("else\n")
+    shellFileStringBuilder.append("    vsim -do simulate.do\n")
+    shellFileStringBuilder.append("fi\n")
 
 
     // Write the shell file to the tcl directory of the output

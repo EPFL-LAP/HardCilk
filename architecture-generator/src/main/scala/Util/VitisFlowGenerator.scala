@@ -76,6 +76,12 @@ object VitisFlowGenerator {
 MK_PATH  := $$(abspath $$(lastword $$(MAKEFILE_LIST)))
 CUR_DIR  := $$(patsubst %/,%,$$(dir $$(MK_PATH)))
 
+# `all` is declared near the bottom, but make takes the FIRST rule in the file as
+# the default goal and that is $$(TMP_CFG). Without this, a bare `make TARGET=hw_emu`
+# copies the connectivity config and stops, reporting success without building an
+# xclbin.
+.DEFAULT_GOAL := all
+
 TARGET   ?= hw
 PLATFORM ?= xilinx_u55c_gen3x16_xdma_3_202210_1
 DEVICE   ?= /opt/xilinx/platforms/xilinx_u55c_gen3x16_xdma_3_202210_1/xilinx_u55c_gen3x16_xdma_3_202210_1.xpfm
@@ -96,7 +102,10 @@ SRC_CFG := $$(CUR_DIR)/src/cfg/conn_u55c.cfg
 else
 SRC_CFG := $$(CUR_DIR)/src/cfg/conn_u55c_emu.cfg
 endif
-TMP_CFG := $$(RUN_DIR)/conn_u55c.tmp.cfg
+# Per-target: hw and hw_emu take different connectivity files, and make compares
+# timestamps only, so a shared copy would feed v++ whichever flavour was written
+# last rather than the one that matches TARGET.
+TMP_CFG := $$(RUN_DIR)/conn_u55c.$$(TARGET).tmp.cfg
 
 VPP_FLAGS   := -t $$(TARGET) --platform $$(XPLATFORM) --save-temps
 VPP_LDFLAGS := --optimize 2 -R 2 --config $$(TMP_CFG)
@@ -121,7 +130,10 @@ else
 VPP_LINKHOOKS :=
 endif
 
-XO_DIR      := $$(RUN_DIR)/${name}/xo
+# Per-target as well: gen_xo.tcl is passed $$(TARGET), so the packaged .xo really
+# does differ between hw and hw_emu. Sharing one path meant a second build with a
+# flipped TARGET saw the .xo as up to date and linked the wrong one.
+XO_DIR      := $$(RUN_DIR)/${name}/xo.$$(TARGET)
 KERNEL_OBJS := $$(XO_DIR)/${name}_0.xo
 XCLBIN      := $$(BUILD_DIR)/${name}.xclbin
 
@@ -493,6 +505,14 @@ for {set i 0} {$$i < $totalPEs} {incr i} {
   private def connCfg(d: FullSysGenDescriptor, reduceAxi: Int): String = {
     val name   = d.name
     val freqHz = d.targetFrequency.toLong * 1_000_000L
+
+    // Keep in step with TclResources.TclGeneralConfigs.getImplStrategyTcl -- the
+    // Vivado and Vitis flows must not drift apart on implementation strategy.
+    val placeDirective =
+      if (TclResources.DeviceProfile.isKnown(d.fpgaModel))
+        TclResources.DeviceProfile.forModel(d.fpgaModel).placeDirective
+      else "ExtraNetDelay_high"
+
     val spLines = (0 until reduceAxi)
       .map(i => f"sp=${name}_0.m_axi_$i%02d:HBM[0:31]")
       .mkString("\n")
@@ -506,7 +526,7 @@ $spLines
 freqHz=${freqHz}:${name}_0.clock
 
 [vivado]
-prop=run.impl_1.STEPS.PLACE_DESIGN.ARGS.DIRECTIVE=ExtraNetDelay_high
+prop=run.impl_1.STEPS.PLACE_DESIGN.ARGS.DIRECTIVE=$placeDirective
 prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.IS_ENABLED=true
 prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE=AggressiveExplore
 prop=run.impl_1.STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE=AggressiveExplore

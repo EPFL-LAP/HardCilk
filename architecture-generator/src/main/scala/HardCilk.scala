@@ -190,13 +190,13 @@ class HardCilk(
       )
     )
 
-    val s_axil_mgmt = if (fullSysGenDescriptor.isVitisProject) {
+    val s_axil_mgmt = if (fullSysGenDescriptor.vitisMgmtConvention) {
       IO(axi4.Slave(axiCfgCtrl.copy(wData = 32))).suggestName("s_axil_mgmt_hardcilk")
     } else {
       IO(axi4.Slave(axiCfgCtrl)).suggestName("s_axil_mgmt_hardcilk")
     }
 
-    if (fullSysGenDescriptor.isVitisProject) {
+    if (fullSysGenDescriptor.vitisMgmtConvention) {
 
       val s_axil_mgmt_upscale = Module(
         new Upscale(new UpscaleConfig(axiCfgCtrl.copy(wData = 32), 64))

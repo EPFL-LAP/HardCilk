@@ -220,7 +220,18 @@ case class FullSysGenDescriptor(
     targetFrequency: Int = 250,
     memorySizeSim: Int = 1,
     fpgaModel: String = "ALVEO_U55C",
-    isVitisProject: Boolean = false,
+    /**
+      * Use the Vitis management convention: a 32-bit AXI-Lite control port and a
+      * 0x10 register-map offset, because Vitis reserves the first 0x10 bytes of a
+      * kernel's register space for its own `ap_ctrl` block.
+      *
+      * Set by the emitter from `-x/--vitis`, never read from the JSON descriptor:
+      * it changes the generated hardware, so letting the descriptor decide it
+      * would mean a `-q`/`-P` run could silently emit RTL that its own block
+      * design cannot drive. A JSON still carrying the old `isVitisProject` key is
+      * ignored with a warning (see `HardCilkEmitter`).
+      */
+    vitisMgmtConvention: Boolean = false,
     keepAXI4Interfaces: Boolean = false,
     mFPGASynth: Boolean = false,
     mFPGASimulation: Boolean = false,
@@ -403,7 +414,7 @@ case class FullSysGenDescriptor(
   // --- All helper logic is kept here ---
   // Assign base addresses
   var j = 0
-  val base = if (isVitisProject) 0x10 else 0x0
+  val base = if (vitisMgmtConvention) 0x10 else 0x0
   
 
   taskDescriptors.foreach(task => {    

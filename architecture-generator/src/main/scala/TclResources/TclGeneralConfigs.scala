@@ -449,8 +449,14 @@ object TclGeneralConfigs {
     * register slices, while the QuestaSim flow takes it straight to the HBM (or
     * to a RAMA), so the caller wires it.
     *
-    * @param assignment per HBM port, the indices of the raw masters on it
-    * @param labels     `<kind>/<task>` per raw master, used for the TCL comments
+    * Ports in `bypassPorts` get no cell at all -- see [[rawPortsBypassingSmartConnect]].
+    * The caller is responsible for pointing its downstream at the master itself
+    * for those, which [[rawPortMasterPin]] does.
+    *
+    * @param assignment   per HBM port, the indices of the raw masters on it
+    * @param labels       `<kind>/<task>` per raw master, used for the TCL comments
+    * @param bypassPorts  ports whose single master reaches the downstream stage
+    *                     directly, so no SmartConnect is built for them
     */
   def getHbmAggregateSmartConnectTcl(
       descriptorName: String,
@@ -458,7 +464,8 @@ object TclGeneralConfigs {
       labels: Seq[String],
       clkPin: String,
       resetPin: String,
-      cellPrefix: String = "smartconnect_hbm"
+      cellPrefix: String = "smartconnect_hbm",
+      bypassPorts: Set[Int] = Set.empty
   ): String = {
     val sb = new StringBuilder
 
@@ -468,7 +475,7 @@ object TclGeneralConfigs {
       sb.append(s"# $l\n")
     }
 
-    for ((masters, port) <- assignment.zipWithIndex) {
+    for ((masters, port) <- assignment.zipWithIndex if !bypassPorts.contains(port)) {
       val cell = f"${cellPrefix}_${port}%02d"
       require(
         masters.nonEmpty,
@@ -492,15 +499,64 @@ object TclGeneralConfigs {
   }
 
   /**
+    * The HBM ports of a raw design whose aggregating SmartConnect is pure
+    * overhead, so the master is wired to the downstream stage directly.
+    *
+    * That holds when the port carries a single master (nothing to arbitrate)
+    * whose bus is already what the downstream stage takes: RAMA's 256-bit AXI4.
+    * A narrower master still needs the SmartConnect for the width conversion,
+    * and an AXI3 master still needs it for the protocol conversion -- RAMA and
+    * the register slices in front of it are AXI4.
+    *
+    * Only valid on a RAMA path. Without RAMA the masters drive the HBM's AXI3
+    * slaves, and the 1:1 SmartConnect that converts AXI4 -> AXI3 has to stay:
+    * [[getHbmSmartConnectTcl]] builds those and never bypasses.
+    *
+    * @param assignment   per HBM port, the indices of the raw masters on it
+    * @param masterWidths data width of each exported `m_axi_XX`
+    * @param masterAxi3   whether each exported `m_axi_XX` is AXI3-compatible;
+    *                     empty means unknown, which bypasses nothing
+    */
+  def rawPortsBypassingSmartConnect(
+      assignment: Seq[Seq[Int]],
+      masterWidths: Seq[Int],
+      masterAxi3: Seq[Boolean]
+  ): Set[Int] =
+    if (masterAxi3.isEmpty || masterWidths.isEmpty) Set.empty
+    else
+      assignment.zipWithIndex.collect {
+        case (Seq(master), port)
+            if masterWidths.lift(master).contains(ramaAxiDataWidth) &&
+              !masterAxi3.lift(master).getOrElse(true) =>
+          port
+      }.toSet
+
+  /**
+    * Where a raw HBM port's traffic comes out: its aggregating SmartConnect, or
+    * the design master itself for a port in `bypassPorts`.
+    */
+  def rawPortMasterPin(
+      descriptorName: String,
+      assignment: Seq[Seq[Int]],
+      bypassPorts: Set[Int],
+      cellPrefix: String = "smartconnect_hbm"
+  ): Int => String =
+    (port: Int) =>
+      if (bypassPorts.contains(port))
+        f"[get_bd_intf_pins ${descriptorName}_0/m_axi_${assignment(port).head}%02d]"
+      else f"[get_bd_intf_pins ${cellPrefix}_${port}%02d/M00_AXI]"
+
+  /**
     * One 1:1 SmartConnect per exported HBM master.
     *
-    * The HardCilk top level exports plain AXI4 masters whose data width is the
-    * native width of the interfaces muxed behind them (no Widen, no AXI3
-    * conversion inside the design). The HBM slaves are 256-bit AXI3, so a
-    * SmartConnect with a single SI and a single MI is inserted in between: it
-    * infers both sides from the connected pins and performs the data-width
-    * conversion and the AXI4 -> AXI3 conversion (including burst splitting)
-    * automatically -- the same job v++ does for us in the Vitis flow.
+    * The HardCilk top level exports masters at the native data width of the
+    * interfaces behind them (no Widen inside the design), as plain AXI4 in the
+    * muxed flow and in the master's own AXI3/AXI4 flavour and address width in
+    * `--raw-hbm-ports`. The HBM slaves are 256-bit AXI3, so a SmartConnect with
+    * a single SI and a single MI is inserted in between: it infers both sides
+    * from the connected pins and performs the data-width, address-width and
+    * protocol conversion (including burst splitting) automatically -- the same
+    * job v++ does for us in the Vitis flow.
     *
     * Ports listed in `ramaPorts` additionally get a RAMA IP spliced in between
     * the SmartConnect and the HBM slave -- see [[getRamaTcl]].
@@ -516,6 +572,12 @@ object TclGeneralConfigs {
     * @param ramaPorts  indices of the exported masters that want a RAMA IP
     * @param assignment raw-mode master-to-port assignment; `None` keeps the 1:1
     *                   mapping of a bus-group-muxed design
+    * @param masterPinOf overrides the AXI master feeding each SmartConnect. The
+    *                   QuestaSim flow leaves this `None` and takes the design's
+    *                   `m_axi_XX` directly, while the PCIe flow points it at the
+    *                   far side of its SLR-crossing register slices
+    *                   (`rs1_m_axi_XX/M_AXI`). Only meaningful with
+    *                   `assignment = None`, where this helper owns the master side
     */
   def getHbmSmartConnectTcl(
       descriptorName: String,
@@ -525,7 +587,8 @@ object TclGeneralConfigs {
       cellPrefix: String = "smartconnect_hbm",
       ramaPorts: Set[Int] = Set.empty,
       assignment: Option[Seq[Seq[Int]]] = None,
-      labels: Seq[String] = Seq.empty
+      labels: Seq[String] = Seq.empty,
+      masterPinOf: Option[Int => String] = None
   ): String = {
     val sb = new StringBuilder
 
@@ -556,9 +619,9 @@ object TclGeneralConfigs {
           sb.append(
             f"set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] [get_bd_cells ${cell}]\n"
           )
-          sb.append(
-            f"connect_bd_intf_net [get_bd_intf_pins ${descriptorName}_0/m_axi_${i}%02d] [get_bd_intf_pins ${cell}/S00_AXI]\n"
-          )
+          val masterPin =
+            masterPinOf.map(_(i)).getOrElse(f"[get_bd_intf_pins ${descriptorName}_0/m_axi_${i}%02d]")
+          sb.append(f"connect_bd_intf_net ${masterPin} [get_bd_intf_pins ${cell}/S00_AXI]\n")
           if (ramaPorts.contains(i)) {
             sb.append(getRamaTcl(i, f"[get_bd_intf_pins ${cell}/M00_AXI]", clkPin, resetPin))
           } else {
@@ -719,8 +782,7 @@ object TclGeneralConfigs {
   }
 
   /**
-    * Soft floorplan for the PCIe flow, mirroring what `package_kernel.tcl` emits
-    * for the Vitis flow.
+    * Occupancy-aware floorplan for the PCIe flow.
     *
     * On the xcu55c every PCIE4CE4 site, all sixteen PCIe GTY channels (quads
     * 224-227) and all thirty-two HBM AXI interfaces are in SLR0 -- the Vitis
@@ -728,75 +790,27 @@ object TclGeneralConfigs {
     * So SLR0 is spoken for by the shell-equivalent logic and the generated design
     * is pushed up into SLR1/SLR2.
     *
-    * The kernel and AXI-Lite pblocks are soft: they are a hint the placer may
-    * violate if timing demands it. The two memory-slice pblocks are hard, because
-    * their whole purpose is to sit on a known side of the boundary. No LAGUNA
-    * coordinates and no `CONTAIN_ROUTING` -- the same deliberately loose approach
-    * the Vitis flow takes.
+    * The content is generated from the design's own PE counts by [[Floorplan]];
+    * see there for why whole PEs are pinned to whole SLRs and why the nested
+    * pblock form is mandatory. Device geometry comes from [[DeviceProfile]],
+    * keyed off `fpgaModel`.
     *
-    * Cell paths are rooted at `design_1_i`: the synthesis top is `top_pcie`
-    * (`src/main/resources/top.v`), which instantiates `design_1` directly rather
-    * than going through a generated BD wrapper.
-    *
-    * The filters start `*design_1_i/` with no slash between the wildcard and the
-    * instance name. The Vitis flow's equivalent puts a slash there, which works
-    * only because its instance sits several levels down. Here `design_1_i` is
-    * the top-level instance, so a wildcard-then-slash prefix demands a leading
-    * slash that is not in the name, and every pblock silently matches zero cells.
+    * @param peInstanceNames the elaborated Chisel instance names of each task's
+    *                        PEs, in task order. Empty falls back to
+    *                        [[Floorplan.reconstructPeInstanceNames]].
     */
-  def getFloorplanXdc(descriptorName: String, rawMode: Boolean = false): String = {
-    // In a --raw-hbm-ports design the aggregating SmartConnects sit between the
-    // design and the register slices, so they belong on the design side of the
-    // crossing. Emitted only in raw mode: the cells do not exist otherwise, and
-    // add_cells_to_pblock on an empty list is at best a silent no-op.
-    val rawSmartConnectPblock =
-      if (!rawMode) ""
-      else
-        """
-# Raw-export aggregation SmartConnects: design side of the crossing, with the kernel.
-add_cells_to_pblock \
-    [get_pblocks pblock_user_kernel] \
-    [get_cells -hierarchical -filter {NAME =~ *design_1_i/smartconnect_hbm_*}]
-"""
-    s"""# Generated by HardCilk -- floorplan for the XDMA/PCIe flow.
-#
-# SLR0 holds the PCIe hard block, its GTY quads and the HBM AXI interfaces, all
-# of which are fixed there by the device. The generated design is placed above
-# it and reaches HBM through the rs0/rs1 register slice pair.
-
-# Design: prefer SLR1+SLR2, but allow escape if timing needs it.
-create_pblock pblock_user_kernel
-resize_pblock [get_pblocks pblock_user_kernel] -add SLR1
-resize_pblock [get_pblocks pblock_user_kernel] -add SLR2
-add_cells_to_pblock \\
-    [get_pblocks pblock_user_kernel] \\
-    [get_cells -hierarchical -filter {NAME =~ *design_1_i/${descriptorName}_0/*}]
-set_property IS_SOFT TRUE [get_pblocks pblock_user_kernel]
-${rawSmartConnectPblock}
-# First AXI slice: design side of the crossing.
-create_pblock pblock_axi_rs0
-resize_pblock [get_pblocks pblock_axi_rs0] -add SLR1
-add_cells_to_pblock \\
-    [get_pblocks pblock_axi_rs0] \\
-    [get_cells -hierarchical -filter {NAME =~ *design_1_i/rs0_m_axi_*}]
-set_property IS_SOFT FALSE [get_pblocks pblock_axi_rs0]
-
-# Second AXI slice: HBM side of the crossing.
-create_pblock pblock_axi_rs1
-resize_pblock [get_pblocks pblock_axi_rs1] -add SLR0
-add_cells_to_pblock \\
-    [get_pblocks pblock_axi_rs1] \\
-    [get_cells -hierarchical -filter {NAME =~ *design_1_i/rs1_m_axi_*}]
-set_property IS_SOFT FALSE [get_pblocks pblock_axi_rs1]
-
-# AXI-Lite slice: flexible, but stay close to the control side.
-create_pblock pblock_axilite_slice
-resize_pblock [get_pblocks pblock_axilite_slice] -add SLR1
-add_cells_to_pblock \\
-    [get_pblocks pblock_axilite_slice] \\
-    [get_cells -hierarchical -filter {NAME =~ *design_1_i/rs_s_axil_mgmt*}]
-set_property IS_SOFT TRUE [get_pblocks pblock_axilite_slice]
-"""
+  def getFloorplanXdc(
+      descriptor: FullSysGenDescriptor,
+      rawMode: Boolean = false,
+      peInstanceNames: Seq[(String, Seq[String])] = Seq.empty,
+      peIfaceBuffers: Seq[(String, Seq[String])] = Seq.empty
+  ): String = {
+    val names =
+      if (peInstanceNames.nonEmpty) peInstanceNames
+      else Floorplan.reconstructPeInstanceNames(descriptor)
+    val plan = Floorplan.plan(descriptor, names)
+    Floorplan.report(plan)
+    Floorplan.xdc(descriptor.name, plan, rawMode, peIfaceBuffers)
   }
 
   /**
@@ -829,8 +843,13 @@ if {[llength $hc_req_buffer_nets] == 0} {
   }
 
   /**
-    * Implementation strategy, mirroring what the Vitis flow passes to v++ by
-    * default in `src/cfg/conn_u55c.cfg`'s `[vivado]` section.
+    * Implementation strategy. The phys_opt / route / post-route phys_opt
+    * directives mirror what the Vitis flow passes to v++ in
+    * `src/cfg/conn_u55c.cfg`'s `[vivado]` section; the placer directive comes
+    * from [[DeviceProfile.placeDirective]] instead, because the right choice
+    * depends on the device's die count. See the `placeDirective` note on the
+    * U55C profile for why it is `SSI_SpreadSLLs` and not Vitis's
+    * `ExtraNetDelay_high`.
     *
     * Set on the project rather than only inside the batch script, so an
     * interactive GUI run gets the same strategy as a headless one.
@@ -839,11 +858,22 @@ if {[llength $hc_req_buffer_nets] == 0} {
     * has no Vivado equivalent: it tells v++ not to abort packaging when the
     * design misses timing. In this flow `write_bitstream` already proceeds on
     * negative slack (with a warning), so there is nothing to translate.
+    *
+    * Falls back to Vitis's `ExtraNetDelay_high` for an `fpgaModel` with no
+    * profile, so an unlisted device still builds with the old behaviour rather
+    * than failing here -- [[Floorplan]] is the place that insists on a profile.
     */
-  def getImplStrategyTcl(): String = {
-    """
-        # Implementation strategy -- same directives the Vitis flow uses by default.
-        set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE                ExtraNetDelay_high [get_runs impl_1]
+  def getImplStrategyTcl(descriptor: FullSysGenDescriptor): String = {
+    val placeDirective =
+      if (DeviceProfile.isKnown(descriptor.fpgaModel))
+        DeviceProfile.forModel(descriptor.fpgaModel).placeDirective
+      else "ExtraNetDelay_high"
+    val place = placeDirective.padTo(18, ' ')
+
+    s"""
+        # Implementation strategy. Placer directive from the device profile; the
+        # rest are the directives the Vitis flow uses by default.
+        set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE                $place [get_runs impl_1]
         set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED                 true               [get_runs impl_1]
         set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE             AggressiveExplore  [get_runs impl_1]
         set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE                AggressiveExplore  [get_runs impl_1]

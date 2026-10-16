@@ -55,7 +55,12 @@ object TclGeneratorMemPEs {
       tclFileDirectory: String,
       reduce_axi: Int,
       hbmPortWidths: Seq[Int] = Seq.empty,
-      rawPortLabels: Seq[String] = Seq.empty
+      enableRamaStriping: Boolean = false,
+      ramaPorts: Set[Int] = Set.empty,
+      rawPortLabels: Seq[String] = Seq.empty,
+      rawPortAxi3: Seq[Boolean] = Seq.empty,
+      peInstanceNames: Seq[(String, Seq[String])] = Seq.empty,
+      peIfaceBuffers: Seq[(String, Seq[String])] = Seq.empty
   ) = {
     val rawMode = rawPortLabels.nonEmpty
     require(
@@ -63,15 +68,41 @@ object TclGeneratorMemPEs {
       s"[TclGeneratorMemPEs] Expected $reduce_axi HBM port width(s), got ${hbmPortWidths.length}."
     )
 
-    // Every design master gets a RAMA on its own HBM port, and the host DMA path
-    // needs one more for its own.
-    val totalHbmPorts = TclGeneralConfigs.getHbmRamaStripingPortCount(reduce_axi)
+    // The host DMA path always takes an HBM port of its own, striped or not, so
+    // the design can use at most 31.
     require(
       reduce_axi < 32,
       s"[TclGeneratorMemPEs] The design exports $reduce_axi HBM port(s); the PCIe flow needs one " +
         s"more for the host DMA path, which exceeds the 32 HBM slave ports. Reduce the AXI port " +
         s"count (-r) to at most 31."
     )
+
+    // HBM port that carries the host DMA traffic, and the number of slave ports
+    // to enable. Striping mode may fold the host onto port 00 when all 32 are
+    // taken, which is what getHbmRamaStripingPortCount encodes.
+    val hostHbmPort = reduce_axi
+    val totalHbmPorts =
+      if (enableRamaStriping) TclGeneralConfigs.getHbmRamaStripingPortCount(reduce_axi)
+      else hostHbmPort + 1
+
+    // Raw mode shares each HBM port between several masters, so no port is a
+    // single `generateRAMA` task's own and the per-port RAMAs are dropped -- use
+    // --rama-striping to put a RAMA on every port instead.
+    val effectiveRamaPorts = if (rawMode || enableRamaStriping) Set.empty[Int] else ramaPorts
+    if (!enableRamaStriping && effectiveRamaPorts.nonEmpty) {
+      // A per-port RAMA permutes addresses within its port, but without striping
+      // the host reaches HBM through a plain SmartConnect and so does not see the
+      // same permutation. Striping mode avoids this by putting the host behind an
+      // identically-configured RAMA of its own.
+      println(
+        "[TclGeneratorMemPEs] WARNING: this design has generateRAMA task(s) on HBM port(s) " +
+          s"${effectiveRamaPorts.toSeq.sorted.map(i => f"$i%02d").mkString(", ")}, but " +
+          "--rama-striping was not given. The host DMA path reaches HBM directly while those " +
+          "ports go through a RAMA that permutes addresses, so data the host loads into their " +
+          "address range will not be read back by the PEs at the same addresses. Add " +
+          "--rama-striping to put the host behind a matching RAMA."
+      )
+    }
 
     // In raw mode the slices sit behind the aggregating SmartConnects, which
     // already present RAMA's 256-bit bus, so the native master widths do not
@@ -83,6 +114,13 @@ object TclGeneratorMemPEs {
     // HbmPortDistribution.
     val assignment =
       if (rawMode) Some(HbmPortDistribution.distribute(rawPortLabels, reduce_axi)) else None
+
+    // A raw port with a single 256-bit AXI4 master already presents the bus the
+    // register slices and RAMA take, so its SmartConnect would only add latency.
+    val bypassPorts =
+      assignment
+        .map(TclGeneralConfigs.rawPortsBypassingSmartConnect(_, hbmPortWidths, rawPortAxi3))
+        .getOrElse(Set.empty[Int])
 
     val tclCommands = new StringBuilder()
     def tclWriteln(s: String) = {
@@ -116,13 +154,18 @@ object TclGeneratorMemPEs {
           assignment = a,
           labels = rawPortLabels,
           clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
-          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]"
+          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
+          bypassPorts = bypassPorts
         )
       )
       println(
         s"[TclGeneratorMemPEs] Raw HBM export: ${rawPortLabels.length} master(s) aggregated onto " +
-          s"$reduce_axi SmartConnect(s) ahead of the SLR crossing.\n" +
-          HbmPortDistribution.summary(a, rawPortLabels)
+          s"${reduce_axi - bypassPorts.size} SmartConnect(s) ahead of the SLR crossing" +
+          (if (bypassPorts.isEmpty) ""
+           else
+             s"; ${bypassPorts.size} port(s) with a single 256-bit AXI4 master go straight to " +
+               s"their register slice (${bypassPorts.toSeq.sorted.map(p => f"$p%02d").mkString(", ")})") +
+          ".\n" + HbmPortDistribution.summary(a, rawPortLabels)
       )
     }
 
@@ -133,41 +176,36 @@ object TclGeneratorMemPEs {
         portWidths = widths,
         addrWidth = fullSysGenDescriptor.widthAXIAddress,
         liteAddrWidth = fullSysGenDescriptor.getNumConfigPorts() + 6,
-        liteDataWidth = if (fullSysGenDescriptor.isVitisProject) 32 else 64,
+        liteDataWidth = 64,
         clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
         resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
-        masterPinOf =
-          if (rawMode) Some((i: Int) => f"[get_bd_intf_pins smartconnect_hbm_${i}%02d/M00_AXI]")
-          else None
+        masterPinOf = assignment.map(a =>
+          TclGeneralConfigs.rawPortMasterPin(fullSysGenDescriptor.name, a, bypassPorts)
+        )
       )
     )
 
     // Connect the management port from the xdma to the compute system, through
-    // the AXI-Lite register slice. A Vitis descriptor already exposes a 32-bit
-    // AXI-Lite slave, so the width converter is only needed for the 64-bit
-    // (non-Vitis) management slave.
-    if (fullSysGenDescriptor.isVitisProject) {
-      tclWriteln(
-        "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins rs_s_axil_mgmt/S_AXI]"
-      )
-    } else {
-      tclWriteln("create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 axi_dwidth_converter_0")
-      tclWriteln(
-        "connect_bd_intf_net [get_bd_intf_pins axi_dwidth_converter_0/M_AXI] [get_bd_intf_pins rs_s_axil_mgmt/S_AXI]"
-      )
-      tclWriteln(
-        "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins axi_dwidth_converter_0/S_AXI]"
-      )
-      // Clocked here rather than by the wildcard guard in
-      // getSytstemClockingAndResetConfigTclSyntax: that block runs before this
-      // cell exists, so its [get_bd_cells -quiet axi_dwidth_converter*] is empty.
-      // It sits downstream of axi_clock_converter_1, so it is in the design clock
-      // domain, not the xdma one.
-      tclWriteln("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter_0/s_axi_aclk]")
-      tclWriteln(
-        "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter_0/s_axi_aresetn]"
-      )
-    }
+    // the AXI-Lite register slice. This flow always builds the design with the
+    // native 64-bit AXI-Lite management slave (the 32-bit Vitis convention
+    // belongs to the -x flow, which has its own RTL elaboration and never reaches
+    // this generator), so the width converter is unconditional.
+    tclWriteln("create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 axi_dwidth_converter_0")
+    tclWriteln(
+      "connect_bd_intf_net [get_bd_intf_pins axi_dwidth_converter_0/M_AXI] [get_bd_intf_pins rs_s_axil_mgmt/S_AXI]"
+    )
+    tclWriteln(
+      "connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_1/M_AXI] [get_bd_intf_pins axi_dwidth_converter_0/S_AXI]"
+    )
+    // Clocked here rather than by the wildcard guard in
+    // getSytstemClockingAndResetConfigTclSyntax: that block runs before this
+    // cell exists, so its [get_bd_cells -quiet axi_dwidth_converter*] is empty.
+    // It sits downstream of axi_clock_converter_1, so it is in the design clock
+    // domain, not the xdma one.
+    tclWriteln("connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dwidth_converter_0/s_axi_aclk]")
+    tclWriteln(
+      "connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins axi_dwidth_converter_0/s_axi_aresetn]"
+    )
 
     if (fullSysGenDescriptor.hasAXIDMAInput) {
       println(
@@ -180,28 +218,72 @@ object TclGeneratorMemPEs {
       )
     }
 
-    // Put a RAMA IP on every generated AXI memory master and on the host DMA
-    // path. All instances use the same per-memory striping config so host-side
-    // and design-side accesses stay address-map coherent. The masters are taken
-    // from the far side of the register slices.
-    tclWriteln(
-      TclGeneralConfigs.getHbmRamaStripingTcl(
-        descriptorName = fullSysGenDescriptor.name,
-        numPorts = reduce_axi,
-        portWidths = widths,
-        clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
-        resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
-        extMasterPin = "[get_bd_intf_pins axi_clock_converter_0/M_AXI]",
-        extCellPrefix = "rama_host",
-        masterPinOf = Some((i: Int) => f"[get_bd_intf_pins rs1_m_axi_${i}%02d/M_AXI]")
-      )
-    )
+    // Both memory paths take their masters from the far side of the SLR-crossing
+    // register slices, so raw and bus-group-muxed designs look the same here: one
+    // `rs1_m_axi_XX` per HBM port.
+    val hbmMasterPin = (i: Int) => f"[get_bd_intf_pins rs1_m_axi_${i}%02d/M_AXI]"
 
-    println(
-      s"[TclGeneratorMemPEs] $reduce_axi design memory master(s) and the host DMA path each get a " +
-        s"RAMA IP on their own HBM port ($totalHbmPorts of 32 in total), striping 64-byte fragments " +
-        s"across all 32 pseudo channels (16 GB)."
-    )
+    if (enableRamaStriping) {
+      // Put a RAMA IP on every generated AXI memory master and on the host DMA
+      // path. All instances use the same per-memory striping config so host-side
+      // and design-side accesses stay address-map coherent.
+      tclWriteln(
+        TclGeneralConfigs.getHbmRamaStripingTcl(
+          descriptorName = fullSysGenDescriptor.name,
+          numPorts = reduce_axi,
+          portWidths = widths,
+          clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
+          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
+          extMasterPin = "[get_bd_intf_pins axi_clock_converter_0/M_AXI]",
+          extCellPrefix = "rama_host",
+          masterPinOf = Some(hbmMasterPin)
+        )
+      )
+
+      println(
+        s"[TclGeneratorMemPEs] Striped RAMA mode enabled: $reduce_axi design memory master(s) and " +
+          s"the host DMA path each get a RAMA IP on their own HBM port ($totalHbmPorts of 32 in " +
+          s"total), striping 64-byte fragments across all 32 pseudo channels (16 GB)."
+      )
+    } else {
+      // No striping: each port reaches its own HBM slave through a 1:1
+      // SmartConnect, which does the data-width and AXI4 -> AXI3 conversion RAMA
+      // would otherwise have done. Ports belonging to a `generateRAMA` task still
+      // get their own RAMA spliced in behind the SmartConnect.
+      tclWriteln(
+        TclGeneralConfigs.getHbmSmartConnectTcl(
+          descriptorName = fullSysGenDescriptor.name,
+          numPorts = reduce_axi,
+          clkPin = "[get_bd_pins clk_wiz_0/clk_out1]",
+          resetPin = "[get_bd_pins proc_sys_reset_1/peripheral_aresetn]",
+          ramaPorts = effectiveRamaPorts,
+          masterPinOf = Some(hbmMasterPin)
+        )
+      )
+
+      // Same conversion for the host DMA path on its own spare HBM port.
+      val hostSmartConnect = f"smartconnect_hbm_${hostHbmPort}%02d"
+      tclWriteln(f"create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 ${hostSmartConnect}")
+      tclWriteln(
+        f"set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] [get_bd_cells ${hostSmartConnect}]"
+      )
+      tclWriteln(
+        f"connect_bd_intf_net [get_bd_intf_pins axi_clock_converter_0/M_AXI] [get_bd_intf_pins ${hostSmartConnect}/S00_AXI]"
+      )
+      tclWriteln(
+        f"connect_bd_intf_net [get_bd_intf_pins ${hostSmartConnect}/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_${hostHbmPort}%02d_8HI]"
+      )
+      tclWriteln(f"connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ${hostSmartConnect}/aclk]")
+      tclWriteln(
+        f"connect_bd_net [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins ${hostSmartConnect}/aresetn]"
+      )
+
+      println(
+        s"[TclGeneratorMemPEs] $reduce_axi design memory master(s) and the host DMA path each get " +
+          s"their own HBM port ($totalHbmPorts of 32 in total) through a 1:1 SmartConnect. Pass " +
+          s"--rama-striping to spread every port's traffic across all 32 pseudo channels instead."
+      )
+    }
 
     // Assign addresses
     tclWriteln("assign_bd_address")
@@ -220,7 +302,8 @@ object TclGeneratorMemPEs {
 
     writeFile(
       s"${tclFileDirectory}/${floorplanXdcName}",
-      TclGeneralConfigs.getFloorplanXdc(fullSysGenDescriptor.name, rawMode)
+      TclGeneralConfigs.getFloorplanXdc(
+        fullSysGenDescriptor, rawMode, peInstanceNames, peIfaceBuffers)
     )
     writeFile(s"${tclFileDirectory}/${drcWaiverName}", TclGeneralConfigs.getDrcWaiverTcl())
 
@@ -234,7 +317,7 @@ object TclGeneratorMemPEs {
         set_property PROCESSING_ORDER LATE             [get_files $$hc_floorplan_xdc]
 
         set_property STEPS.OPT_DESIGN.TCL.PRE [file join $$script_folder ${drcWaiverName}] [get_runs impl_1]
-      """ + TclGeneralConfigs.getImplStrategyTcl()
+      """ + TclGeneralConfigs.getImplStrategyTcl(fullSysGenDescriptor)
 
     // Write the tcl commands to a file
     writeFile(
@@ -260,7 +343,7 @@ object TclGeneratorMemPEs {
     chmod.waitFor()
 
     println(
-      s"[TclGeneratorMemPEs] Run ./build.sh in the tcl directory: no flags builds the block " +
+      s"[TclGeneratorMemPEs] Run ./build.sh in the pcie directory: no flags builds the block " +
         s"design, --gui opens it, --impl runs synthesis, place & route and bitstream headless."
     )
   }

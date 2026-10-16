@@ -3,6 +3,7 @@
 
 sccom -DMTI_BIND_SC_MEMBER_FUNCTION -DUSE_MTI_CIN -g -incr -work xil_defaultlib \
      -I ../../../../../../software/projects/DESCRIPTOR_NAME/include/ \
+     -I ../../../../../../software/projects/DESCRIPTOR_NAME/include/gen/nonvitis/ \
      -I ../../../../../../software/driver/include/ \
      ../../../../../../software/projects/DESCRIPTOR_NAME/src/questa_main.cpp \
      ../../../../../../software/driver/src/hardCilkDriver.cpp
@@ -12,6 +13,20 @@ sccom -incr -work xil_defaultlib -dpilib xil_defaultlib -link -fuse-ld=bfd
 
 vopt -suppress vopt-2912 -64 +acc=npr -suppress 10016 -L xil_defaultlib -L axi_infrastructure_v1_1_0 -L fifo_generator_v13_2_10 -L axi_clock_converter_v2_1_30 -L hbm_v1_0_16 -L xlconstant_v1_1_9 -L util_vector_logic_v2_0_4 -L lib_cdc_v1_0_3 -L proc_sys_reset_v5_0_15 -L smartconnect_v1_0 -L axi_register_slice_v2_1_31 -L axi_vip_v1_1_17 -L generic_baseblocks_v2_1_2 -L axi_data_fifo_v2_1_30 -L axi_protocol_converter_v2_1_31 -L blk_mem_gen_v8_4_8 -L axi_dwidth_converter_v2_1_31 -L axi_lite_ipif_v3_0_4 -L interrupt_control_v3_1_5 -L axi_gpio_v2_0_33 -L rama_v1_1_17_lib -L xilinx_vip -L unisims_ver -L unimacro_ver -L secureip -L xpm -L xbip_utils_v3_0_13 -L axi_utils_v2_0_9 -L xbip_pipe_v3_0_9 -L xbip_dsp48_wrapper_v3_0_6 -L xbip_dsp48_addsub_v3_0_9 -L xbip_dsp48_multadd_v3_0_9 -L xbip_bram18k_v3_0_9 -L mult_gen_v12_0_21 -L floating_point_v7_1_18 -work xil_defaultlib xil_defaultlib.TestBench xil_defaultlib.main_sim xil_defaultlib.glbl -o main_sim_opt
 
+
+# Batch mode is selected by the HARDCILK_BATCH environment variable, which
+# simulate.sh sets when it is given --batch. The GUI path is unchanged; the batch
+# path skips every `view`/`layout` command (they need a GUI and abort under
+# `vsim -c`), skips the recursive signal logging (it is the dominant cost of a
+# long run and nothing reads the waves in batch), and actually runs the
+# simulation to completion instead of leaving it at time 0.
+if {[info exists ::env(HARDCILK_BATCH)]} {
+    vsim -lib xil_defaultlib main_sim_opt
+    onerror {quit -code 1}
+    onbreak {quit -code 1}
+    run -all
+    quit -f
+}
 
 vsim -lib xil_defaultlib main_sim_opt
 
