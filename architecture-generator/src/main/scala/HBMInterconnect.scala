@@ -108,6 +108,13 @@ trait HasHBMInterconnect extends Module {
     // below, so this stays correct even if two PEs expose identical configs.
     val interfacesRama = new ArrayBuffer[axi4.full.Interface]()
 
+    // The `m_axi_gmem*` masters whose ARADDR the PE's Verilog marked `// hot`.
+    // Like the RAMA masters these are pulled out of the muxing pool and given an
+    // HBM port of their own, but for a different reason: the author declared the
+    // port bandwidth-critical, so it should not contend with unrelated traffic.
+    // Compared by reference below, so two PEs with identical configs stay distinct.
+    val interfacesHot = new ArrayBuffer[axi4.full.Interface]()
+
     peMap.foreach { case (taskName, peArray) =>
       val task = fullSysGenDescriptor.taskDescriptors.find(_.name == taskName).get
       peArray.foreach { pe =>
@@ -145,10 +152,32 @@ trait HasHBMInterconnect extends Module {
             .toSeq
             .sorted
             .foreach { n =>
-              val iface = pe.getPort(n).asInstanceOf[axi4.RawInterface].asFull
+              // Two-entry buffer on every channel of the PE's memory master.
+              //
+              // These masters are the memory-node <-> PE boundary, and once a
+              // task's PEs are floorplanned across two dice (TclResources.
+              // Floorplan) this is the busiest thing crossing the SLL, and the
+              // path from the interconnect's buffer into the HLS PE was the
+              // largest family of failing paths.
+              //
+              // `BufferConfig.all(2)` puts a `Queue(2)` on ar/aw/w (PE -> node)
+              // and on r/b (node -> PE), at one transfer per cycle and one cycle
+              // of latency per direction. The buffers are elaborated in the
+              // HardCilk top, i.e. in the hub SLR.
+              //
+              // A `Queue` does not give flop-to-flop crossings: it drives its
+              // port signals from a pointer comparator and a LUTRAM read (see
+              // the header of [[Util.SkidBuffer]]). This buffer provides the
+              // capacity; a crossing that also needs a launch flop needs a real
+              // skid on top of it.
+              val iface = axi4.full.SlaveBuffer(
+                pe.getPort(n).asInstanceOf[axi4.RawInterface].asFull,
+                axi4.BufferConfig.all(2)
+              )
               interfacesPE.addOne(iface)
               labelsPE.addOne(s"pe.gmem/$taskName")
               if (task.generateRAMA) interfacesRama.addOne(iface)
+              if (pe.hotMemPorts.contains(n)) interfacesHot.addOne(iface)
             }
         }
       }
@@ -293,6 +322,13 @@ trait HasHBMInterconnect extends Module {
             s"RAMA port is reserved for them."
         )
       }
+      if (interfacesHot.nonEmpty) {
+        println(
+          s"[HBM:Interconnect] NOTE: ${interfacesHot.length} master(s) are marked `// hot`. " +
+            s"Raw export already gives each of them its own m_axi_XX, but the generated TCL may " +
+            s"still place them on a shared SmartConnect; no dedicated HBM port is reserved here."
+        )
+      }
       println(
         s"[HBM:Interconnect] Raw export: ${allInterfaces.length} memory master(s) exported " +
           s"un-muxed (${allLabels.distinct.length} distinct unit kind(s))" +
@@ -319,39 +355,56 @@ trait HasHBMInterconnect extends Module {
       // never go below the number of distinct groups.
       val maxPorts = fullSysGenDescriptor.maximumAXIPorts
 
-      // --- Priority pass: dedicated ports for the RAMA masters ---
-      // A RAMA IP reorders the accesses of everything that reaches the HBM port
-      // it sits on, so it only pays off when the port carries the traffic of the
-      // task that asked for it and nothing else. The `m_axi_gmem*` masters of a
-      // `generateRAMA` task are therefore taken out of the muxing pool first and
-      // each given a port of their own.
+      // --- Priority pass: dedicated ports for the RAMA and hot masters ---
+      // Two kinds of master ask not to be muxed:
+      //  * RAMA: a RAMA IP reorders the accesses of everything that reaches the
+      //    HBM port it sits on, so it only pays off when the port carries the
+      //    traffic of the task that asked for it and nothing else.
+      //  * hot: the kernel author marked the port's ARADDR `// hot` in the PE's
+      //    Verilog, declaring it bandwidth-critical and not to be shared.
+      // Both are therefore taken out of the muxing pool first and each given a
+      // port of its own; only the RAMA ones additionally get a RAMA IP.
       def isRama(iface: axi4.full.Interface): Boolean = interfacesRama.exists(_ eq iface)
+      def isHot(iface: axi4.full.Interface): Boolean = interfacesHot.exists(_ eq iface)
+      // RAMA first, then the hot masters that are not already dedicated for RAMA,
+      // so a shortage demotes hot ports before it gives up a RAMA port.
       val ramaCandidates = allInterfaces.filter(isRama)
-      val nonRama = allInterfaces.filterNot(isRama)
+      val hotCandidates  = allInterfaces.filter(i => isHot(i) && !isRama(i))
+      val candidates     = ramaCandidates ++ hotCandidates
+      val nonCandidates  = allInterfaces.filterNot(i => isRama(i) || isHot(i))
 
       // Dedicating a port is a best-effort promise: every bus group left in the
-      // shared pool still needs at least one mux, and the total cannot exceed
-      // the device's port count. Demote the tail of the RAMA list back into the
-      // shared pool until the budget adds up.
+      // shared pool still needs at least one mux, and the total can exceed
+      // neither the device's port count nor the requested reduction. Demote the
+      // tail of the candidate list back into the shared pool until it adds up.
       def numBusGroups(ifaces: ArrayBuffer[axi4.full.Interface]): Int =
         ifaces.map(i => busSignature(i.cfg)).distinct.length
-      var numDedicated = ramaCandidates.length
+      val portBudget = math.min(maxPorts, math.max(numHBMPorts, 1))
+      var numDedicated = candidates.length
       while (
         numDedicated > 0 &&
-        numDedicated + numBusGroups(nonRama ++ ramaCandidates.drop(numDedicated)) > maxPorts
+        numDedicated + numBusGroups(nonCandidates ++ candidates.drop(numDedicated)) > portBudget
       ) {
         numDedicated -= 1
       }
-      if (numDedicated < ramaCandidates.length) {
+      if (numDedicated < candidates.length) {
+        val lostRama = math.max(0, ramaCandidates.length - numDedicated)
+        val lostHot  = candidates.length - numDedicated - lostRama
         println(
-          s"[HBM:Interconnect] WARNING: ${ramaCandidates.length} master(s) requested a dedicated " +
-            s"RAMA port but only $numDedicated fit within the $maxPorts-port limit; the remaining " +
-            s"${ramaCandidates.length - numDedicated} are muxed with the rest of the design and " +
-            s"get no RAMA IP."
+          s"[HBM:Interconnect] WARNING: ${candidates.length} master(s) requested a dedicated " +
+            s"HBM port (${ramaCandidates.length} RAMA + ${hotCandidates.length} hot) but only " +
+            s"$numDedicated fit within the $portBudget-port budget; $lostHot hot and $lostRama " +
+            s"RAMA master(s) are muxed with the rest of the design (and the demoted RAMA ones " +
+            s"get no RAMA IP)."
         )
       }
-      val dedicated = ramaCandidates.take(numDedicated)
-      val shared    = nonRama ++ ramaCandidates.drop(numDedicated)
+      val dedicated = candidates.take(numDedicated)
+      val shared    = nonCandidates ++ candidates.drop(numDedicated)
+      println(
+        s"[HBM:Interconnect] Dedicated ports: $numDedicated " +
+          s"(${dedicated.count(isRama)} RAMA, ${dedicated.count(i => isHot(i) && !isRama(i))} hot); " +
+          s"${shared.length} master(s) left to mux."
+      )
 
       val byGroup = shared.groupBy(iface => busSignature(iface.cfg))
       val groups = byGroup.keys.toSeq.sortBy(c =>
@@ -380,17 +433,20 @@ trait HasHBMInterconnect extends Module {
 
       val achievedPorts = numDedicated + muxByGroup.values.sum
 
-      // Rebuild the slave buckets: the dedicated RAMA masters take the lowest
-      // bucket indices (one interface each), then each remaining bucket holds
-      // interfaces of exactly one bus group, spread round-robin over that
-      // group's muxes.
+      // Rebuild the slave buckets: the dedicated RAMA and hot masters take the
+      // lowest bucket indices (one interface each), then each remaining bucket
+      // holds interfaces of exactly one bus group, spread round-robin over that
+      // group's muxes. Only the RAMA-backed buckets are reported as needing a
+      // RAMA IP -- a hot port asked for isolation, not for reordering.
       hbmSlaves.clear()
       var idx = 0
+      val ramaBucketsBuf = Set.newBuilder[Int]
       dedicated.foreach { iface =>
         hbmSlaves += (idx -> ArrayBuffer(iface))
+        if (isRama(iface)) ramaBucketsBuf += idx
         idx += 1
       }
-      ramaBuckets = (0 until numDedicated).toSet
+      ramaBuckets = ramaBucketsBuf.result()
       for (g <- groups) {
         val ifaces = byGroup(g)
         val nMux   = muxByGroup(g)
@@ -409,7 +465,7 @@ trait HasHBMInterconnect extends Module {
       )
       println(
         s"[HBM:Interconnect] Widen-free reduction: requested=$numHBMPorts, " +
-          s"reduced to $achievedPorts HBM port(s) = $numDedicated dedicated RAMA port(s) + " +
+          s"reduced to $achievedPorts HBM port(s) = $numDedicated dedicated RAMA/hot port(s) + " +
           s"${muxByGroup.values.sum} shared port(s) across $numGroups bus group(s) " +
           s"[${groupNames.mkString(", ")}] (limit $maxPorts)"
       )
@@ -473,14 +529,30 @@ trait HasHBMInterconnect extends Module {
         // AXI4 -> AXI3 conversion the 256-bit HBM slaves need happens outside
         // the design). Only the ID and address widths are normalised.
         val exportCfg =
-          busSignature(hbmSlave.head.cfg).copy(wId = 2, wAddr = cfgAxi4HBM.wAddr)
+          busSignature(hbmSlave.head.cfg).copy(wId = 4, wAddr = cfgAxi4HBM.wAddr)
 
         if (interfaceCount > 1) {
+          // `slaveBuffers` is overridden away from `MuxConfig`'s default of
+          // `BufferConfig.all(0)`, which left NO register between a slave port
+          // and the arbiter.
+          //
+          // chext's `BasicArbiter` computes
+          //   fire = sources(choice).valid && sink.ready && select.ready
+          //   sources(i).ready = fire && i.U === choice
+          // so with no slave buffer one master's `valid` reaches every other
+          // master's `ready` combinationally, through the round-robin chooser.
+          // With PEs on two dice that cone crosses the SLL twice in one cycle.
+          //
+          // `all(2)` and not a per-channel figure: AW and W are ordered against
+          // each other through the Mux's internal 32-deep port queue, so giving
+          // them unequal depth would change how far AW can run ahead of its
+          // data. Equal depth leaves that relationship exactly as it was.
           val mux = Module(
             new axi4.full.components.Mux(
               new axi4.full.components.MuxConfig(
                 axiSlaveCfg = exportCfg,
-                numSlaves = hbmSlave.length
+                numSlaves = hbmSlave.length,
+                slaveBuffers = axi4.BufferConfig.all(2)
               )
             )
           )

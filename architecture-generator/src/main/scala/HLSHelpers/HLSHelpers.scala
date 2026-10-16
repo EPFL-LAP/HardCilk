@@ -24,10 +24,17 @@ trait VitisInterface {
   def chiselType: Data
 }
 
+/**
+  * @param hot the Verilog declaration of this master's ARADDR carried a `// hot`
+  *            comment, i.e. the kernel author marked it as a bandwidth-critical
+  *            port that should not share an HBM port with anything else. Only
+  *            meaningful on `m_axi_gmem*` masters; see `HasHBMInterconnect`.
+  */
 case class Aximm_VitisInterface(
     val name: String,
     val role: hdlinfo.InterfaceRole,
-    val config: chext.amba.axi4.Config
+    val config: chext.amba.axi4.Config,
+    val hot: Boolean = false
 ) extends VitisInterface {
   assert(role == InterfaceRole.master || role == InterfaceRole.slave)
 
@@ -193,6 +200,16 @@ class VitisWriteBufferModule(
       }.toSet
     else
       Set.empty
+
+  /**
+   * IO names of the memory masters whose ARADDR the PE's Verilog marked `// hot`.
+   * Read back by the HBM interconnect, which tries to give each of them an HBM
+   * port of its own before muxing what is left down to `-r`. The names are the
+   * Verilog port prefixes and survive unchanged into `io.elements`, so they can
+   * be compared directly against the `m_axi_gmem*` keys there.
+   */
+  val hotMemPorts: Set[String] =
+    cfg.interfaces.collect { case i: Aximm_VitisInterface if i.hot => i.name }.toSet
 
   private val pe = Module(new VitisModule(cfg))
 
@@ -750,6 +767,24 @@ object VitisModuleFactory {
     }
   }
 
+  /**
+   * True when the ARADDR *declaration* of the memory master `prefix` carries a
+   * `// hot` comment, as in
+   *
+   *   output [MEM_ADDR_WIDTH-1:0] m_axi_gmem_shared_ARADDR, // hot
+   *
+   * This is how a kernel author asks for the port to be given an HBM port of its
+   * own instead of being muxed with the rest of the design (see the priority
+   * pass in `HasHBMInterconnect`). The comment must follow the port name (only a
+   * port terminator may sit in between), so instantiation lines that merely
+   * mention the signal never match.
+   */
+  def isHotMemPort(prefix: String, moduleContent: String): Boolean = {
+    val re =
+      ("(?m)^.*\\b" + Pattern.quote(prefix) + "_ARADDR\\b\\s*[;,)]?\\s*//.*\\bhot\\b.*$").r
+    re.findFirstIn(moduleContent).isDefined
+  }
+
   def lineContainsOutput(signalName: String, moduleContent: String): Boolean = {
     val pattern = s"""(?i)(output).*\\b$signalName\\b""".r
     pattern.findFirstIn(moduleContent).isDefined
@@ -793,7 +828,8 @@ object VitisModuleFactory {
       val ruserWidth = extractSignalWidth(s"${p}_RUSER", moduleContent)
       val buserWidth = extractSignalWidth(s"${p}_BUSER", moduleContent)
       val arlen = extractSignalWidth(s"${p}_ARLEN", moduleContent)
-      println(s"[HLS:HELPERS:393] ${p} ARLEN ${arlen} dataWidth ${dataWidth}")
+      val hot = isHotMemPort(p, moduleContent)
+      println(s"[HLS:HELPERS:393] ${p} ARLEN ${arlen} dataWidth ${dataWidth}${if (hot) " [hot]" else ""}")
       if (dataWidth > 0) {
         Some(
           Aximm_VitisInterface(
@@ -814,7 +850,8 @@ object VitisModuleFactory {
               hasCache = false || arlen > 4,
               hasRegion = false || arlen > 4,
               hasLock = false || arlen > 4
-            )
+            ),
+            hot = hot
           )
         )
       } else {
