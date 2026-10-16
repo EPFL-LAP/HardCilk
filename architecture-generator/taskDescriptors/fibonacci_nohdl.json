@@ -96,7 +96,6 @@
   ],
   "widthAddress": 64,
   "widthContCounter": 32,
-  "isVitisProject": true,
   "keepAXI4Interfaces": true,
   "mFPGASynth": false,
   "mFPGASimulation": false,
