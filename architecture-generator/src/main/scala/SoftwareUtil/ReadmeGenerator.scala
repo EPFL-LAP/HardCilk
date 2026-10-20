@@ -53,7 +53,12 @@ object ReadmeGenerator {
   ): String = {
     val flows = Seq(
       if (cfg.questa) Some("QuestaSim simulation (`questa/`)") else None,
-      if (cfg.pcie) Some("Vivado XDMA/PCIe design (`pcie/`)") else None,
+      if (cfg.pcie)
+        Some(
+          if (isV80(cfg)) "Vivado AVED/CPM5 QDMA design for the Alveo V80 (`pcie/`)"
+          else "Vivado XDMA/PCIe design (`pcie/`)"
+        )
+      else None,
       if (cfg.vitis) Some("Vitis xclbin (`vitis/`)") else None
     ).flatten
 
@@ -92,7 +97,9 @@ object ReadmeGenerator {
     sb ++= "## Layout\n\n```\n"
     if (cfg.needsSharedRtl) sb ++= "rtl/         RTL shared by the QuestaSim and PCIe flows\n"
     if (cfg.questa) sb ++= "questa/      QuestaSim project  -> ./simulate.sh\n"
-    if (cfg.pcie) sb ++= "pcie/        Vivado block design -> ./build.sh\n"
+    if (cfg.pcie)
+      sb ++= (if (isV80(cfg)) "pcie/        Vivado block design + flashable PDI -> ./build.sh, ./build.sh -i\n"
+      else "pcie/        Vivado block design -> ./build.sh\n")
     if (cfg.vitis) sb ++= "vitis/       Vitis xclbin project -> make TARGET=hw|hw_emu\n"
     if (cfg.software) sb ++= "software/    C++ driver and host software -> cmake\n"
     sb ++= "```\n\n"
@@ -113,8 +120,12 @@ object ReadmeGenerator {
       "launches the simulation, copies `simulate.do` into the generated simulation directory and " +
       "starts `vsim`. It stops at the first failing step.\n\n"
     sb ++= "Requirements:\n\n"
-    sb ++= "- Vivado 2024.1 under `/alpha/tools/Xilinx`\n"
-    sb ++= "- QuestaSim with Xilinx libraries compiled into `/alpha/questa`\n"
+    sb ++= (if (isV80(cfg)) s"- Vivado ${cfg.board.vivadoVersion}\n"
+    else "- Vivado 2024.1 under `/alpha/tools/Xilinx`\n")
+    sb ++= (if (isV80(cfg))
+      "- QuestaSim with Xilinx 2025.1 libraries compiled into `$QUESTA_LIB_DIR` " +
+        "(default `/tools/xilinx_compiled_libs_for_questa`); override `VIVADO_SETTINGS` / `QUESTA_HOME` as needed\n"
+    else "- QuestaSim with Xilinx libraries compiled into `/alpha/questa`\n")
     if (cfg.software)
       sb ++= s"- The testbench sources: `software/projects/$jsonName/src/questa_main.cpp` and its " +
         "`include/test_bench_questa.h`. They are compiled by `sccom` from `simulate.do`, not by " +
@@ -130,11 +141,14 @@ object ReadmeGenerator {
     sb.toString()
   }
 
+  private def isV80(cfg: BuilderConfig): Boolean = cfg.board == Util.Board.V80
+
   private def pcieSection(
       descriptor: FullSysGenDescriptor,
       jsonName: String,
       cfg: BuilderConfig
   ): String = {
+    if (isV80(cfg)) return pcieSectionV80(descriptor, jsonName, cfg)
     val sb = new StringBuilder
     sb ++= "## PCIe bitstream (Vivado + XDMA)\n\n"
     sb ++= "```sh\ncd pcie\n./build.sh            # build the block design\n" +
@@ -158,6 +172,63 @@ object ReadmeGenerator {
         "IP that spreads 64-byte fragments across all 32 HBM pseudo channels. The host traverses " +
         "an identically-configured RAMA on purpose — striping permutes addresses, so a host that " +
         "reached HBM directly would not see the same bytes the PEs do.\n\n"
+    sb.toString()
+  }
+
+  /** Alveo V80: AVED shell, CPM5 QDMA, HBM through the NoC HBM NMUs. */
+  private def pcieSectionV80(
+      descriptor: FullSysGenDescriptor,
+      jsonName: String,
+      cfg: BuilderConfig
+  ): String = {
+    val name = descriptor.name
+    val sb = new StringBuilder
+    sb ++= s"## Alveo V80 image (Vivado ${cfg.board.vivadoVersion}, AVED shell, CPM5 QDMA)\n\n"
+    sb ++= "```sh\ncd pcie\n./build.sh       # build the block design\n" +
+      "./build.sh -i    # synthesis, implementation, device image, AMC firmware and FPT packaging\n```\n\n"
+    sb ++= "The build is based on the AVED V80 hardware design. `AVED_HW_DIR` (default " +
+      "`/home/shahawy/AVED/hw/amd_v80_gen5x8_25.1`) and `AVED_FW_DIR` select the AVED checkout. " +
+      s"`./build.sh -i` leaves the flashable image (an FPT followed by the PDI) in `pcie/output/$name.pdi`, " +
+      s"the routed checkpoint in `pcie/output/${name}_routed.dcp`, and utilization, timing and power reports " +
+      "in `pcie/output/reports/`.\n\n"
+    sb ++= "Address map (absolute Versal AXI addresses, as the host QDMA sees them):\n\n" +
+      "| | |\n|---|---|\n" +
+      "| HBM (every HardCilk memory port, 32 GB) | `0x40_0000_0000` - `0x47_FFFF_FFFF` |\n" +
+      "| HardCilk management registers | `0x202_0000_0000` (PF1 BAR2 offset 0) |\n" +
+      "| Soft-reset GPIO (write 0, then 1) | `0x202_0000_8000` (PF1 BAR2 offset `0x8000`) |\n\n"
+    sb ++= "### Flashing and bring-up\n\n"
+    sb ++= "The card has to run an AVED-based image, so that the `ami` driver and `ami_tool` can talk to " +
+      "its AMC. Then, as root:\n\n"
+    sb ++= s"```sh\nsudo software/scripts/v80_bringup.sh --flash pcie/output/$name.pdi   # program, boot, set up QDMA\n" +
+      "sudo software/scripts/v80_bringup.sh                                 # after a reboot: QDMA setup only\n" +
+      "sudo software/scripts/v80_bringup.sh --boot 0                        # boot a partition without flashing\n" +
+      "sudo software/scripts/v80_teardown.sh [--unload]\n```\n\n"
+    sb ++= "`v80_bringup.sh` does the following:\n\n" +
+      "1. Builds `qdma-pf.ko` (and `ami.ko` if the installed one does not match the running kernel).\n" +
+      "2. Moves PF0 (`10ee:50b4`) from `xclmgmt` to `ami`.\n" +
+      "3. Programs the image with `ami_tool cfgmem_fpt` (partition 0) or `cfgmem_program -p N` " +
+      "(`--partition N`), then reboots the card into it with `ami_tool device_boot`.\n" +
+      "4. Loads `qdma-pf` for PF1 (`10ee:50b5`) and adds and starts one bidirectional MM queue " +
+      "(`/dev/qdma<bdf>-MM-0`).\n" +
+      "5. Hands the queue node and PF1's BAR2 (`resource2`) to the invoking user.\n\n" +
+      "`--dry-run` prints every step without changing anything. The boot partition is volatile, " +
+      "so a cold reboot comes back up from the flash default.\n\n"
+    if (cfg.software) {
+      sb ++= "### Host\n\n"
+      sb ++= s"```sh\ncd software && cmake -B build && cmake --build build\n" +
+        "./build/driver/hc_v80_probe                    # first: HBM and register-path check (overwrites test areas of HBM)\n" +
+        s"./build/projects/$jsonName/${jsonName}_v80 <args>   # same arguments as the U55C _pcie program\n```\n\n"
+      sb ++= "The host backend is `QdmaMemory` (`software/driver/include/memIO_qdma.h`):\n\n" +
+        "- Data moves with `pread`/`pwrite` on the QDMA MM queue, at absolute HBM addresses.\n" +
+        "- Registers are accessed by default through an mmap of PF1 BAR2. With `HC_REG_ACCESS=dma`, " +
+        "they are 4- and 8-byte QDMA transfers at `0x202_0000_0000 + offset` instead.\n\n" +
+        "Environment overrides:\n\n" +
+        "- `HC_QDMA_BDF`: PF1 BDF. By default sysfs is scanned for `10ee:50b5`.\n" +
+        "- `HC_QDMA_H2C` and `HC_QDMA_C2H`: queue device nodes.\n" +
+        "- `HC_QDMA_QUEUE`: queue index.\n" +
+        "- `HC_REG_ACCESS=bar|dma`: register path.\n" +
+        "- `HC_QDMA_VERBOSE=1`: print the resolved configuration.\n\n"
+    }
     sb.toString()
   }
 
@@ -195,20 +266,35 @@ object ReadmeGenerator {
     sb ++= "## Software\n\n"
     sb ++= "```sh\ncd software\ncmake -B build\ncmake --build build\n```\n\n"
     val targets = Seq(
-      if (cfg.pcie) Some(s"`${jsonName}_pcie` — PCIe/XDMA host program") else None,
+      if (cfg.pcie && !isV80(cfg)) Some(s"`${jsonName}_pcie` — PCIe/XDMA host program") else None,
+      if (isV80(cfg)) Some(s"`${jsonName}_v80` — Alveo V80 (QDMA) host program") else None,
+      if (isV80(cfg)) Some("`hc_v80_probe` — V80 bring-up check (HBM and register paths)") else None,
       if (cfg.vitis) Some(s"`${jsonName}_xrt` — XRT host program for the xclbin") else None
     ).flatten
     if (targets.nonEmpty) sb ++= "Targets:\n\n" + targets.map(t => s"- $t\n").mkString + "\n"
     if (cfg.questa)
       sb ++= s"The QuestaSim testbench is not a CMake target: `sccom` compiles " +
         s"`projects/$jsonName/src/questa_main.cpp` directly from `questa/simulate.do`.\n\n"
-    sb ++= "All backends share `driver/` — `hardCilkDriver` only ever reads and writes 64-bit " +
-      "registers at the management base addresses, so a flow differs only in its `Memory` " +
-      "implementation (`memIO_pcie.h`, `memIO_xrt.h`, `memIO_questa.h`) and its `main()`.\n\n"
-    sb ++= s"The generated `FullSysGenDescriptor.h` exists in two variants under " +
-      s"`projects/$jsonName/include/gen/`: `nonvitis/` for the QuestaSim and PCIe builds and " +
-      "`vitis/` for the XRT build, whose addresses are shifted by `0x10`. CMake puts the right " +
-      "one on each target's include path, so the driver sources are identical.\n\n"
+    if (isV80(cfg)) {
+      sb ++= "All backends share `driver/` — `hardCilkDriver` only ever reads and writes 64-bit " +
+        "registers at the management base addresses, so a flow differs only in its `Memory` " +
+        "implementation (`memIO_qdma.h` on the card, `memIO_questa.h` in simulation) and its " +
+        s"`main()` (`projects/$jsonName/src/v80_main.cpp`; a project without one gets its " +
+        "`pcie_main.cpp` built against `QdmaMemory`).\n\n"
+      sb ++= s"Use the generated `projects/$jsonName/include/gen/nonvitis/FullSysGenDescriptor.h`. " +
+        "Besides the register map, it defines `HC_BOARD_V80`, `getBoardHbmBaseAddress()` " +
+        "(`0x40_0000_0000`), `getBoardHbmSizeBytes()` (32 GB) and `getBoardRegBaseAddress()` " +
+        "(`0x202_0000_0000`). Device addresses on the V80 are absolute: use what `allocateMemFPGA` " +
+        "returns.\n\n"
+    } else {
+      sb ++= "All backends share `driver/` — `hardCilkDriver` only ever reads and writes 64-bit " +
+        "registers at the management base addresses, so a flow differs only in its `Memory` " +
+        "implementation (`memIO_pcie.h`, `memIO_xrt.h`, `memIO_questa.h`) and its `main()`.\n\n"
+      sb ++= s"The generated `FullSysGenDescriptor.h` exists in two variants under " +
+        s"`projects/$jsonName/include/gen/`: `nonvitis/` for the QuestaSim and PCIe builds and " +
+        "`vitis/` for the XRT build, whose addresses are shifted by `0x10`. CMake puts the right " +
+        "one on each target's include path, so the driver sources are identical.\n\n"
+    }
     sb ++= "After a change to the JSON that only the host reads (queue capacities, for example), " +
       "rewrite just these headers with `-c` instead of regenerating: it elaborates nothing, so a " +
       "finished place-and-route stays valid.\n\n"
@@ -225,7 +311,7 @@ object ReadmeGenerator {
     sb ++= "| Question | Flow |\n|---|---|\n"
     if (cfg.vitis) sb ++= "| Does it compute the right answer? | Vitis `hw_emu` — fastest turnaround |\n"
     if (cfg.questa) sb ++= "| How many cycles does it take, and where does memory stall? | QuestaSim — accurate, slow, small inputs |\n"
-    if (cfg.pcie) sb ++= "| Run it on the card at full speed | PCIe bitstream |\n"
+    if (cfg.pcie) sb ++= s"| Run it on the card at full speed | ${if (isV80(cfg)) "V80 image (`pcie/`)" else "PCIe bitstream"} |\n"
     if (cfg.vitis) sb ++= "| Run it on the card through XRT | Vitis `hw` |\n"
     sb ++= "\n"
     sb.toString()

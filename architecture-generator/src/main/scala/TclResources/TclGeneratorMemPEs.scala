@@ -61,7 +61,8 @@ object TclGeneratorMemPEs {
       rawPortAxi3: Seq[Boolean] = Seq.empty,
       peInstanceNames: Seq[(String, Seq[String])] = Seq.empty,
       peIfaceBuffers: Seq[(String, Seq[String])] = Seq.empty
-  ) = {
+  ): Unit = {
+    if (fullSysGenDescriptor.board == Util.Board.V80) return TclGeneratorMemPEsV80.generate(fullSysGenDescriptor, tclFileDirectory, reduce_axi, hbmPortWidths, enableRamaStriping, ramaPorts, rawPortLabels, rawPortAxi3, peInstanceNames, peIfaceBuffers)
     val rawMode = rawPortLabels.nonEmpty
     require(
       rawMode || hbmPortWidths.isEmpty || hbmPortWidths.length == reduce_axi,

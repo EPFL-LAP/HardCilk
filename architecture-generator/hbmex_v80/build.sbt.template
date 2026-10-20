@@ -1,0 +1,28 @@
+// Out-of-tree build of HBMEX components (hbmex-fccm2025/rtl, unmodified sources copied in)
+// against the locally published chext 0.1.1 / hdlinfo 0.1.0 used by HardCilk.
+ThisBuild / scalaVersion := "2.13.12"
+ThisBuild / version := "0.1.0"
+ThisBuild / organization := "epfl-lap"
+
+val chiselVersion = "6.0.0"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "hbmex-v80",
+    libraryDependencies ++= Seq(
+      "org.chipsalliance" %% "chisel" % chiselVersion,
+      "hdlstuff" %% "chext" % "0.1.1",
+      "hdlstuff" %% "hdlinfo" % "0.1.0"
+    ),
+    dependencyOverrides += "edu.berkeley.cs" %% "chiseltest" % "6.0.0",
+    scalacOptions ++= Seq(
+      "-language:reflectiveCalls",
+      "-deprecation",
+      "-feature",
+      "-Xcheckinit",
+      "-Ymacro-annotations"
+    ),
+    addCompilerPlugin(
+      "org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full
+    )
+  )

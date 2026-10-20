@@ -194,7 +194,7 @@ case class FullSysGenDescriptor(
   assert(spawnNextList.keys.forall(taskDescriptors.map(_.name).contains(_)))
   assert(sendArgumentList.keys.forall(taskDescriptors.map(_.name).contains(_)))
   assert(mallocList.keys.forall(taskDescriptors.map(_.name).contains(_)))
-  assert(fpgaModel == "ALVEO_U55C")
+  assert(Util.Board.fromModel(fpgaModel).isDefined)
 
   // assert that none of the HardCilk components require a wider buswidth than cfgAxiHardCilk
   // assert(taskDescriptors.map(_.widthTask).max <= cfgAxiHardCilk.wData)

@@ -169,6 +169,52 @@ object HardCilkEmitterUtil {
   }
 
   /**
+    * HC_NOC_PES (see [[NocPePolicy]]): `keep_hierarchy` on the per-die NoC
+    * memory pools (`noc_mem_pool_<slr>`) and on the role-named skid stages of
+    * the NoC PEs' streams (`skid_<link>_<role>`), so the floorplan can pin each
+    * to its die. Returns the annotated text and `(instance, role)` per cell;
+    * the pool's role is its die (`slr0`, `slr1`).
+    */
+  def annotateNocHierarchy(verilog: String): (String, Seq[(String, String)]) = {
+    val inst = raw"(?m)^([ \t]*)(\w+\s+((?:skid_\w+_(slr0|slr1h|slr1p|slr1|slr2))|(?:noc_mem_pool_(slr[01])))\s*\()".r
+    val cells = scala.collection.mutable.ArrayBuffer[(String, String)]()
+    val out = inst.replaceAllIn(
+      verilog,
+      m => {
+        cells += (m.group(3) -> Option(m.group(4)).getOrElse(m.group(5)))
+        java.util.regex.Matcher.quoteReplacement(
+          s"""${m.group(1)}(* keep_hierarchy = "yes" *)\n${m.group(1)}${m.group(2)}"""
+        )
+      }
+    )
+    println(s"[HardCilkEmitter] HC_NOC_PES: kept hierarchy on ${cells.count(_._1.startsWith("skid_"))} skid stage(s) and " +
+      s"${cells.count(_._1.startsWith("noc_mem_pool_"))} NoC memory pool(s)")
+    (out, cells.toSeq)
+  }
+
+  /**
+    * HC_SCHED_SLR_LOCAL (see [[SlrLocal]]): `keep_hierarchy` on every
+    * `hcslr_<what>_<role>` instance (per-die scheduler blocks, notifier
+    * segments and their link skid stages), at any depth, so the floorplan can
+    * pin each one to the die of its role.
+    */
+  def annotateSlrLocalHierarchy(verilog: String): String = {
+    val inst = raw"(?m)^([ \t]*)(\w+\s+hcslr_\w+_(?:slr0|slr1h|slr1p|slr1|slr2)\s*\()".r
+    var n = 0
+    val out = inst.replaceAllIn(
+      verilog,
+      m => {
+        n += 1
+        java.util.regex.Matcher.quoteReplacement(
+          s"""${m.group(1)}(* keep_hierarchy = "yes" *)\n${m.group(1)}${m.group(2)}"""
+        )
+      }
+    )
+    println(s"[HardCilkEmitter] HC_SCHED_SLR_LOCAL: kept hierarchy on $n hcslr_* instance(s)")
+    out
+  }
+
+  /**
     * Keep the HLS compute modules of a PE from being hoisted out of it.
     *
     * The floorplan assigns whole PEs to whole SLRs, and every filter it writes
@@ -265,7 +311,8 @@ object HardCilkEmitterUtil {
   def pipelinePerSlrReset(
       verilog: String,
       topName: String,
-      spillInstances: Set[String]
+      spillInstances: Set[String],
+      slr0Instances: Set[String] = Set.empty
   ): String = {
     // Kernel top only: child modules have their own `reset` ports and must not
     // be touched. Bound the edit to `module <top> (` .. `endmodule`.
@@ -291,20 +338,37 @@ object HardCilkEmitterUtil {
     val resetRe = raw"^\t\t\.reset\(reset\)(,?)$$".r
     val rstNRe = raw"^\t\t\.io_ap_rst_n\(~reset\)(,?)$$".r
     var cur = ""
-    var nHub, nSpill, nHubN, nSpillN = 0
+    var nHub, nSpill, nHubN, nSpillN, nSlr0 = 0
+    // HC_NOC_PES: a third leaf for instances floorplanned onto SLR0.
+    val leafOf = (inst: String) =>
+      if (slr0Instances.contains(inst)) "slr0" else if (spillInstances.contains(inst)) "slr2" else "slr1"
+    // HC_RESET_PER_INST=1 (opt-in): one more relay flop per instance after its
+    // die leaf, so a leaf drives a few hundred relays instead of every reset
+    // flop on the die. Every instance gets one, so the depth stays the same for
+    // all; named hc_rst[n]_<leaf>_<inst> so the floorplan can pin them per die.
+    val perInst = sys.env.get("HC_RESET_PER_INST").exists(_.trim == "1")
+    val perInstRegs = scala.collection.mutable.ArrayBuffer[(String, String)]() // (reg, its leaf source)
     val rewired = body.split("\n", -1).map { line =>
       instRe.findFirstMatchIn(line).foreach(m => cur = m.group(2))
       resetRe.findFirstMatchIn(line) match {
         case Some(m) =>
-          val spill = spillInstances.contains(cur)
-          if (spill) nSpill += 1 else nHub += 1
-          s"\t\t.reset(hc_reset_${if (spill) "slr2" else "slr1"})${m.group(1)}"
+          val leaf = leafOf(cur)
+          if (leaf == "slr0") nSlr0 += 1 else if (leaf == "slr2") nSpill += 1 else nHub += 1
+          if (perInst) {
+            val r = s"hc_rst_${leaf}_$cur"; perInstRegs += (r -> s"hc_reset_$leaf")
+            s"\t\t.reset($r)${m.group(1)}"
+          } else
+          s"\t\t.reset(hc_reset_$leaf)${m.group(1)}"
         case None =>
           rstNRe.findFirstMatchIn(line) match {
             case Some(m) =>
-              val spill = spillInstances.contains(cur)
-              if (spill) nSpillN += 1 else nHubN += 1
-              s"\t\t.io_ap_rst_n(hc_resetn_${if (spill) "slr2" else "slr1"})${m.group(1)}"
+              val leaf = leafOf(cur)
+              if (leaf == "slr0") nSlr0 += 1 else if (leaf == "slr2") nSpillN += 1 else nHubN += 1
+              if (perInst) {
+                val r = s"hc_rstn_${leaf}_$cur"; perInstRegs += (r -> s"hc_resetn_$leaf")
+                s"\t\t.io_ap_rst_n($r)${m.group(1)}"
+              } else
+              s"\t\t.io_ap_rst_n(hc_resetn_$leaf)${m.group(1)}"
             case None => line
           }
       }
@@ -318,7 +382,7 @@ object HardCilkEmitterUtil {
       return verilog
     }
 
-    val pipeline =
+    val pipeline0 =
       """	// ---------------------------------------------------------------------
 	// Per-SLR reset pipeline (Util.HardCilkEmitterUtil.pipelinePerSlrReset).
 	//
@@ -351,11 +415,39 @@ object HardCilkEmitterUtil {
 	end
 	// ---------------------------------------------------------------------
 """
+    // HC_NOC_PES: SLR0 leaf, same depth (p0 -> p1_0 [SLR1] -> slr0 [SLR0]).
+    val pipeline =
+      if (slr0Instances.isEmpty) pipeline0
+      else pipeline0 + """	// HC_NOC_PES (Util.NocPePolicy): SLR0 leaf for the NoC PEs, same depth;
+	// hc_reset_p1_0 is pinned to SLR1 and the leaves to SLR0 by the floorplan.
+	(* DONT_TOUCH = "yes" *) reg hc_reset_p1_0  = 1'b1;
+	(* DONT_TOUCH = "yes" *) reg hc_reset_slr0  = 1'b1;
+	(* DONT_TOUCH = "yes" *) reg hc_resetn_slr0 = 1'b0;
+	always @(posedge clock) begin
+		hc_reset_p1_0  <= hc_reset_p0;
+		hc_reset_slr0  <= hc_reset_p1_0;
+		hc_resetn_slr0 <= ~hc_reset_p1_0;
+	end
+"""
     // Declarations go in front of the first instantiation: after the port
     // declarations and every wire the instances connect to.
+    val pipelineAll =
+      if (!perInst || perInstRegs.isEmpty) pipeline
+      else {
+        val regs = perInstRegs.distinct
+        pipeline + "\t// HC_RESET_PER_INST: one relay per instance after its die leaf.\n" +
+          regs.map { case (r, src) =>
+            val init = if (r.startsWith("hc_rstn_")) "1'b0" else "1'b1"
+            s"\t(* DONT_TOUCH = \"yes\" *) reg $r = $init;\n"
+          }.mkString +
+          "\talways @(posedge clock) begin\n" +
+          regs.map { case (r, src) => s"\t\t$r <= $src;\n" }.mkString +
+          "\tend\n"
+      }
+    if (perInst) println(s"[HardCilkEmitter] HC_RESET_PER_INST: ${perInstRegs.distinct.length} per-instance reset relay(s)")
     val firstInst = raw"(?m)^\t\w+\s+\w+\($$".r.findFirstMatchIn(rewired)
     val withPipe = firstInst match {
-      case Some(m) => rewired.substring(0, m.start) + pipeline + rewired.substring(m.start)
+      case Some(m) => rewired.substring(0, m.start) + pipelineAll + rewired.substring(m.start)
       case None    => rewired
     }
 
@@ -369,7 +461,8 @@ object HardCilkEmitterUtil {
       )
     println(
       s"[HardCilkEmitter] per-SLR reset: .reset hub=$nHub spill=$nSpill, " +
-        s".io_ap_rst_n hub=$nHubN spill=$nSpillN"
+        s".io_ap_rst_n hub=$nHubN spill=$nSpillN" +
+        (if (slr0Instances.nonEmpty) s", SLR0 leaf (HC_NOC_PES)=$nSlr0" else "")
     )
     head + withPipe + tail
   }
@@ -531,6 +624,12 @@ object HardCilkEmitterUtil {
     // index per line (empty file when no task sets "generateRAMA").
     writeFile(s"$outputDirPathRTL/hbm_rama_ports.txt", ramaPortIndices.mkString("\n"))
 
+    // HC_NOC_PES: die of each exported master ("HBM" or the NoC PEs' SLR). Only
+    // written when the policy is on.
+    val nocFile = new java.io.File(s"$outputDirPathRTL/hbm_port_noc.txt")
+    if (NocPePolicy.exportedPortSlr.nonEmpty) writeFile(nocFile.getPath, NocPePolicy.exportedPortSlr.mkString("\n"))
+    else if (nocFile.exists()) nocFile.delete()
+
     // And the producing unit behind each exported master, one `<kind>/<task>` per
     // line in m_axi_00, m_axi_01, ... order. Empty unless --raw-hbm-ports is set,
     // since a muxed port has no single producer.
@@ -584,13 +683,37 @@ object HardCilkEmitterUtil {
       val ifaceByPe = peIfaceBuffers.toMap
       val spillInstances = spillPes ++ spillPes.flatMap(ifaceByPe.getOrElse(_, Seq.empty))
 
+      // HC_NOC_PES (Util.NocPePolicy): keep the NoC pools and the multi-stage
+      // skid chains as hierarchy (the floorplan pins them per die) and give the
+      // SLR0 ones an SLR0 reset leaf. Nothing changes when the policy is off.
+      val (base2, spillInst2, slr0Inst) =
+        if (NocPePolicy.exportedPortSlr.isEmpty) (base, spillInstances, Set.empty[String])
+        else {
+          val (v, cells) = annotateNocHierarchy(base)
+          val t = NocPePolicy.task(systemDescriptor).get
+          val inst = names.find(_._1 == t).map(_._2).getOrElse(Seq.empty)
+          val pesOn = (slr: String) => NocPePolicy.assignment(systemDescriptor).collect {
+            case (i, s) if s == slr && i < inst.length => inst(i)
+          }.toSet
+          val onDie = (slr: String) => {
+            val pes = pesOn(slr)
+            pes ++ pes.flatMap(ifaceByPe.getOrElse(_, Seq.empty)) ++
+              cells.collect { case (c, r) if NocPePolicy.slrOfRole(r) == slr => c }
+          }
+          val s0 = onDie("SLR0")
+          // HC_SCHED_SLR_LOCAL: keep the per-die scheduler / notifier blocks (nested
+          // in their parents, so not reset leaves here: they retime their own reset).
+          val v2 = if (NocPePolicy.schedSlrLocal(systemDescriptor)) annotateSlrLocalHierarchy(v) else v
+          (v2, (spillInstances ++ onDie("SLR1")) -- s0, s0)
+        }
+
       val annotated =
         if (spillPes.isEmpty) {
           // Single-die design: one reset leaf is all there is to place, and the
           // pipeline would only add latency for nothing.
           println("[HardCilkEmitter] per-SLR reset: no spilled PEs, reset left flat")
-          base
-        } else pipelinePerSlrReset(base, systemDescriptor.name, spillInstances)
+          base2
+        } else pipelinePerSlrReset(base2, systemDescriptor.name, spillInst2, slr0Inst)
 
       writeFile(vFilePath, annotated)
 

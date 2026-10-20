@@ -36,6 +36,14 @@ if(NOT DEFINED HC_ENABLE_XRT_TARGETS)
     )
 endif()
 
+if(NOT DEFINED HC_ENABLE_QDMA_TARGETS)
+    set(
+        HC_ENABLE_QDMA_TARGETS OFF
+        CACHE BOOL
+        "Enables the Alveo V80 QDMA targets (<spec>_v80, hc_v80_probe); needs only the qdma-pf kernel driver at run time."
+    )
+endif()
+
 if (NOT DEFINED HC_NO_FMT)
     set(
         HC_NO_FMT OFF

@@ -26,7 +26,10 @@ object TclQuestaSim {
       enableRamaStriping: Boolean = false,
       rawPortLabels: Seq[String] = Seq.empty,
       rawPortAxi3: Seq[Boolean] = Seq.empty
-  ) = {
+  ): Unit = {
+    // Alveo V80: Versal NoC/HBM-NMU testbench, see TclQuestaSimV80.
+    if (fullSysGenDescriptor.board == Util.Board.V80)
+      return TclQuestaSimV80.generate(fullSysGenDescriptor, tclFileDirectory, reduce_axi, hbmPortWidths, rawPortLabels, rawPortAxi3)
     val rawMode = rawPortLabels.nonEmpty
     // Which raw masters share each HBM port.
     val assignment =

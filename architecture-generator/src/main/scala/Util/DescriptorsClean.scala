@@ -492,6 +492,9 @@ case class FullSysGenDescriptor(
     )
   }
 
+  /** The board this system targets, from `fpgaModel`. */
+  def board: Util.Board = Util.Board.forModel(fpgaModel)
+
   def getMfpgaBaseAddress(): Int = {
     (j << 6) + base
   }
@@ -707,7 +710,8 @@ case class FullSysGenDescriptor(
     require(sendArgumentList.keys.forall(taskNames.contains), "sendArgumentList contains unknown task names")
     require(mallocList.keys.forall(taskNames.contains), "mallocList contains unknown task names")
     
-    require(fpgaModel == "ALVEO_U55C", s"Unsupported fpgaModel: $fpgaModel")
+    require(Util.Board.fromModel(fpgaModel).isDefined,
+      s"Unsupported fpgaModel: $fpgaModel (known: ${Util.Board.all.map(_.fpgaModel).mkString(", ")})")
 
     require(axiNumOutstanding >= 1 && axiNumOutstanding <= 256,
       s"axiNumOutstanding must be between 1 and 256, got $axiNumOutstanding")

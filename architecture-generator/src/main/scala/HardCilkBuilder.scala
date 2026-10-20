@@ -44,6 +44,52 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       remoteStreamToMemFactories: Map[String, () => RemoteStreamToMem]
   )
 
+  /**
+   * HC_SCHED_SLR_LOCAL (Util.NocPePolicy): whether `taskName` gets the per-die
+   * scheduler. Only the task NocPePolicy moves, only when it would get a
+   * DataFlowScheduler that fans a few inputs out to its PEs.
+   */
+  def slrLocalScheduler(taskName: String): Boolean =
+    NocPePolicy.schedSlrLocal(desc) && NocPePolicy.task(desc).contains(taskName) && {
+      val task = desc.taskDescriptors.find(_.name == taskName).get
+      val nIn = desc.getPortCount("spawn", task.name) +
+        (if (task.getNumServers("argumentNotifier") > 0) task.getNumServers("argumentNotifier") else 0)
+      val ok = desc.usesDataFlowScheduler(task) && nIn > 0 && nIn < task.numProcessingElements
+      if (!ok)
+        println(s"[HardCilk:Builder] HC_SCHED_SLR_LOCAL: $taskName keeps the flat scheduler " +
+          s"(dataflow=${desc.usesDataFlowScheduler(task)}, spawner=${desc.dataFlowSpawnerTasks.contains(task.name)}, inputs=$nIn)")
+      ok
+    }
+
+  /**
+   * HC_SCHED_SLR_LOCAL: die of every `argIn` port of `taskName`'s argument
+   * notifier (from the PE that drives it), or empty -- the flat network -- when
+   * the knob is off or every source is on the hub die.
+   */
+  def notifierPortSlr(taskName: String): Seq[String] =
+    if (!NocPePolicy.schedSlrLocal(desc)) Seq.empty
+    else {
+      val conns = desc.getSystemConnectionsDescriptor().connections.filter { c =>
+        c.dstPort.parentType == "HardCilk" && c.dstPort.parentName == taskName && c.dstPort.portType == "argIn"
+      }
+      val n = desc.getPortCount("sendArgument", taskName)
+      val bySlot = conns.map { c =>
+        c.dstPort.portIndex ->
+          (if (c.srcPort.parentType == "PE") NocPePolicy.dieOf(desc, c.srcPort.parentName, c.srcPort.parentIndex)
+           else NocPePolicy.hubSlr)
+      }.toMap
+      val dies = (0 until n).map(i => bySlot.getOrElse(i, NocPePolicy.hubSlr))
+      if (dies.forall(_ == NocPePolicy.hubSlr)) Seq.empty else dies
+    }
+
+  /** HC_SCHED_SLR_LOCAL: a PE link whose HardCilk end is on the PE's own die. */
+  private def isSlrLocalLink(c: ConnectionDescriptor): Boolean =
+    NocPePolicy.schedSlrLocal(desc) && (
+      (c.srcPort.parentType == "HardCilk" && c.srcPort.portType == "taskOut" &&
+        slrLocalScheduler(c.srcPort.parentName)) ||
+      (c.dstPort.parentType == "HardCilk" && c.dstPort.portType == "argIn" &&
+        notifierPortSlr(c.dstPort.parentName).nonEmpty))
+
   /** defineBlueprint() remains unchanged */
   def defineBlueprint(): SubsystemBlueprint = {
 
@@ -57,7 +103,22 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
     // streaming DataFlowScheduler instead of the classic one. The root keeps the classic scheduler:
     // it is the one the host seeds. See Descriptors.usesDataFlowScheduler.
     val schedulerFactories: Map[String, () => SchedulerLike] = desc.taskDescriptors.map { task =>
-      task.name -> (if (desc.usesDataFlowScheduler(task)) { () =>
+      task.name -> (if (slrLocalScheduler(task.name)) { () =>
+        // HC_SCHED_SLR_LOCAL (Util.NocPePolicy): same ports as the DataFlowScheduler
+        // below, split per die.
+        new DataFlowScheduler.SlrLocalDataFlowScheduler(
+          taskWidth = task.widthTask,
+          peCount = task.numProcessingElements,
+          peCountGlobalTaskIn = desc.getPortCount("spawn", task.name),
+          argRouteServersNumber = task.getNumServers("argumentNotifier"),
+          pePortWidth = task.widthTask,
+          argRouteServersCreateTasks = task.getNumServers("argumentNotifier") > 0,
+          peType = task.name,
+          peSlr = (0 until task.numProcessingElements).map(i => NocPePolicy.dieOf(desc, task.name, i)),
+          hasSpawnerServer = desc.dataFlowSpawnerTasks.contains(task.name),
+          fanout = NocPePolicy.schedFanout
+        )
+      } else if (desc.usesDataFlowScheduler(task)) { () =>
         new DataFlowScheduler.DataFlowScheduler(
           taskWidth = task.widthTask,
           peCount = task.numProcessingElements,
@@ -125,7 +186,8 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
           cutCount = argCutCount,
           multiDecrease = task.variableSpawn,
           mfpgaSupport = desc.mFPGASynth || desc.mFPGASimulation,
-          taskID = task.taskId
+          taskID = task.taskId,
+          portSlr = notifierPortSlr(task.name)
         ))
       }.toMap
 
@@ -282,7 +344,35 @@ class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: I
       s"${c.srcPort.parentName}_${c.srcPort.portType}${c.srcPort.portIndex}" +
         s"__${c.dstPort.parentName}_${c.dstPort.portType}${c.dstPort.portIndex}"
 
+    // HC_NOC_PES (Util.NocPePolicy, V80 only): a PE on another die gets one
+    // stage per die/boundary, named by role so the floorplan can pin each one.
+    val peSide = if (c.srcPort.parentType == "PE") c.srcPort else c.dstPort
+    val nocSlr = NocPePolicy.slrOf(desc, peSide.parentName, peSide.parentIndex)
+
     def buffered(source: ReadyValidIO[Data], sink: ReadyValidIO[Data]): Boolean = {
+      if (nocSlr.isDefined) {
+        val roles =
+          if (isSlrLocalLink(c)) Seq(nocSlr.get.toLowerCase) // HC_SCHED_SLR_LOCAL: the hub end is on the PE's die
+          else NocPePolicy.skidRoles(nocSlr.get, peIsSource = c.srcPort.parentType == "PE")
+        val head = chisel3.Wire(chisel3.util.Decoupled(chiselTypeOf(source.bits)))
+        elasticConnect(source, head)
+        // noPrefix: keep the instance names exactly `skid_<link>_<role>`
+        // (the floorplan matches on them), not `tail_skid_...`.
+        elasticConnect(chisel3.experimental.noPrefix {
+          roles.foldLeft(head) { case (src, role) =>
+            val stage = Module(new SkidBuffer(chiselTypeOf(src.bits)))
+            stage.suggestName(s"skid_${linkName}_$role")
+            elasticConnect(src, stage.io.enq)
+            stage.io.deq
+          }
+        }, sink)
+        println(
+          s"[HardCilk:Builder] NoC PE (${nocSlr.get}): ${roles.length}-stage skid chain " +
+            s"[${roles.mkString(" -> ")}] on ${c.srcPort.parentName}.${c.srcPort.portType}" +
+            s"[${c.srcPort.portIndex}] -> ${c.dstPort.parentName}.${c.dstPort.portType}[${c.dstPort.portIndex}]"
+        )
+        return true
+      }
       elasticConnect(SkidBuffer(source, name = linkName), sink)
       println(
         s"[HardCilk:Builder] skid buffer on ${c.srcPort.parentName}.${c.srcPort.portType}" +

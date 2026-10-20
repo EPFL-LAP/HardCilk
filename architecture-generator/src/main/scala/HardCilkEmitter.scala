@@ -47,13 +47,18 @@ class EmitterError(message: String) extends RuntimeException(message) {
 object HardCilkEmitter extends App {
   private def fail(message: String): Nothing = throw new EmitterError(message)
 
-  val cfg = ArgParser.parseArgs(args).getOrElse(fail("invalid command line, see --help"))
-  val jsonName = basename(cfg.json_path)
+  private val parsedCfg = ArgParser.parseArgs(args).getOrElse(fail("invalid command line, see --help"))
+  val jsonName = basename(parsedCfg.json_path)
 
-  warnOnLegacyVitisKey(cfg.json_path)
-  val descriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
-  try descriptor.validate()
+  warnOnLegacyVitisKey(parsedCfg.json_path)
+  private val parsedDescriptor = parseJsonFile[FullSysGenDescriptor](parsedCfg.json_path)
+  try parsedDescriptor.validate()
   catch { case e: IllegalArgumentException => fail(s"JSON validation failed: ${e.getMessage}") }
+
+  // Resolve the target board once, before anything is elaborated: --board wins
+  // over the descriptor's fpgaModel, and the descriptor is rewritten to match so
+  // every later consumer of fpgaModel agrees.
+  val (cfg, descriptor) = resolveBoard(parsedCfg, parsedDescriptor)
 
   if (cfg.refreshHeaders) refreshHeaders(cfg, jsonName, descriptor)
   else build(cfg, jsonName, descriptor)
@@ -222,6 +227,39 @@ object HardCilkEmitter extends App {
     VitisFlowGenerator.generate(vitisDescriptor, layout.vitis, cfg.hbmPorts, layout.vitisRtl)
     println(s"Emitted Vitis xclbin project to: ${layout.vitis}")
     rtlResult
+  }
+
+  private def resolveBoard(
+      cfg: BuilderConfig,
+      descriptor: FullSysGenDescriptor
+  ): (BuilderConfig, FullSysGenDescriptor) = {
+    val board = cfg.boardArg.getOrElse(Util.Board.forModel(descriptor.fpgaModel))
+    if (cfg.vitis && !board.supportsVitis)
+      fail(
+        s"-x/--vitis is not supported on ${board.fpgaModel}: there is no Vitis platform for it. " +
+          "Use -P (PCIe/AVED flow) and/or -q (QuestaSim)."
+      )
+    if (board == Util.Board.V80 && cfg.ramaStriping)
+      fail(
+        "--rama-striping is not supported on the Alveo V80: RAMA is an UltraScale+ HBM IP. " +
+          "On the V80 every HBM NMU already addresses all 32 pseudo channels through the NoC."
+      )
+    if (cfg.pcie && cfg.hbmPortsArg.exists(_ > board.maxPciePorts))
+      fail(s"-P needs -r <= ${board.maxPciePorts} on ${board.fpgaModel}")
+
+    var d = if (descriptor.fpgaModel != board.fpgaModel) {
+      println(s"[HardCilkEmitter] --board ${board.cliName}: overriding fpgaModel ${descriptor.fpgaModel} -> ${board.fpgaModel}")
+      descriptor.copy(fpgaModel = board.fpgaModel)
+    } else descriptor
+    if (d.widthAXIAddress < board.minAxiAddrWidth) {
+      println(
+        s"[HardCilkEmitter] ${board.fpgaModel}: widening widthAXIAddress ${d.widthAXIAddress} -> " +
+          s"${board.minAxiAddrWidth} to reach HBM at 0x${board.hbmBaseAddress.toString(16)} " +
+          s"(+${board.hbmSizeBytes >> 30} GB)"
+      )
+      d = d.copy(widthAXIAddress = board.minAxiAddrWidth)
+    }
+    (cfg.copy(board = board), d)
   }
 
   /** The Vitis management convention comes from `-x` alone; flag a stale JSON key. */

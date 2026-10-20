@@ -12,8 +12,11 @@ class ArgumentNotifierNetworkIO(addrWidth: Int, peCount: Int, vasNum: Int) exten
   val connPE = Vec(peCount, Flipped(DecoupledIO(UInt(addrWidth.W))))
 }
 
+/** The IO both notifier networks (flat and HC_SCHED_SLR_LOCAL) expose. */
+trait HasArgumentNotifierNetworkIO { def io: ArgumentNotifierNetworkIO }
+
 class ArgumentNotifierNetwork(addrWidth: Int, taskWidth: Int, peCount: Int, vasNum: Int, queueDepth: Int, cutCount: Int, multiDecrease: Boolean)
-    extends Module {
+    extends Module with HasArgumentNotifierNetworkIO {
 
   def highestPowerOf2(n: Int): Int = {
     var res = 0

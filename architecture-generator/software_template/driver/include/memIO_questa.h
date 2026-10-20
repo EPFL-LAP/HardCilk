@@ -1,11 +1,27 @@
 #pragma once
 
 #include <memIO.h>
+#include <FullSysGenDescriptor.h> // getBoardHbmBaseAddress / getBoardRegBaseAddress
 #include <sc_dpiheader_questa.h>
 #include <vector>
 #include <utility>
 #include <systemc.h>
 #include<cmath>
+#ifdef HC_BOARD_V80
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+// V80 testbench only (TclQuestaSimV80 main_sim.sv): host memory copies straight
+// into the HBM device model, in zero simulated time. The design's own traffic is
+// unaffected (NMU -> NoC -> HBM controller -> PHY -> device model).
+//   HC_SIM_BACKDOOR=0   use the memory AXI VIP instead (default: backdoor on)
+// The SV side only touches the model once no design write is in flight (and the
+// HBM controller has drained); otherwise it answers ok=0 and that 4 KB chunk goes
+// through the VIP.
+int HC_BD_AVAILABLE();
+int HC_BD_WRITE(uint64_t Addr, const svBitVecVal *WData, int nbytes, int *ok);
+int HC_BD_READ(uint64_t Addr, svBitVecVal *RData, int nbytes, int *ok);
+#endif
 
 
 // freedMemBlock now lives in memIO.h (shared by the driver and every Memory backend)
@@ -27,13 +43,18 @@ struct questaMemory : Memory
     }
 
     private:
-    uint64_t free_mem_base_addr = 0x0;
+    // Allocations are absolute device addresses: HBM starts at 0 on U55C and at
+    // 0x40_0000_0000 on V80, where a 0-based pointer would DECERR in the NoC.
+    uint64_t free_mem_base_addr = getBoardHbmBaseAddress();
     std::vector<freedMemBlock> freed_mem_blocks;
     std::vector<std::pair<uint64_t, uint64_t>> trackMalloc;
 
     public:
     uint32_t readReg32(uint64_t addr)
     {
+        // Register offsets are relative to the management slave (0 on U55C,
+        // 0x202_0000_0000 on V80).
+        addr += getBoardRegBaseAddress();
 
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
@@ -49,6 +70,9 @@ struct questaMemory : Memory
 
     uint64_t readReg64(uint64_t addr)
     {
+        // Register offsets are relative to the management slave (0 on U55C,
+        // 0x202_0000_0000 on V80).
+        addr += getBoardRegBaseAddress();
 
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
@@ -64,6 +88,9 @@ struct questaMemory : Memory
 
     void writeReg32(uint64_t addr, uint32_t value)
     {
+        // Register offsets are relative to the management slave (0 on U55C,
+        // 0x202_0000_0000 on V80).
+        addr += getBoardRegBaseAddress();
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
 #endif
@@ -78,6 +105,9 @@ struct questaMemory : Memory
 
     void writeReg64(uint64_t addr, uint64_t value)
     {
+        // Register offsets are relative to the management slave (0 on U55C,
+        // 0x202_0000_0000 on V80).
+        addr += getBoardRegBaseAddress();
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
 #endif
@@ -90,7 +120,86 @@ struct questaMemory : Memory
             8);
     }
 
+#ifdef HC_BOARD_V80
+    private:
+    int backdoor_state = -1; // -1 unknown, 0 off, 1 on
+
+    bool backdoorOn()
+    {
+        if (backdoor_state < 0)
+        {
+            const char *e = std::getenv("HC_SIM_BACKDOOR");
+            bool want = !(e && (std::strcmp(e, "0") == 0 || std::strcmp(e, "off") == 0 || std::strcmp(e, "OFF") == 0));
+#ifdef MTI_SYSTEMC
+            svSetScope(svGetScopeFromName("TestBench.myModule"));
+#endif
+            bool have = want && HC_BD_AVAILABLE() != 0;
+            backdoor_state = have ? 1 : 0;
+            std::cout << "[questaMemory] host memory copies: "
+                      << (have ? "HBM backdoor (zero simulated time)"
+                               : (want ? "AXI VIP (no backdoor-capable HBM model in this simulation)"
+                                       : "AXI VIP (HC_SIM_BACKDOOR=0)"))
+                      << std::endl;
+        }
+        return backdoor_state == 1;
+    }
+
+    // Up to 4 KB per DPI call (a fixed 4 KB bit vector). A chunk the SV side does
+    // not take (the design is still writing to HBM) goes through the VIP; the next
+    // chunk tries the backdoor again.
+    void backdoorCopy(bool to_device, uint64_t dev_addr, uint8_t *host, uint64_t size)
+    {
+        alignas(8) uint8_t stage[4096];
+        uint64_t done = 0;
+        while (done < size)
+        {
+            int n = static_cast<int>(std::min<uint64_t>(4096, size - done));
+            int ok = 0;
+#ifdef MTI_SYSTEMC
+            svSetScope(svGetScopeFromName("TestBench.myModule"));
+#endif
+            if (to_device)
+            {
+                std::memset(stage, 0, sizeof(stage));
+                std::memcpy(stage, host + done, n);
+                HC_BD_WRITE(dev_addr + done, reinterpret_cast<const svBitVecVal *>(stage), n, &ok);
+                if (!ok)
+                    copyToDeviceVip(dev_addr + done, host + done, n);
+            }
+            else
+            {
+                HC_BD_READ(dev_addr + done, reinterpret_cast<svBitVecVal *>(stage), n, &ok);
+                if (ok)
+                    std::memcpy(host + done, stage, n);
+                else
+                    copyFromDeviceVip(host + done, dev_addr + done, n);
+            }
+            done += n;
+        }
+    }
+    public:
+
     void copyToDevice(uint64_t dest_addr, uint8_t const *src, uint64_t size)
+    {
+        if (backdoorOn())
+            backdoorCopy(true, dest_addr, const_cast<uint8_t *>(src), size);
+        else
+            copyToDeviceVip(dest_addr, src, size);
+    }
+
+    void copyFromDevice(uint8_t *dest, uint64_t src_addr, uint64_t size)
+    {
+        if (backdoorOn())
+            backdoorCopy(false, src_addr, dest, size);
+        else
+            copyFromDeviceVip(dest, src_addr, size);
+    }
+
+    // The memory AXI VIP path (the only one on U55C).
+    void copyToDeviceVip(uint64_t dest_addr, uint8_t const *src, uint64_t size)
+#else
+    void copyToDevice(uint64_t dest_addr, uint8_t const *src, uint64_t size)
+#endif
     {
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
@@ -191,7 +300,11 @@ struct questaMemory : Memory
         }
     }
 
+#ifdef HC_BOARD_V80
+    void copyFromDeviceVip(uint8_t *dest, uint64_t src_addr, uint64_t size)
+#else
     void copyFromDevice(uint8_t *dest, uint64_t src_addr, uint64_t size)
+#endif
     {
 #ifdef MTI_SYSTEMC
         svSetScope(svGetScopeFromName("TestBench.myModule"));
@@ -318,7 +431,7 @@ struct questaMemory : Memory
         free_mem_base_addr += offset;
         uint64_t addr = free_mem_base_addr;
         free_mem_base_addr += size;
-        assert(free_mem_base_addr < 0x3FFFFFFFF);
+        assert(free_mem_base_addr <= getBoardHbmBaseAddress() + getBoardHbmSizeBytes());
 
         for (auto pair : trackMalloc)
         {

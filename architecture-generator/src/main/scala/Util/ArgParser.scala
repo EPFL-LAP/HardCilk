@@ -34,7 +34,15 @@ case class BuilderConfig(
     /** `-r` as given; [[hbmPorts]] resolves the default. */
     hbmPortsArg: Option[Int] = None,
     debug: Boolean = false,
-    timestamped: Boolean = false
+    timestamped: Boolean = false,
+    /** `--board` as given; overrides the descriptor's `fpgaModel`. */
+    boardArg: Option[Board] = None,
+    /**
+      * The resolved target board. Set by the emitter once the descriptor is
+      * parsed (`--board`, else the descriptor's `fpgaModel`); never set from the
+      * command line directly.
+      */
+    board: Board = Board.U55C
 ) {
 
   /** True when at least one flow was requested. */
@@ -48,16 +56,18 @@ case class BuilderConfig(
   def needsSharedRtl: Boolean = questa || pcie
 
   /**
-    * HBM ports the design's memory masters are reduced to. The PCIe flow keeps
-    * one of the 32 for the host DMA path, so its default is 31.
+    * HBM ports the design's memory masters are reduced to. On the U55C the PCIe
+    * flow keeps one of the 32 for the host DMA path, so its default is 31. On
+    * the V80 the host DMA enters the NoC from the CPM and every flow defaults
+    * to 32 HBM NMUs.
     */
-  def hbmPorts: Int = hbmPortsArg.getOrElse(if (pcie) ArgParser.MaxPciePorts else 32)
+  def hbmPorts: Int = hbmPortsArg.getOrElse(if (pcie) board.maxPciePorts.min(32) else 32)
 }
 
 object ArgParser {
 
-  /** HBM ports the design may use in the PCIe flow: the host DMA takes the 32nd. */
-  val MaxPciePorts = 31
+  /** HBM ports the design may use in the U55C PCIe flow: the host DMA takes the 32nd. */
+  val MaxPciePorts = Board.U55C.maxPciePorts
 
   private val builder = OParser.builder[BuilderConfig]
   private val parser = {
@@ -135,6 +145,17 @@ object ArgParser {
           "Export every memory master un-muxed and reduce them to -r ports with SmartConnects " +
             "in the block design instead. Drops per-task generateRAMA ports"
         ),
+      opt[String]("board")
+        .valueName("u55c|v80")
+        .validate(x =>
+          if (Board.fromCli(x).isDefined) success
+          else failure(s"--board must be one of ${Board.all.map(_.cliName).mkString(", ")}")
+        )
+        .action((x, c) => c.copy(boardArg = Board.fromCli(x)))
+        .text(
+          "target card, overriding the descriptor's fpgaModel (default ALVEO_U55C). " +
+            "v80: Alveo V80 / AVED, QDMA host access, HBM through the NoC HBM NMUs; no -x"
+        ),
       opt[Unit]('d', "debug")
         .action((_, c) => c.copy(debug = true))
         .text("add debug counters to the hardware"),
@@ -154,7 +175,9 @@ object ArgParser {
 
       checkConfig { c =>
         val r = c.hbmPortsArg
-        if (c.refreshHeaders && (c.anyFlow || c.software || c.timestamped || r.nonEmpty ||
+        if (c.boardArg.contains(Board.V80) && c.vitis)
+          failure("-x/--vitis is not supported on the Alveo V80: there is no Vitis platform for it")
+        else if (c.refreshHeaders && (c.anyFlow || c.software || c.timestamped || r.nonEmpty ||
                                  c.ramaStriping || c.rawHbmPorts || c.debug))
           failure(
             "-c refreshes the headers of an existing tree and cannot be combined with flows, " +
@@ -164,9 +187,11 @@ object ArgParser {
           failure("no flow requested: pass at least one of -q, -P or -x (or -c to refresh headers)")
         else if (r.exists(_ < 1))
           failure("-r/--hbm-ports must be >= 1")
-        else if (c.pcie && r.exists(_ > MaxPciePorts))
+        else if (c.pcie && c.boardArg.contains(Board.U55C) && r.exists(_ > MaxPciePorts))
+          // Re-checked against the resolved board in HardCilkEmitter, once the
+          // descriptor's fpgaModel is known.
           failure(
-            s"-P needs -r <= $MaxPciePorts: the host DMA path takes one of the 32 HBM ports"
+            s"-P needs -r <= $MaxPciePorts on the U55C: the host DMA path takes one of the 32 HBM ports"
           )
         else if (c.ramaStriping && !c.needsSharedRtl)
           failure("--rama-striping only applies to -q and -P")

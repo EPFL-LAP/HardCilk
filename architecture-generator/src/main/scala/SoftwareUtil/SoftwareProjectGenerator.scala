@@ -104,7 +104,7 @@ object SoftwareProjectGenerator {
       numHbmPortExports
     )
 
-    patchProjectCMakeLists(s"$projectDir/CMakeLists.txt", jsonName)
+    patchProjectCMakeLists(s"$projectDir/CMakeLists.txt", jsonName, cfg.board == Util.Board.V80)
     patchRootCMakeLists(s"$outputDirPathSC/CMakeLists.txt", cfg)
 
     // The QuestaSim testbench is compiled by `sccom` from simulate.do rather than
@@ -155,7 +155,7 @@ object SoftwareProjectGenerator {
     * map. The QuestaSim build is not a CMake target at all -- `sccom` compiles it
     * from `simulate.do`, which reaches into `include/gen/nonvitis` directly.
     */
-  private def patchProjectCMakeLists(path: String, jsonName: String): Unit = {
+  private def patchProjectCMakeLists(path: String, jsonName: String, v80: Boolean): Unit = {
     if (!Files.exists(Paths.get(path))) return
     val content = readFile(path).replace("${project_template}", jsonName)
 
@@ -182,9 +182,25 @@ object SoftwareProjectGenerator {
          |if(HC_ENABLE_XRT_TARGETS)
          |    target_include_directories($${HC_TARGET_NAME}_xrt PUBLIC $${CMAKE_CURRENT_SOURCE_DIR}/include/gen/vitis)
          |endif()
+         |
+         |if(HC_ENABLE_QDMA_TARGETS AND TARGET $${HC_TARGET_NAME}_v80)
+         |    target_include_directories($${HC_TARGET_NAME}_v80 PUBLIC $${CMAKE_CURRENT_SOURCE_DIR}/include/gen/nonvitis)
+         |endif()
          |""".stripMargin
 
-    writeFile(path, content + genIncludes)
+    // V80 only: hc_v80_probe (driver/tools) reads this design's decoded register
+    // range (HC_NUM_CONFIG_PORTS) from the generated header, so it never touches
+    // an undecoded register block (which would hang the PCIe path).
+    val probeIncludes =
+      if (!v80) ""
+      else
+        s"""
+           |if(HC_ENABLE_QDMA_TARGETS AND TARGET hc_v80_probe)
+           |    target_include_directories(hc_v80_probe PRIVATE $${CMAKE_CURRENT_SOURCE_DIR}/include/gen/nonvitis)
+           |endif()
+           |""".stripMargin
+
+    writeFile(path, content + genIncludes + probeIncludes)
   }
 
   /**
@@ -197,9 +213,15 @@ object SoftwareProjectGenerator {
     // The default only appears as `<OPTION> ON` inside the set(); the surrounding
     // `if(NOT DEFINED <OPTION>)` has no value after the name, so a plain literal
     // replace hits exactly the line that matters.
+    //
+    // The V80 has no XDMA and no Vitis platform: its host program is the QDMA
+    // target (`<spec>_v80`), which has no build dependencies beyond POSIX, so it
+    // is on for every V80 tree; the XDMA (`_pcie`) and XRT targets are off.
+    val v80 = cfg.board == Util.Board.V80
     val content = readFile(path)
-      .replace("HC_ENABLE_PCIE_TARGETS ON", s"HC_ENABLE_PCIE_TARGETS ${onOff(cfg.pcie)}")
-      .replace("HC_ENABLE_XRT_TARGETS ON", s"HC_ENABLE_XRT_TARGETS ${onOff(cfg.vitis)}")
+      .replace("HC_ENABLE_PCIE_TARGETS ON", s"HC_ENABLE_PCIE_TARGETS ${onOff(cfg.pcie && !v80)}")
+      .replace("HC_ENABLE_XRT_TARGETS ON", s"HC_ENABLE_XRT_TARGETS ${onOff(cfg.vitis && !v80)}")
+      .replace("HC_ENABLE_QDMA_TARGETS OFF", s"HC_ENABLE_QDMA_TARGETS ${onOff(v80)}")
     writeFile(path, content)
   }
 
@@ -215,6 +237,8 @@ object SoftwareProjectGenerator {
         else {
           Files.createDirectories(destinationPath.getParent)
           Files.copy(sourcePath, destinationPath, StandardCopyOption.REPLACE_EXISTING)
+          // Keep scripts (scripts/v80_bringup.sh, ...) runnable.
+          if (Files.isExecutable(sourcePath)) destinationPath.toFile.setExecutable(true, false)
         }
       }
     } finally walk.close()

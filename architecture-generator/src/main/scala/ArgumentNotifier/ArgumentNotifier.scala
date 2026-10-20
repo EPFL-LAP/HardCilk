@@ -45,7 +45,9 @@ class ArgumentNotifier(
     taskID: Int,
     override val mfpgaSupport: Boolean,
     debug: Boolean = false,
-    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4) 
+    override val axisCfgTaskAndReq: axi4s.Config = axi4s.Config(wData = 512, wDest = 4),
+    // HC_SCHED_SLR_LOCAL (Util.NocPePolicy): die of every argIn port; empty = flat network.
+    portSlr: Seq[String] = Seq.empty
 ) extends Module with  NotifierHasMfpgaSupport {
 
   print(f"ArgumentNotifier: addrWidth: ${addrWidth} \n")
@@ -56,7 +58,7 @@ class ArgumentNotifier(
 
   assert(argRouteServersNumber > 0)
 
-  val argSide = Module(
+  val argSide: Module with HasArgumentNotifierNetworkIO = if (portSlr.isEmpty) Module(
     new ArgumentNotifierNetwork(
       addrWidth = addrWidth,
       taskWidth = taskWidth,
@@ -65,6 +67,16 @@ class ArgumentNotifier(
       queueDepth = queueDepth,
       cutCount = cutCount,
       multiDecrease = multiDecrease
+    )
+  ) else Module(
+    new SlrLocalArgumentNotifierNetwork(
+      addrWidth = addrWidth,
+      taskWidth = taskWidth,
+      peCount = peCount,
+      vasNum = argRouteServersNumber,
+      queueDepth = queueDepth,
+      multiDecrease = multiDecrease,
+      portSlr = portSlr
     )
   )
 

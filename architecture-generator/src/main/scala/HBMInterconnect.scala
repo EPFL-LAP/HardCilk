@@ -115,9 +115,14 @@ trait HasHBMInterconnect extends Module {
     // Compared by reference below, so two PEs with identical configs stay distinct.
     val interfacesHot = new ArrayBuffer[axi4.full.Interface]()
 
+    // HC_NOC_PES (Util.NocPePolicy, V80 only): interfacesPE index -> die of the
+    // NoC PE that owns it. Empty when the policy is off.
+    val nocOwner = scala.collection.mutable.LinkedHashMap[Int, String]()
+
     peMap.foreach { case (taskName, peArray) =>
       val task = fullSysGenDescriptor.taskDescriptors.find(_.name == taskName).get
-      peArray.foreach { pe =>
+      peArray.zipWithIndex.foreach { case (pe, peIdx) =>
+        val nocFirst = interfacesPE.length
         // Legacy single spawnNext AXI-MM port.
         pe.io.elements.get("m_axi_spawnNext").foreach { p =>
           interfacesPE.addOne(p.asInstanceOf[axi4.RawInterface].asFull)
@@ -180,6 +185,26 @@ trait HasHBMInterconnect extends Module {
               if (pe.hotMemPorts.contains(n)) interfacesHot.addOne(iface)
             }
         }
+        Util.NocPePolicy.nocMemSlrOf(fullSysGenDescriptor, taskName, peIdx).foreach { slr =>
+          (nocFirst until interfacesPE.length).foreach(i => nocOwner(i) = slr)
+        }
+      }
+    }
+
+    // Take the NoC PEs' masters out of the HBM pool: they are muxed per die in
+    // a NocMemPool and exported after the HBM ports (see the end of this method).
+    val nocPools: Seq[(String, Seq[axi4.full.Interface])] =
+      nocOwner.toSeq.groupBy(_._2).toSeq.sortBy(_._1).map { case (slr, m) =>
+        slr -> m.map(_._1).sorted.map(interfacesPE(_))
+      }
+    if (nocOwner.nonEmpty) {
+      require(!rawHbmPorts, "[HBM:Interconnect] HC_NOC_PES cannot be combined with --raw-hbm-ports")
+      val keep = interfacesPE.indices.filterNot(nocOwner.contains)
+      val (ki, kl) = (keep.map(interfacesPE(_)), keep.map(labelsPE(_)))
+      interfacesPE.clear(); interfacesPE.addAll(ki)
+      labelsPE.clear(); labelsPE.addAll(kl)
+      nocPools.foreach { case (slr, l) =>
+        println(s"[HBM:Interconnect] HC_NOC_PES: ${l.length} master(s) of the $slr NoC PEs leave the HBM pool")
       }
     }
 
@@ -645,6 +670,182 @@ trait HasHBMInterconnect extends Module {
           axiOuts.addOne(axiOut)
         }
       }
+    }
+
+    // --- HC_NOC_PES: per-die NoC memory pools, exported after the HBM ports ---
+    if (nocPools.nonEmpty) {
+      val slrOfPort = ArrayBuffer.fill(axiOuts.length)("HBM")
+      nocPools.foreach { case (slr, ifaces) =>
+        val nPes = Util.NocPePolicy.assignment(fullSysGenDescriptor).count(_._2 == slr)
+        val nPorts = Util.NocPePolicy.portsFor(nPes)
+        // HC_NOC_HOT_PORTS (opt-in): the `// hot` masters get ports of their own in the pool.
+        val pool = Util.NocPePolicy.hotPortsFor(nPorts) match {
+          case None => Module(new NocMemPool(ifaces.map(_.cfg), nPorts, cfgAxi4HBM.wAddr))
+          case Some(h) =>
+            Module(new NocMemPool(ifaces.map(_.cfg), nPorts, cfgAxi4HBM.wAddr,
+              hot = ifaces.map(i => interfacesHot.exists(_ eq i)), hotPorts = Some(h)))
+        }
+        pool.suggestName(Util.NocPePolicy.poolInstance(slr))
+        ifaces.zip(pool.s_axi).foreach { case (i, s) => i :=> s }
+        pool.m_axi.foreach { m =>
+          val idx = axiOuts.length
+          val axiOut = IO(axi4.Master(m.cfg)).suggestName(f"m_axi_${idx}%02d")
+          m :=> axiOut.asFull
+          interfaceBuffer.addOne(
+            hdlinfo.Interface(
+              f"m_axi_${idx}%02d", hdlinfo.InterfaceRole.master, hdlinfo.InterfaceKind("axi4"),
+              "clock", "reset", Map("config" -> hdlinfo.TypedObject(axiOut.cfg))
+            )
+          )
+          axiOuts.addOne(axiOut)
+          slrOfPort += slr
+        }
+        println(s"[HBM:Interconnect] HC_NOC_PES: $slr pool ${Util.NocPePolicy.poolInstance(slr)}: " +
+          s"${ifaces.length} master(s) of $nPes PE(s) -> ${pool.m_axi.length} NoC port(s)")
+        pool.hotSummary.foreach(m => println(s"[HBM:Interconnect] HC_NOC_HOT_PORTS: $slr pool: $m"))
+      }
+      numHbmPortExports = axiOuts.length
+      Util.NocPePolicy.exportedPortSlr = slrOfPort.toSeq
+    } else if (Util.NocPePolicy.hbmMemDies.nonEmpty && Util.NocPePolicy.task(fullSysGenDescriptor).nonEmpty)
+      // HC_SLR_HBM_MEM with no NoC pool at all: still mark the policy as active
+      // (all ports HBM) so the per-die hierarchy, resets and pblocks are emitted.
+      Util.NocPePolicy.exportedPortSlr = Seq.fill(axiOuts.length)("HBM")
+    else Util.NocPePolicy.exportedPortSlr = Seq.empty
+  }
+}
+
+/**
+  * HC_NOC_PES (Util.NocPePolicy): the memory masters of the NoC PEs of one die,
+  * reduced to `numPorts` exported masters exactly like the hub's HBM pool (bus
+  * groups, round-robin over each group's muxes, user signals yanked, protocol
+  * converted to the exported config), but in a sub-module of its own so the
+  * floorplan can pin it to that die next to its PEs and its NoC NMUs.
+  */
+class NocMemPool(
+    inCfgs: Seq[axi4.Config],
+    numPorts: Int,
+    wAddr: Int,
+    hot: Seq[Boolean] = Seq.empty,
+    hotPorts: Option[Int] = None
+) extends Module {
+  private def busSignature(cfg: axi4.Config): axi4.Config =
+    cfg.copy(
+      wId = 0, wAddr = 0, axi3Compat = false,
+      wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0
+    )
+
+  val s_axi: Seq[axi4.full.Interface] = inCfgs.zipWithIndex.map { case (c, i) =>
+    IO(axi4.full.Slave(c)).suggestName(s"s_axi_$i")
+  }
+
+  private val byGroup = s_axi.groupBy(i => busSignature(i.cfg))
+  private val groups = byGroup.keys.toSeq.sortBy(c =>
+    (c.wData, c.read, c.write, c.hasLock, c.hasCache, c.hasProt, c.hasQos, c.hasRegion))
+  private val muxByGroup = scala.collection.mutable.LinkedHashMap(groups.map(g => g -> 1): _*)
+  private var remaining = math.max(numPorts, groups.length) - groups.length
+  while (remaining > 0 && groups.exists(g => muxByGroup(g) < byGroup(g).length)) {
+    val g = groups.filter(x => muxByGroup(x) < byGroup(x).length)
+      .maxBy(x => byGroup(x).length.toDouble / muxByGroup(x))
+    muxByGroup(g) += 1
+    remaining -= 1
+  }
+  private val bucketsFlat: Seq[Seq[axi4.full.Interface]] = groups.flatMap { g =>
+    val n = muxByGroup(g)
+    (0 until n).map(b => byGroup(g).zipWithIndex.collect { case (i, k) if k % n == b => i })
+  }
+
+  /**
+    * HC_NOC_HOT_PORTS (Util.NocPePolicy.hotPortsFor): the same reduction, done
+    * separately for the `// hot` masters (on `hotPorts` ports, each bus group
+    * at least one) and for the rest (on the remaining ports), so the
+    * bandwidth-critical masters are not piled onto the one port their bus group
+    * would get by master count. Hot buckets come first.
+    */
+  private def reduce(ifs: Seq[axi4.full.Interface], n: Int): Seq[Seq[axi4.full.Interface]] =
+    if (ifs.isEmpty) Seq.empty
+    else {
+      val bg = ifs.groupBy(i => busSignature(i.cfg))
+      val gs = bg.keys.toSeq.sortBy(c =>
+        (c.wData, c.read, c.write, c.hasLock, c.hasCache, c.hasProt, c.hasQos, c.hasRegion))
+      val mux = scala.collection.mutable.LinkedHashMap(gs.map(g => g -> 1): _*)
+      var left = math.max(n, gs.length) - gs.length
+      while (left > 0 && gs.exists(g => mux(g) < bg(g).length)) {
+        val g = gs.filter(x => mux(x) < bg(x).length).maxBy(x => bg(x).length.toDouble / mux(x))
+        mux(g) += 1
+        left -= 1
+      }
+      gs.flatMap { g =>
+        val k = mux(g)
+        (0 until k).map(b => bg(g).zipWithIndex.collect { case (i, j) if j % k == b => i })
+      }
+    }
+
+  private val hotIfs = s_axi.zipWithIndex.collect { case (i, k) if hot.lift(k).getOrElse(false) => i }
+  private val coldIfs = s_axi.zipWithIndex.collect { case (i, k) if !hot.lift(k).getOrElse(false) => i }
+  private val nHotPorts = hotPorts.map { h =>
+    if (hotIfs.isEmpty) 0
+    else {
+      val hotGroups = hotIfs.map(i => busSignature(i.cfg)).distinct.length
+      val coldGroups = coldIfs.map(i => busSignature(i.cfg)).distinct.length
+      math.max(hotGroups, math.min(math.min(h, hotIfs.length), numPorts - coldGroups))
+    }
+  }
+  private val buckets: Seq[Seq[axi4.full.Interface]] = nHotPorts match {
+    case None => bucketsFlat
+    case Some(nh) =>
+      val coldGroups = coldIfs.map(i => busSignature(i.cfg)).distinct.length
+      reduce(hotIfs, nh) ++ reduce(coldIfs, math.max(numPorts - nh, coldGroups))
+  }
+
+  /** HC_NOC_HOT_PORTS: what the hot-aware reduction did, for the generator log. */
+  def hotSummary: Option[String] = nHotPorts.map { nh =>
+    val hb = buckets.take(if (hotIfs.isEmpty) 0 else reduce(hotIfs, nh).length)
+    s"${hotIfs.length} hot master(s) on ${hb.length} port(s) [${hb.map(_.length).mkString(",")}], " +
+      s"${coldIfs.length} other master(s) on ${buckets.length - hb.length} port(s) " +
+      s"[${buckets.drop(hb.length).map(_.length).mkString(",")}]"
+  }
+
+  val m_axi: Seq[axi4.full.Interface] = buckets.zipWithIndex.map { case (bucket, bi) =>
+    val exportCfg = busSignature(bucket.head.cfg).copy(wId = 4, wAddr = wAddr)
+    if (bucket.length > 1) {
+      val mux = Module(
+        new axi4.full.components.Mux(
+          new axi4.full.components.MuxConfig(
+            axiSlaveCfg = exportCfg,
+            numSlaves = bucket.length,
+            slaveBuffers = axi4.BufferConfig.all(2)
+          )
+        )
+      )
+      mux.s_axi.zip(bucket).foreach { case (muxPort, slavePort) =>
+        val pc = Module(
+          new axi4.full.components.ProtocolConverter(
+            new axi4.full.components.ProtocolConverterConfig(
+              axiSlaveCfg = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+              axiMasterCfg = muxPort.cfg
+            )
+          )
+        )
+        axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> pc.s_axi
+        pc.m_axi :=> muxPort
+      }
+      // The mux widens the ID by its select bits: export its own config.
+      val out = IO(axi4.full.Master(mux.m_axi.cfg)).suggestName(s"m_axi_$bi")
+      mux.m_axi :=> out
+      out
+    } else {
+      val out = IO(axi4.full.Master(exportCfg)).suggestName(s"m_axi_$bi")
+      val pc = Module(
+        new axi4.full.components.ProtocolConverter(
+          new axi4.full.components.ProtocolConverterConfig(
+            axiSlaveCfg = bucket.head.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+            axiMasterCfg = exportCfg
+          )
+        )
+      )
+      axi4.full.SlaveBuffer(AxiUserYanker(bucket.head), axi4.BufferConfig.all(2)) :=> pc.s_axi
+      pc.m_axi :=> out
+      out
     }
   }
 }

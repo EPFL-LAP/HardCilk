@@ -143,11 +143,14 @@ object Floorplan {
       lut: Long,
       mem: Long,
       modules: Int,
-      wrapped: Boolean
+      wrapped: Boolean,
+      /** V80: set when the figures are measured ones from HC_LUTRAM_PROFILE. */
+      measured: String = ""
   ) {
     /** Which basis the numbers came from, for the printed report. */
     def basis: String =
-      if (modules <= 0) "FALLBACK, no HLS data"
+      if (measured.nonEmpty) measured
+      else if (modules <= 0) "FALLBACK, no HLS data"
       else s"HLS, $modules module(s)${if (wrapped) " + OVERLAP wrapper allowance" else ""}"
   }
 
@@ -242,7 +245,9 @@ object Floorplan {
       basis: String = "",
       hlsFf: Long = 0L,
       hlsLut: Long = 0L,
-      hlsMem: Long = 0L
+      hlsMem: Long = 0L,
+      /** Multi-spill devices only: PEs placed on each further spill SLR. */
+      extraSpillPes: Seq[(String, Seq[String])] = Seq.empty
   )
 
   /** The whole assignment, plus the numbers the caller reports and warns on. */
@@ -252,11 +257,32 @@ object Floorplan {
       /** true when nothing was split and the hub SLR alone cannot hold the design. */
       widenedHub: Boolean
   ) {
-    def spillPes: Seq[String] = splits.flatMap(_.spillPes)
+    /**
+      * Every PE off the hub die. On a multi-spill device this includes the
+      * further spill dice: they share the RTL's single spill reset leaf, which
+      * the floorplan pins to `spillSlr` (adjacent to them).
+      */
+    def spillPes: Seq[String] = splits.flatMap(_.spillPes) ++ splits.flatMap(_.extraSpillPes.flatMap(_._2))
     def hubClb: Int = splits.map(s => s.hubPes.length * s.clbPerPe).sum + device.clbHubBase
     def spillClb: Int = splits.map(s => s.spillPes.length * s.clbPerPe).sum
     def hubFraction: Double = hubClb.toDouble / device.slr(device.hubSlr).clbCount
     def spillFraction: Double = spillClb.toDouble / device.slr(device.spillSlr).clbCount
+
+    /** PEs on each further spill SLR (multi-spill devices), merged over tasks. */
+    def extraSpill: Seq[(String, Seq[String])] =
+      device.extraSpillSlrs.map(slr => slr -> splits.flatMap(_.extraSpillPes.toMap.getOrElse(slr, Seq.empty)))
+
+    /** Estimated CLBs per SLR, including the reserved (shell) share. */
+    def slrClb(slr: String): Int = {
+      val pes = splits.map { s =>
+        val n =
+          if (slr == device.hubSlr) s.hubPes.length
+          else if (slr == device.spillSlr) s.spillPes.length
+          else s.extraSpillPes.toMap.getOrElse(slr, Seq.empty).length
+        n * s.clbPerPe
+      }.sum
+      pes + device.reservedClb.getOrElse(slr, 0) + (if (slr == device.hubSlr) device.clbHubBase else 0)
+    }
   }
 
   /**
@@ -272,6 +298,7 @@ object Floorplan {
       peInstanceNames: Seq[(String, Seq[String])]
   ): Plan = {
     val device = DeviceProfile.forModel(desc.fpgaModel)
+    if (device.extraSpillSlrs.nonEmpty) return planMultiSpill(desc, device, peInstanceNames)
     val byName = desc.taskDescriptors.map(t => t.name -> t).toMap
 
     val splits = peInstanceNames.map { case (taskName, instances) =>
@@ -595,5 +622,561 @@ set_property IS_SOFT TRUE [get_pblocks pblock_axilite_slice]
 """
 
     sb.toString()
+  }
+
+  /**
+    * Multi-spill planner, for devices whose profile lists `extraSpillSlrs`
+    * (the Alveo V80: hub SLR1, PEs spread over SLR1, SLR2 and SLR0).
+    *
+    * Same "never straddle" rule as the two-die plan: each PE goes whole to one
+    * SLR. Tasks with at most [[splitThreshold]] PEs stay with the hub logic.
+    * The PEs of larger tasks are dealt out one at a time, biggest PEs first, to
+    * the first die in the order hub, `spillSlr`, `extraSpillSlrs` whose
+    * estimated occupancy (CLBs over the SLR's CLBs, counting the hub base on
+    * the hub die and each profile's `reservedClb`) stays within
+    * `occupancyWarnFraction`; if none does, to the least occupied one.
+    *
+    * Filling rather than balancing is deliberate on the V80: the hub die is the
+    * HBM die, and every PE moved off it costs SLLs for all of its memory and
+    * stream interfaces (about 2.1k per pageRank_overlap applyFn PE; SLR1-SLR2 has
+    * 18870), while a PE on the hub die costs none.
+    */
+
+  /**
+    * SLLs one PE moved off the hub die needs per boundary it crosses: its
+    * stream and memory interfaces to the hub, estimated as
+    * [[sllPortBitFactor]] x the bit count of the PE top module's ports (see
+    * [[estimatePortBits]]); [[fallbackSllPerPe]] when that cannot be read.
+    *
+    * Calibration (V80, hub on SLR2, pageRank_overlap applyFn PEs): SLR1<->SLR2
+    * used 6301 / 14703 / 18862 SLLs with 3 / 7 / 9 PEs on SLR1 (16/20/22-PE
+    * builds), i.e. 2095-2100 per PE, against 2515 port bits on
+    * applyFn_overlap_wrapper -> 0.833; a later 9-PE build needed 18883
+    * (2098 per PE, Place 30-5425) and the 28-PE LUTRAM build 18773 placed, so
+    * 0.835 (2100 per PE). Unused outputs (xUSER, LOCK, REGION, ...) are
+    * optimised away, hence < 1. The budget margin is [[multiSpillSllFraction]].
+    */
+  private val sllPortBitFactor: Double = 0.835
+  private val fallbackSllPerPe: Int = 2100
+
+  /**
+    * Fraction of a boundary's SLLs the planner lets spilled PEs use,
+    * `HC_SLL_MARGIN` (default 0.97). History: at 1.0 the 22-PE
+    * pageRank_overlap build routed at 18862 / 18870 (99.96%) once, and the
+    * same 13/9 split failed placement in a later build ("18883 SLLs required
+    * ... only 18870 available", Place 30-5425) after the guard / 4K splitter /
+    * deskew changes: the per-PE estimate is good to ~0.5%, so a full boundary
+    * has no margin. 0.97 keeps ~560 SLLs in reserve.
+    */
+  private def multiSpillSllFraction: Double =
+    sys.env.get("HC_SLL_MARGIN").flatMap(v => scala.util.Try(v.toDouble).toOption)
+      .filter(f => f > 0 && f <= 1.0).getOrElse(0.97)
+
+  /**
+    * Bits on the ports of a PE's top module (clock/reset excluded): the
+    * `<peHDLPath>/<x>_overlap_wrapper.v` module if there is one, else
+    * `<peHDLPath>/<task>.v`. Parameterised ranges (`[P-1:0]`, `[(P/8)-1:0]`)
+    * are evaluated with the module's parameter defaults. 0 if unreadable.
+    */
+  private def estimatePortBits(task: TaskDescriptor, keep: String => Boolean = _ => true): Int = {
+    val dir = new java.io.File(task.peHDLPath)
+    if (task.peHDLPath.isEmpty || !dir.isDirectory) return 0
+    val files = Option(dir.listFiles()).getOrElse(Array.empty[java.io.File]).filter(_.isFile)
+    val top = files
+      .find(_.getName.endsWith(wrapperFileSuffix))
+      .orElse(files.find(_.getName == s"${task.name}.v"))
+    top.map { f =>
+      try {
+        val src = scala.io.Source.fromFile(f, "ISO-8859-1")
+        val text = try src.mkString finally src.close()
+        val mod = f.getName.stripSuffix(".v")
+        val hdr = raw"(?ms)^module\s+${java.util.regex.Pattern.quote(mod)}\b(.*?)\);".r
+          .findFirstMatchIn(text).map(_.group(1)).getOrElse("")
+        val params = scala.collection.mutable.Map[String, String]()
+        raw"parameter\s+(?:integer\s+)?(\w+)\s*=\s*([^,;\n)]+)".r.findAllMatchIn(text).foreach { m =>
+          if (!params.contains(m.group(1))) params(m.group(1)) = m.group(2).trim
+        }
+        def ev(e: String, depth: Int = 0): Long =
+          if (depth > 10) 0L
+          else {
+            val subst = raw"[A-Za-z_]\w*".r.replaceAllIn(e, m =>
+              "(" + ev(params.getOrElse(m.matched, "0"), depth + 1) + ")")
+            ArithEval(raw"\d+'[dhb]?".r.replaceAllIn(subst, ""))
+          }
+        val portRe = raw"(?m)^\s*(input|output)\s+(?:wire\s+|reg\s+)?(\[([^\]:]+):([^\]]+)\])?\s*(\w+)".r
+        val skip = Set("ap_clk", "ap_rst_n", "ap_rst", "clock", "reset")
+        val bits = (body: String) =>
+          portRe.findAllMatchIn(body).filterNot(m => skip.contains(m.group(5))).filter(m => keep(m.group(5))).map { m =>
+            if (m.group(2) == null) 1L else math.abs(ev(m.group(3)) - ev(m.group(4))) + 1
+          }.sum
+        val b = bits(hdr)
+        (if (b > 0) b else bits(text)).toInt
+      } catch { case _: Throwable => 0 }
+    }.getOrElse(0)
+  }
+
+  /**
+    * HC_NOC_PES: HLS top ports that still go to the hub when the PE's memory
+    * goes through its own die's NoC NMUs -- the task / argument-notification
+    * streams. Excluded: the m_axi masters, the (unconnected) s_axi_control, and
+    * the argDataOut / spawnNext streams, which the PE wrapper turns into memory
+    * writes (m_axi_argOut / m_axi_spawnNext).
+    */
+  private def nocStreamPort(port: String): Boolean =
+    !Seq("m_axi_", "s_axi_", "argDataOut", "spawnNext").exists(port.startsWith)
+
+  /** Integer + - * / ( ) evaluator for Verilog range expressions; 0 on anything else. */
+  private object ArithEval {
+    def apply(e: String): Long =
+      try {
+        val toks = raw"\d+|[-+*/()]".r.findAllIn(e.replaceAll("\\s", "")).toVector
+        var i = 0
+        def peek = if (i < toks.length) toks(i) else ""
+        def atom(): Long = peek match {
+          case "(" => i += 1; val v = sum(); i += 1; v
+          case "-" => i += 1; -atom()
+          case t   => i += 1; t.toLong
+        }
+        def prod(): Long = {
+          var v = atom()
+          while (peek == "*" || peek == "/") {
+            val op = peek; i += 1; val r = atom()
+            v = if (op == "*") v * r else if (r == 0) 0 else v / r
+          }
+          v
+        }
+        def sum(): Long = {
+          var v = prod()
+          while (peek == "+" || peek == "-") {
+            val op = peek; i += 1; val r = prod()
+            v = if (op == "+") v + r else v - r
+          }
+          v
+        }
+        sum()
+      } catch { case _: Throwable => 0L }
+  }
+
+  /**
+    * RAMB36 the OVERLAP wrapper adds to each PE beyond HLS_SYN_MEM: its
+    * `(* ram_style = "block" *)` FIFOs, estimated as ceil(WIDTH/72) x
+    * ceil(DEPTH/512) per `*_fifo #(.WIDTH(..), .DEPTH(..))` instance in the
+    * wrapper source, times [[wrapperRambFactor]]; [[fallbackWrapperRamb36]] if
+    * the wrapper cannot be parsed.
+    *
+    * Calibration (V80): pageRank_overlap 78 RAMB36 per PE with HLS_SYN_MEM 58
+    * -> wrapper 49, FIFO estimate 67 (0.73); triangleCount_overlap ~62 per PE
+    * with HLS_SYN_MEM 4 -> wrapper ~60, FIFO estimate 98 (0.61). 0.73 is the
+    * larger, so the planner errs high (triangleCount_overlap with 20/23 PEs on
+    * SLR2 at the old fixed 49 over-filled pblock_SLR2: 1247 and 1433 of 1200
+    * RAMB36, DRC UTLZ-1).
+    */
+  private val wrapperRambFactor: Double = 0.73
+  private val fallbackWrapperRamb36: Long = 62L
+
+  private def estimateWrapperRamb36(task: TaskDescriptor): Long = {
+    val dir = new java.io.File(task.peHDLPath)
+    val f = Option(dir.listFiles()).getOrElse(Array.empty[java.io.File])
+      .find(x => x.isFile && x.getName.endsWith(wrapperFileSuffix))
+    f.map { file =>
+      try {
+        val src = scala.io.Source.fromFile(file, "ISO-8859-1")
+        val text = try src.mkString finally src.close()
+        val params = scala.collection.mutable.Map[String, String]()
+        raw"(?:localparam|parameter)\s+(?:integer\s+)?(\w+)\s*=\s*([^,;\n)]+)".r.findAllMatchIn(text).foreach { m =>
+          if (!params.contains(m.group(1))) params(m.group(1)) = m.group(2).trim
+        }
+        def ev(e: String, depth: Int = 0): Long =
+          if (depth > 10) 0L
+          else ArithEval(raw"[A-Za-z_]\w*".r.replaceAllIn(e, m => "(" + ev(params.getOrElse(m.matched, "0"), depth + 1) + ")"))
+        val inst = raw"_(?:fifo|msr_fifo|mrc_fifo)\s*#\(\s*\.WIDTH\(([^()]*(?:\([^()]*\))?[^()]*)\)\s*,\s*\.DEPTH\(([^()]*)\)".r
+        val est = inst.findAllMatchIn(text).map { m =>
+          val w = ev(m.group(1)); val d = ev(m.group(2))
+          ((w + 71) / 72) * math.max(1L, (d + 511) / 512)
+        }.sum
+        if (est > 0) math.round(est * wrapperRambFactor) else fallbackWrapperRamb36
+      } catch { case _: Throwable => fallbackWrapperRamb36 }
+    }.getOrElse(fallbackWrapperRamb36)
+  }
+
+  /** Fraction of an SLR's RAMB36 the multi-spill planner fills (the pblock DRC limit is 100%). */
+  private val multiSpillBramFraction: Double = 0.9
+
+  private def planMultiSpill(
+      desc: FullSysGenDescriptor,
+      device: DeviceProfile,
+      peInstanceNames: Seq[(String, Seq[String])]
+  ): Plan = {
+    val byName = desc.taskDescriptors.map(t => t.name -> t).toMap
+    val dies = Seq(device.hubSlr, device.spillSlr) ++ device.extraSpillSlrs
+    val load = scala.collection.mutable.Map[String, Long]()
+    dies.foreach(d => load(d) = device.reservedClb.getOrElse(d, 0).toLong)
+    load(device.hubSlr) += device.clbHubBase
+
+    // Measured per-PE figures (post-synthesis LUT/FF, BRAM tiles after the
+    // LUTRAM conversion when it is on) from HC_LUTRAM_PROFILE, see V80Lutram.
+    val measured = peInstanceNames.map { case (t, inst) => t -> V80Lutram.forTask(t, inst) }.toMap
+    val areas = peInstanceNames.map { case (t, _) =>
+      val hls = estimateClbPerPe(byName(t))
+      t -> measured(t).fold(hls) { p =>
+        val clb = math.max(1L, (math.max(p.lut / 8.0, p.ff / 16.0) * clbPackingFactor).round).toInt
+        hls.copy(clb = clb, ff = p.ff, lut = p.lut,
+          measured = f"MEASURED (HC_LUTRAM_PROFILE, LUTRAM ${V80Lutram.mode}): LUT ${p.lut}, FF ${p.ff}, " +
+            f"${p.bramTiles}%.1f BRAM tiles per PE")
+      }
+    }.toMap
+    // RAMB36 per PE: HLS_SYN_MEM counts BRAM_18K; the OVERLAP wrapper's FIFOs
+    // and context cache are not in it (measured: 78 RAMB36 per pageRank applyFn
+    // PE against HLS_SYN_MEM = 58 BRAM_18K, i.e. ~49 RAMB36 of wrapper).
+    val wrapperRamb = peInstanceNames.map { case (t, _) =>
+      t -> (if (areas(t).wrapped) estimateWrapperRamb36(byName(t)) else 0L)
+    }.toMap
+    val ramb = (t: String) =>
+      measured(t).fold((areas(t).mem + 1) / 2 + wrapperRamb(t))(p => math.ceil(p.bramTiles).toLong)
+    val bram = scala.collection.mutable.Map[String, Long]()
+    dies.foreach(d => bram(d) = 0L)
+    val small = peInstanceNames.filter(_._2.length <= splitThreshold)
+    small.foreach { case (t, inst) =>
+      load(device.hubSlr) += inst.length.toLong * areas(t).clb
+      bram(device.hubSlr) += inst.length.toLong * ramb(t)
+    }
+
+    val assigned = scala.collection.mutable.Map[String, Map[String, Seq[String]]]()
+    // Occupancy cap per die (estimated CLB incl. the shell's reservedClb, and
+    // BRAM via bramFrac): HC_SLR_CAP, default the device's occupancyWarnFraction.
+    val slrCap = sys.env.get("HC_SLR_CAP").flatMap(v => scala.util.Try(v.toDouble).toOption)
+      .filter(f => f > 0 && f <= 1.0).getOrElse(device.occupancyWarnFraction)
+    val overflowKeepsCap = sys.env.get("HC_FLOORPLAN_OVERFLOW").exists(_.trim.toLowerCase == "cap")
+    val overCap = scala.collection.mutable.Map[String, Int]()
+    val overSll = scala.collection.mutable.Map[String, Int]()
+    // Estimated SLLs used on boundary b (between dies(b-1) and dies(b)), b = 1..
+    val crossings = scala.collection.mutable.Map[Int, Int]().withDefaultValue(0)
+    var overfilled = false
+    val sllPerTask = scala.collection.mutable.LinkedHashMap[String, Int]()
+    peInstanceNames
+      .filter(_._2.length > splitThreshold)
+      .sortBy { case (t, _) => -areas(t).clb }
+      .foreach { case (t, inst) =>
+        val clb = areas(t).clb.toLong
+        val per = scala.collection.mutable.LinkedHashMap[String, Seq[String]]()
+        dies.foreach(d => per(d) = Seq.empty)
+        val rb = ramb(t)
+        val portBits = estimatePortBits(byName(t))
+        val sllPerSpilledPe =
+          if (portBits > 0) math.round(portBits * sllPortBitFactor).toInt else fallbackSllPerPe
+        sllPerTask(t) = sllPerSpilledPe
+        // HC_NOC_PES (Util.NocPePolicy): the NoC PEs go to their die first; their
+        // memory masters use that die's NoC NMUs, so only their stream ports
+        // (task in/out, argument notifications) cross the boundaries to the hub.
+        val nocSlr = (i: Int) => Util.NocPePolicy.slrOf(desc, t, i)
+        val nocIdx = inst.indices.filter(i => nocSlr(i).isDefined).toSet
+        if (nocIdx.nonEmpty) {
+          val streamBits = estimatePortBits(byName(t), nocStreamPort)
+          val sllNoc0 = if (streamBits > 0) math.round(streamBits * sllPortBitFactor).toInt else fallbackSllPerPe / 2
+          // HC_SCHED_SLR_LOCAL: the PE's streams end on its own die; only the few
+          // per-die links of the scheduler / notifier cross (not charged per PE).
+          val sllNoc =
+            if (Util.NocPePolicy.schedSlrLocal(desc) && Util.NocPePolicy.task(desc).contains(t)) 0 else sllNoc0
+          // HC_SLR_HBM_MEM: these PEs' memory masters cross to the hub's HBM pool.
+          val sllMem = math.max(0, sllPerSpilledPe - sllNoc0)
+          nocIdx.toSeq.sorted.foreach { i =>
+            val d = nocSlr(i).get
+            val k = dies.indexOf(d)
+            (1 to k).foreach(b => crossings(b) += sllNoc +
+              (if (Util.NocPePolicy.hbmMemDies.contains(d)) sllMem else 0))
+            load(d) += clb
+            bram(d) += rb
+            per(d) = per(d) :+ inst(i)
+          }
+          println(s"[Floorplan] HC_NOC_PES: ${nocIdx.size} PE(s) of $t pre-assigned " +
+            nocIdx.toSeq.groupBy(i => nocSlr(i).get).toSeq.sortBy(_._1).map { case (d, l) => s"${l.size} to $d" }.mkString(", ") +
+            s" (NoC memory ports; $streamBits stream bits -> $sllNoc SLLs per boundary per PE, vs $sllPerSpilledPe with HBM-NMU memory)")
+          if (Util.NocPePolicy.hbmMemDies.nonEmpty)
+            println(s"[Floorplan] HC_SLR_HBM_MEM: PEs on ${Util.NocPePolicy.hbmMemDies.toSeq.sorted.mkString("/")} keep " +
+              s"HBM-NMU memory: +$sllMem SLLs per boundary per PE")
+        }
+        inst.zipWithIndex.filterNot { case (_, i) => nocIdx.contains(i) }.map(_._1).foreach { pe =>
+          val bramFrac = (d: String) => {
+            val cap = device.slr(d).ramb36Count
+            if (cap <= 0) 0.0 else (bram(d) + rb).toDouble / (cap * multiSpillBramFraction)
+          }
+          val frac = (d: String) =>
+            math.max((load(d) + clb).toDouble / device.slr(d).clbCount, bramFrac(d) * slrCap)
+          // Fill in die order (hub first: it is also the memory side, so its
+          // PEs cost no SLR crossings) up to the occupancy target, then spill.
+          // SLL budget: a PE on die k (k hops from the hub, dies in order of
+          // distance) crosses every boundary between it and the hub.
+          val sllOk = (d: String) =>
+            device.sllPerBoundary <= 0 || {
+              val k = dies.indexOf(d)
+              (1 to k).forall { b =>
+                crossings(b) + sllPerSpilledPe <= device.sllPerBoundary * multiSpillSllFraction
+              }
+            }
+          val fits = dies.find(d => frac(d) <= slrCap && sllOk(d))
+          // Nothing fits both the occupancy cap and the SLL budget: break one.
+          // HC_FLOORPLAN_OVERFLOW=sll (default) keeps the SLL budget and
+          // overfills (usually the hub die); =cap keeps the cap where it can
+          // and overruns the SLL budget instead.
+          val best0 = fits.getOrElse {
+            if (overflowKeepsCap) dies.minBy(frac)
+            else dies.filter(sllOk).minBy(frac)
+          }
+          // HC_SCHED_SLR_LOCAL: the per-die scheduler serves the PEs that are not
+          // NoC PEs from the hub die, so that is where they must be.
+          val best =
+            if (Util.NocPePolicy.schedSlrLocal(desc) && Util.NocPePolicy.task(desc).contains(t)) device.hubSlr
+            else best0
+          if (fits.isEmpty) {
+            if (frac(best) > slrCap) overCap(t) = overCap.getOrElse(t, 0) + 1
+            if (!sllOk(best)) overSll(t) = overSll.getOrElse(t, 0) + 1
+          }
+          if (frac(best) > slrCap) overfilled = true
+          val k = dies.indexOf(best)
+          (1 to k).foreach(b => crossings(b) += sllPerSpilledPe)
+          load(best) += clb
+          bram(best) += rb
+          per(best) = per(best) :+ pe
+        }
+        assigned(t) = per.toMap
+      }
+
+    val splits = peInstanceNames.map { case (t, inst) =>
+      val a = areas(t)
+      assigned.get(t) match {
+        case None =>
+          TaskSplit(t, inst, Seq.empty, a.clb, a.basis, a.ff, a.lut, a.mem)
+        case Some(per) =>
+          TaskSplit(
+            t,
+            per(device.hubSlr),
+            per(device.spillSlr),
+            a.clb,
+            a.basis,
+            a.ff,
+            a.lut,
+            a.mem,
+            extraSpillPes = device.extraSpillSlrs.map(d => d -> per(d))
+          )
+      }
+    }
+    // Occupancy cap vs. SLL budget, per task: how many PEs fit within both.
+    sllPerTask.foreach { case (t, sllPe) =>
+      val n = peInstanceNames.find(_._1 == t).map(_._2.length).getOrElse(0)
+      val bad = math.max(overCap.getOrElse(t, 0), overSll.getOrElse(t, 0))
+      println(f"[Floorplan] trade-off $t: $n PEs requested, ${n - bad} fit within the ${slrCap * 100}%.0f%% occupancy " +
+        s"cap (HC_SLR_CAP) and the ${(device.sllPerBoundary * multiSpillSllFraction).toInt}-SLL budget ($sllPe SLLs per PE off the hub, at most " +
+        s"${if (sllPe > 0) (device.sllPerBoundary * multiSpillSllFraction / sllPe).toInt else 0} off the hub " +
+        f"at HC_SLL_MARGIN ${multiSpillSllFraction}%.2f)" +
+        (if (bad > 0) s"; the other $bad " + (if (overflowKeepsCap) s"overrun the SLL budget (${overSll.getOrElse(t, 0)}) / cap (${overCap.getOrElse(t, 0)})"
+          else s"overfill a die past the cap (HC_FLOORPLAN_OVERFLOW=sll; =cap trades SLLs instead)") else ""))
+    }
+    if (overfilled)
+      println(
+        s"[Floorplan] WARNING: no die had room within ${slrCap} occupancy and the " +
+          s"SLL budget (${sllPerTask.map { case (t, n) => s"$t $n" }.mkString(", ")} SLLs per spilled PE, ${multiSpillSllFraction} of " +
+          s"${device.sllPerBoundary} per boundary); the remaining PEs went to the least occupied die " +
+          "that keeps the SLL budget. This design is probably larger than the device can route."
+      )
+    if (device.sllPerBoundary > 0)
+      println(
+        "[Floorplan] estimated SLLs for spilled PEs: " +
+          (1 until dies.length).map(b => s"${dies(b - 1)}<->${dies(b)} ${crossings(b)}/${device.sllPerBoundary}").mkString(", ") +
+          " (per PE: " + sllPerTask.map { case (t, n) => s"$t $n" }.mkString(", ") + ")"
+      )
+    println(
+      "[Floorplan] estimated RAMB36: " + dies.map(d => s"$d ${bram(d)}/${device.slr(d).ramb36Count}").mkString(", ") +
+        " (per PE: " + peInstanceNames.filter(_._2.length > splitThreshold).map { case (t, _) => s"$t ${ramb(t)}" }.mkString(", ") + ")"
+    )
+    // Which resource binds each die for this PE count (BRAM after the LUTRAM
+    // conversion when HC_LUTRAM_PROFILE is given).
+    dies.foreach { d =>
+      val cap = device.slr(d).ramb36Count
+      if (cap > 0) {
+        val bf = bram(d).toDouble / cap
+        val cf = load(d).toDouble / device.slr(d).clbCount
+        val bind =
+          if (bf > multiSpillBramFraction) "BRAM (over the 90% target)"
+          else if (bf * device.occupancyWarnFraction / multiSpillBramFraction > cf) "BRAM"
+          else "CLB"
+        println(f"[Floorplan] $d binding resource: $bind -- RAMB36 ${bram(d)}/$cap (${bf * 100}%.1f%%, margin " +
+          f"${(cap * multiSpillBramFraction - bram(d)).toLong} to the ${multiSpillBramFraction * 100}%.0f%% target), " +
+          f"CLB ${load(d)}/${device.slr(d).clbCount} (${cf * 100}%.1f%%)")
+      }
+    }
+    Plan(device, splits, widenedHub = false)
+  }
+
+  /** Generation-time report for a multi-spill plan. Returns the lines it printed. */
+  def reportMultiSpill(plan: Plan): Seq[String] = {
+    val d = plan.device
+    val dies = Seq(d.hubSlr, d.spillSlr) ++ d.extraSpillSlrs
+    val pct = (f: Double) => f"${f * 100}%.1f%%"
+    val lines = scala.collection.mutable.ArrayBuffer[String]()
+    lines += s"[Floorplan] device ${d.model}: ${d.slrs.length} SLR(s), hub=${d.hubSlr}, " +
+      s"PEs spread over ${dies.mkString(", ")}, memory side=${d.memSideSlr}"
+    plan.splits.foreach { s =>
+      val counts = Seq(d.hubSlr -> s.hubPes.length, d.spillSlr -> s.spillPes.length) ++
+        s.extraSpillPes.map { case (slr, p) => slr -> p.length }
+      lines += s"[Floorplan] task ${s.taskName}: " +
+        counts.map { case (slr, n) => s"$n in $slr" }.mkString(", ") +
+        s" (~${s.clbPerPe} CLB each, estimated; ${s.basis})"
+    }
+    lines += "[Floorplan] estimated occupancy: " + dies.map { slr =>
+      val c = plan.slrClb(slr)
+      s"$slr $c CLB (${pct(c.toDouble / d.slr(slr).clbCount)})"
+    }.mkString(", ") + s"; warning threshold ${pct(d.occupancyWarnFraction)}"
+    dies.foreach { slr =>
+      val f = plan.slrClb(slr).toDouble / d.slr(slr).clbCount
+      if (f > 1.0)
+        lines += s"[Floorplan] ERROR-LEVEL WARNING: $slr is estimated at ${pct(f)} of its CLBs -- " +
+          "above 100%. This floorplan will very likely fail place_design."
+      else if (f > d.occupancyWarnFraction)
+        lines += s"[Floorplan] WARNING: $slr is estimated at ${pct(f)} of its CLBs, above the " +
+          s"${pct(d.occupancyWarnFraction)} threshold."
+    }
+    lines.foreach(println)
+    lines.toSeq
+  }
+
+  /**
+    * Floorplan XDC for the Alveo V80 PCIe flow (AVED shell, BD instance `top_i`).
+    *
+    * Uses the shell's own hard SLR pblocks from AVED's `impl.xdc`
+    * (`pblock_SLR0/1/2`, `IS_SOFT FALSE`) instead of creating overlapping ones:
+    * this file is read LATE, after `impl.xdc`, so they exist.
+    *
+    *  - the whole kernel cell -> hub SLR, then PEs (and their interface queues)
+    *    re-assigned to the spill dice underneath it (nested idiom, see [[xdc]]);
+    *  - the spill reset leaf -> `spillSlr`;
+    *  - rs0 (design side of the HBM crossing) -> hub SLR, rs1 and the 512-bit
+    *    downsizers -> the memory side (SLR2, below the HBM NMUs).
+    *
+    * The management path (NoC M_AXI, its SmartConnect, the reset GPIO) is left
+    * to the placer: the NoC compiler chooses where its NSU lands.
+    */
+  def v80Xdc(
+      desc: FullSysGenDescriptor,
+      rawMode: Boolean,
+      peInstanceNames: Seq[(String, Seq[String])],
+      peIfaceBuffers: Seq[(String, Seq[String])]
+  ): String = {
+    val names =
+      if (peInstanceNames.nonEmpty) peInstanceNames else reconstructPeInstanceNames(desc)
+    val plan = this.plan(desc, names)
+    reportMultiSpill(plan)
+    val d = plan.device
+    val top = d.bdInstance
+    val n = desc.name
+    val ifaceByPe = peIfaceBuffers.toMap
+    val sb = new StringBuilder
+    val pb = (slr: String) => s"pblock_$slr"
+
+    sb ++= s"""# Generated by HardCilk -- floorplan for the Alveo V80 PCIe flow (AVED shell).
+# Device profile: ${d.model} (TclResources.DeviceProfile). Read LATE, after AVED's
+# impl.xdc, whose hard pblocks pblock_SLR0/1/2 are reused here.
+#
+# Hub (schedulers, allocators, notifiers, HBM interconnect): ${d.hubSlr}.
+# PEs are assigned whole to one SLR each (see TclResources.Floorplan): the kernel
+# cell goes to ${pb(d.hubSlr)} first, then the PEs that belong elsewhere are re-assigned
+# underneath it. Filters select hierarchical cells (no trailing /*) and match a
+# PE both under inst/ and directly under the wrapper (synthesis -flatten rebuilt).
+#
+# Estimated occupancy: ${(Seq(d.hubSlr, d.spillSlr) ++ d.extraSpillSlrs).map(s => s"$s ${plan.slrClb(s)} CLB").mkString(", ")}
+add_cells_to_pblock [get_pblocks ${pb(d.hubSlr)}] [get_cells -hierarchical -filter {NAME =~ *$top/${n}_0}]
+"""
+    if (rawMode)
+      sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(d.hubSlr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *$top/smartconnect_hbm_* || NAME =~ *$top/shim_raw_*}]\n"
+
+    val groups = Seq(d.spillSlr -> plan.splits.flatMap(_.spillPes)) ++ plan.extraSpill
+    groups.filter(_._2.nonEmpty).foreach { case (slr, pes) =>
+      sb ++= s"\n# ${pes.length} PE(s) -> $slr\n"
+      pes.foreach { pe =>
+        sb ++= s"add_cells_to_pblock [get_pblocks ${pb(slr)}] [get_cells -hierarchical -filter {NAME =~ *inst/$pe || NAME =~ *${n}_0/$pe}]\n"
+        ifaceByPe.getOrElse(pe, Seq.empty).foreach { b =>
+          sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(slr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *inst/$b || NAME =~ *${n}_0/$b}]\n"
+        }
+      }
+    }
+    if (plan.spillPes.nonEmpty)
+      sb ++= s"""
+# Spill reset leaf (Util.HardCilkEmitterUtil.pipelinePerSlrReset) next to the PEs it drives.
+add_cells_to_pblock -quiet [get_pblocks ${pb(d.spillSlr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *inst/hc_reset_slr2_reg || NAME =~ *${n}_0/hc_reset_slr2_reg}]
+add_cells_to_pblock -quiet [get_pblocks ${pb(d.spillSlr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *inst/hc_resetn_slr2_reg || NAME =~ *${n}_0/hc_resetn_slr2_reg}]
+"""
+    sb ++= s"""
+# HBM path: rs0 on the kernel side, rs1 (+ width SmartConnects) next to the HBM NMUs.
+add_cells_to_pblock -quiet [get_pblocks ${pb(d.hubSlr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *$top/rs0_m_axi_*}]
+add_cells_to_pblock -quiet [get_pblocks ${pb(d.memSideSlr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *$top/rs1_m_axi_*}]
+"""
+    sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(d.memSideSlr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *$top/shim_in_* || NAME =~ *$top/smartconnect_sizer_* || NAME =~ *$top/split4k_* || NAME =~ *$top/rs_nmu_*}]\n"
+    sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(d.hubSlr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *$top/rs_s_axil_mgmt}]\n"
+    sb ++= nocXdc(n, top, pb)
+    sb ++= resetMcpXdc
+    sb.toString
+  }
+
+  /**
+    * HC_NOC_PES (Util.NocPePolicy) part of the V80 floorplan: the per-die NoC
+    * memory pools, the role-named skid stages of the NoC PEs' streams, the
+    * SLR0 reset leaf and the block-design cells of each NoC port go to their
+    * die. Empty when the policy is off. Read after the generic lines above, so
+    * these assignments win (e.g. over the `split4k_*` -> memory-side wildcard).
+    */
+  /**
+    * HC_RESET_MCP=1 (opt-in): 2-cycle setup multicycle (hold 1) on the hops
+    * BETWEEN the per-SLR reset relay flops (hc_reset_p0 / p1_* -> the next relay
+    * or leaf register; Util.HardCilkEmitterUtil.pipelinePerSlrReset). These are
+    * pure register-to-register stages whose value changes only at reset
+    * assertion / release, so a two-cycle budget only lets one die's leaf see the
+    * release one cycle later; nothing runs until the host starts the kernel
+    * long after. It removes the single long SLR1 -> SLR0 route of
+    * hc_reset_p1_0 -> hc_reset(n)_slr0 that was the worst path of the 3-die
+    * overlap builds. The leaves' fan-out into the logic is NOT relaxed.
+    */
+  private def resetMcpXdc: String =
+    if (!sys.env.get("HC_RESET_MCP").exists(_.trim == "1")) ""
+    else {
+      val from = "[get_cells -quiet -hierarchical -filter {NAME =~ *hc_reset_p*_reg}]"
+      val to = "[get_cells -quiet -hierarchical -filter {NAME =~ *hc_reset_p*_reg || NAME =~ *hc_reset_slr*_reg || NAME =~ *hc_resetn_slr*_reg}]"
+      "\n# HC_RESET_MCP=1: reset relay -> relay/leaf hops get two cycles (pure pipeline, static after reset).\n" +
+        s"set_multicycle_path -setup 2 -from $from -to $to\n" +
+        s"set_multicycle_path -hold 1 -from $from -to $to\n"
+    }
+
+  private def nocXdc(n: String, top: String, pb: String => String): String = {
+    val portSlr = Util.NocPePolicy.exportedPortSlr
+    if (portSlr.isEmpty) return ""
+    val sb = new StringBuilder
+    val cell = (pat: String) => s"[get_cells -quiet -hierarchical -filter {NAME =~ *inst/$pat || NAME =~ *${n}_0/$pat}]"
+    sb ++= "\n# HC_NOC_PES (Util.NocPePolicy): NoC memory pools, skid stages per die, SLR0 reset leaf, NoC port chains.\n"
+    portSlr.filter(_ != "HBM").distinct.foreach { slr =>
+      sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(slr)}] ${cell(Util.NocPePolicy.poolInstance(slr))}\n"
+    }
+    Seq("slr0" -> "SLR0", "slr1p" -> "SLR1", "slr1h" -> "SLR1", "slr1" -> "SLR1").foreach { case (role, slr) =>
+      sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(slr)}] ${cell(s"skid_*_$role")}\n"
+    }
+    sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb("SLR1")}] ${cell("hc_reset_p1_0_reg")}\n"
+    sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb("SLR0")}] ${cell("hc_reset_slr0_reg")}\n"
+    sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb("SLR0")}] ${cell("hc_resetn_slr0_reg")}\n"
+    // HC_RESET_PER_INST: the per-instance relays follow their leaf's die.
+    if (sys.env.get("HC_RESET_PER_INST").exists(_.trim == "1")) {
+      Seq("hc_rst_slr2_*" -> "SLR1", "hc_rstn_slr2_*" -> "SLR1", "hc_rst_slr0_*" -> "SLR0", "hc_rstn_slr0_*" -> "SLR0")
+        .foreach { case (pat, slr) => sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(slr)}] ${cell(pat)}\n" }
+    }
+    // HC_SCHED_SLR_LOCAL (Util.SlrLocal): per-die scheduler blocks, notifier
+    // segments and their link stages, at any depth, by the role their name ends in.
+    if (sys.env.get("HC_SCHED_SLR_LOCAL").exists(_.trim == "1")) {
+      sb ++= "# HC_SCHED_SLR_LOCAL: hcslr_<what>_<role> cells (per-die scheduler / notifier blocks, link stages).\n"
+      Seq("slr0" -> "SLR0", "slr1p" -> "SLR1", "slr1h" -> "SLR1", "slr1" -> "SLR1", "slr2" -> "SLR2").foreach { case (role, slr) =>
+        sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(slr)}] [get_cells -quiet -hierarchical -filter {NAME =~ *${n}_0/*hcslr_*_$role}]\n"
+      }
+    }
+    portSlr.zipWithIndex.filter(_._1 != "HBM").foreach { case (slr, i) =>
+      val cells = Seq("rs_noc_", "shim_in_", "smartconnect_sizer_", "split4k_", "stripe_", "rs_nmu_")
+        .map(c => f"NAME =~ *$top/$c$i%02d").mkString(" || ")
+      sb ++= s"add_cells_to_pblock -quiet [get_pblocks ${pb(slr)}] [get_cells -quiet -hierarchical -filter {$cells}]\n"
+    }
+    sb.toString
   }
 }
