@@ -15,7 +15,7 @@ lazy val root = (project in file("."))
       "org.chipsalliance" %% "chisel" % chiselVersion,
     //  "edu.berkeley.cs" %% "chiseltest" % chiseltestVersion,
       "com.typesafe.play" %% "play-json" % "2.9.2",
-      "hdlstuff" %% "chext" % "0.1.1",
+      "hdlstuff" %% "chext" % "0.1.2",
       "hdlstuff" %% "hdlinfo" % "0.1.0",
       // "hdlstuff" %% "chict" % "0.1.0", // unused: only HardCilk_old.scala needed it
       "com.github.scopt" %% "scopt" % "4.1.0"
