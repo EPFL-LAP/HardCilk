@@ -112,16 +112,23 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 printf("        Writing root task data to the scheduler server with data at address %lx\n", data_queue_address);
 
 
+                // The SchedulerServer pushes fixed 16-task bursts at fifoTail without splitting
+                // them at the ring end, so fifoTail must stay a multiple of 16. Place the root
+                // tasks so that they end on a 16-entry boundary (fifoHead = the padding).
+                const uint64_t rootPad = (16 - base_task_data.size() % 16) % 16;
+                assert(rootPad + base_task_data.size() <= taskDescriptor.getCapacityVirtualQueue("scheduler"));
+
                 // Write the base task data to the first scheduler server
-                memory_->copyToDevice(data_queue_address, reinterpret_cast<const uint8_t*>(base_task_data.data()), base_task_data.size() * sizeof(T));
+                memory_->copyToDevice(data_queue_address + rootPad * (taskDescriptor.widthTask/8), reinterpret_cast<const uint8_t*>(base_task_data.data()), base_task_data.size() * sizeof(T));
                 printf("        Wrote root task data to the scheduler server\n");
 
-                // Update the fifoTailReg of the first scheduler server
-                memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_fifoTailReg_shift, base_task_data.size());
+                // Update the fifoHeadReg/fifoTailReg of the first scheduler server
+                memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_fifoHeadReg_shift, rootPad);
+                memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_fifoTailReg_shift, (rootPad + base_task_data.size()) % taskDescriptor.getCapacityVirtualQueue("scheduler"));
                 memory_->writeReg64(*(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()) + scheduler_server_currLen_shift, base_task_data.size());
 
                 // Log the successful initialization information of the root scheduler server with indentation
-                printf("        Initialized root task at scheduler server at address 0x%lx with length 0x%lx, fifoHead 0x%lx, fifoTail 0x%lx, dataAddress 0x%lx\n", *(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()), taskDescriptor.getCapacityVirtualQueue("scheduler"), 0x0, base_task_data.size(), data_queue_address);
+                printf("        Initialized root task at scheduler server at address 0x%lx with length 0x%lx, fifoHead 0x%lx, fifoTail 0x%lx, dataAddress 0x%lx\n", *(taskDescriptor.mgmtBaseAddresses.schedulerServersBaseAddresses.begin()), taskDescriptor.getCapacityVirtualQueue("scheduler"), rootPad, rootPad + base_task_data.size(), data_queue_address);
             }
             
             // Allocate memory for all the allocation servers

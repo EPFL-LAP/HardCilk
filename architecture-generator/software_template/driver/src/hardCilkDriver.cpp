@@ -1,3 +1,7 @@
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <vector>
 #include "hardCilkDriver.h"
 
 
@@ -118,32 +122,61 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     // Read the rAddress of the scheduler server and the maxLength and write the data in the free memory
     uint64_t addr = memory_->readReg64(base_address + scheduler_server_raddr_shift);
     uint64_t maxLength = memory_->readReg64(base_address + scheduler_server_maxLength_shift);
+    const uint64_t task_bytes = static_cast<uint64_t>(taskDescriptor.widthTask) / 8;
+
+    // The server pauses when the ring is nearly full (fewer than a burst of free slots),
+    // not only when every slot is live. The live tasks are the currLen entries starting at
+    // fifoHead, wrapping at maxLength; the slots between fifoTail and fifoHead are stale
+    // (already consumed). Copying the whole ring and declaring it full turned those stale
+    // slots into tasks that ran a second time.
+    const uint64_t head = memory_->readReg64(base_address + scheduler_server_fifoHeadReg_shift);
+    // A tail equal to maxLength (set by the host, never by the server) means slot 0.
+    uint64_t tail = memory_->readReg64(base_address + scheduler_server_fifoTailReg_shift);
+    if (maxLength != 0 && tail == maxLength)
+        tail = 0;
+    const uint64_t currLen = memory_->readReg64(base_address + scheduler_server_currLen_shift);
 
     // Log the information of calling this function
-    std::cout << "Managing scheduler server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr << " and maxLength " << maxLength << std::endl;
+    std::cout << "Managing scheduler server of task type " << taskDescriptor.name << " at address " << base_address << " with rAddress " << addr
+              << " and maxLength " << maxLength << " (head " << head << ", tail " << tail << ", currLen " << currLen << ")" << std::endl;
 
-    //freed_mem_blocks.push_back(freedMemBlock{addr, maxLength * taskDescriptor.widthTask / 8}); // Free the memory and write it in bytes.
+    if (maxLength == 0 || currLen > maxLength || head >= maxLength || tail >= maxLength || (head + currLen) % maxLength != tail)
+        throw std::runtime_error("manageSchedulerServer: inconsistent ring state (head " + std::to_string(head) +
+                                 ", tail " + std::to_string(tail) + ", currLen " + std::to_string(currLen) +
+                                 ", maxLength " + std::to_string(maxLength) + ")");
+
+    // The SchedulerServer pushes fixed 16-task bursts at fifoTail without splitting them at
+    // the ring end, so fifoTail must stay a multiple of 16 (maxLength always is). Place the
+    // live entries so that the new tail lands on a 16-entry boundary.
+    const uint64_t burst = 16;
+    const uint64_t newHead = (burst - currLen % burst) % burst;
+    const uint64_t newMaxLength = 2 * maxLength;
 
     // Allocate double the maxLength of the scheduler server
-    uint64_t new_addr = memory_->allocateMemFPGA(2 * maxLength * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
+    uint64_t new_addr = memory_->allocateMemFPGA(newMaxLength * task_bytes, task_bytes);
 
-    // Read the data from the scheduler server to the cpu
-    void *data = malloc(maxLength * taskDescriptor.widthTask / 8);
-    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(data), addr, maxLength * taskDescriptor.widthTask / 8);
+    // Read the old ring and gather the live entries in FIFO order
+    std::vector<uint8_t> ring(maxLength * task_bytes);
+    memory_->copyFromDevice(ring.data(), addr, ring.size());
+    std::vector<uint8_t> live(currLen * task_bytes);
+    const uint64_t first = std::min(currLen, maxLength - head); // entries before the wrap
+    std::memcpy(live.data(), ring.data() + head * task_bytes, first * task_bytes);
+    std::memcpy(live.data() + first * task_bytes, ring.data(), (currLen - first) * task_bytes);
 
-    // Write the data to the new address
-    memory_->copyToDevice(new_addr, reinterpret_cast<const uint8_t *>(data), maxLength * taskDescriptor.widthTask / 8);
+    // Write the live entries to the new ring
+    if (!live.empty())
+        memory_->copyToDevice(new_addr + newHead * task_bytes, live.data(), live.size());
 
     // Write the new address to the rAddress register
     memory_->writeReg64(base_address + scheduler_server_raddr_shift, new_addr);
 
     // Write the new head and tail registers
-    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, maxLength);
-    memory_->writeReg64(base_address + scheduler_server_fifoHeadReg_shift, 0x0);
-    memory_->writeReg64(base_address + scheduler_server_currLen_shift, maxLength);
+    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, newHead + currLen);
+    memory_->writeReg64(base_address + scheduler_server_fifoHeadReg_shift, newHead);
+    memory_->writeReg64(base_address + scheduler_server_currLen_shift, currLen);
 
     // Write the new MaxLength
-    memory_->writeReg64(base_address + scheduler_server_maxLength_shift, maxLength * 2);
+    memory_->writeReg64(base_address + scheduler_server_maxLength_shift, newMaxLength);
 
     // Write the rPause register to 0
     memory_->writeReg64(base_address + scheduler_server_rpause_shift, 0x0);
