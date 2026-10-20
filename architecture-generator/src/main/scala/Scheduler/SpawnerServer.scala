@@ -157,6 +157,16 @@ class SpawnerServer(
 
   val readAddressDone = RegInit(false.B)
 
+  // A burst must never run past the end of the ring: the ring wraps at maxLength, but an AXI
+  // INCR burst is linear, so the part of a burst beyond maxLength would land outside the ring
+  // (overwriting whatever the host allocated next) and the wrapped slots would be read stale.
+  // Clamp every burst to the slots left before the ring end; the next one continues at index 0.
+  private val roomBeforeEndWrite = maxLength - fifoTailReg
+  private val writeCount = Mux(roomBeforeEndWrite < queue_write.io.count, roomBeforeEndWrite, queue_write.io.count)
+  private val roomBeforeEndRead = maxLength - fifoHeadReg
+  private val readMax = Mux(currLen < queueDepth.U, currLen, queueDepth.U)
+  private val readCount = Mux(roomBeforeEndRead < readMax, roomBeforeEndRead, readMax)
+
   when(maxLength < (currLen + queueDepth.U)) {
     rPause := "hFFFFFFFFFFFFFFFF".U(64.W)
   }
@@ -169,15 +179,10 @@ class SpawnerServer(
       io.m_axi.asFull.aw.valid := true.B
       io.m_axi.asFull.aw.bits.addr := rAddr + (fifoTailReg << addrShift)
       
-      writeTasksCounterWriting := queue_write.io.count
-      writeTasksCounterBvalid := queue_write.io.count
-
-      io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
-      when(queue_write.io.count  < queueDepth.U){
-        io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
-      }.otherwise{
-        io.m_axi.asFull.aw.bits.len := (queueDepth.U) - 1.U
-      }
+      // writeCount = min(queue_write.io.count, maxLength - fifoTailReg) <= queueDepth
+      writeTasksCounterWriting := writeCount
+      writeTasksCounterBvalid := writeCount
+      io.m_axi.asFull.aw.bits.len := writeCount - 1.U
 
       when(io.m_axi.asFull.aw.ready){
         writeAddressDone := true.B
@@ -215,11 +220,8 @@ class SpawnerServer(
       io.m_axi.asFull.ar.bits.addr := rAddr + (fifoHeadReg << addrShift)
 
 
-      when(currLen < queueDepth.U){
-        io.m_axi.asFull.ar.bits.len := currLen - 1.U
-      }.otherwise{
-        io.m_axi.asFull.ar.bits.len := (queueDepth.U) - 1.U
-      }
+      // readCount = min(currLen, queueDepth, maxLength - fifoHeadReg)
+      io.m_axi.asFull.ar.bits.len := readCount - 1.U
 
       
       when(io.m_axi.asFull.ar.ready){

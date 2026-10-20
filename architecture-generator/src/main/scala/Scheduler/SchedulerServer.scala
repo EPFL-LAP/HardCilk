@@ -85,6 +85,14 @@ class SchedulerServer(
   private val queuesUtil = RegInit(0.U(64.W))
   private val enableMfpgaSteal = RegInit(0.U(64.W))
 
+  // A burst must never run past the end of the ring (see SpawnerServer). A push clamped at the
+  // ring end leaves the remaining tasks in taskQueueBuffer for the next push from index 0.
+  private val roomBeforeEndPush = maxLength - fifoTailReg
+  private val pushCount = Mux(roomBeforeEndPush < nBeats.U, roomBeforeEndPush, nBeats.U)
+  private val roomBeforeEndPop = maxLength - fifoHeadReg
+  private val popMax = Mux(currLen < nBeats.U, currLen, nBeats.U)
+  private val popCount = Mux(roomBeforeEndPop < popMax, roomBeforeEndPop, popMax)
+
   regBlock.base(0x00)
   regBlock.reg(rPause, read = true, write = true, desc = "Register to indicate whether the FSM is paused or not.")
   regBlock.reg(rAddr, read = true, write = true, desc = "Base address of virtual FIFO")
@@ -211,7 +219,7 @@ class SchedulerServer(
 
     when(io.write_address.ready) {
       stateReg := state.pushTaskMem
-      memDataCounter := nBeats.U
+      memDataCounter := pushCount
     }
 
   }.elsewhen(stateReg === state.pushTaskMem) {
@@ -240,7 +248,7 @@ class SchedulerServer(
 
     when(io.read_address.ready) {
       stateReg := state.popTaskMem
-      memDataCounter := Mux(currLen < nBeats.U, currLen, nBeats.U)
+      memDataCounter := popCount
     }
 
   }.elsewhen(stateReg === state.popTaskMem) {
@@ -347,7 +355,7 @@ class SchedulerServer(
 
     io.write_address.valid := true.B
     io.write_address.bits := (fifoTailReg << addrShift) + rAddr
-    io.write_burst_len := (nBeats - 1).U // equivalent to 16 values
+    io.write_burst_len := pushCount - 1.U // nBeats unless clamped at the ring end
 
   }.elsewhen(stateReg === state.pushTaskMem) {
 
@@ -361,7 +369,7 @@ class SchedulerServer(
 
     io.read_address.valid := true.B
     io.read_address.bits := (fifoHeadReg << addrShift) + rAddr
-    io.read_burst_len := Mux(currLen < nBeats.U, currLen - 1.U, (nBeats - 1).U)
+    io.read_burst_len := popCount - 1.U
 
   }.elsewhen(stateReg === state.popTaskMem) {
 
