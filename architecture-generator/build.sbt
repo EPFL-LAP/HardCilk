@@ -17,7 +17,7 @@ lazy val root = (project in file("."))
       "com.typesafe.play" %% "play-json" % "2.9.2",
       "hdlstuff" %% "chext" % "0.1.1",
       "hdlstuff" %% "hdlinfo" % "0.1.0",
-      "hdlstuff" %% "chict" % "0.1.0",
+      // "hdlstuff" %% "chict" % "0.1.0", // unused: only HardCilk_old.scala needed it
       "com.github.scopt" %% "scopt" % "4.1.0"
     ) ++ Seq(
       "io.circe" %% "circe-core",
