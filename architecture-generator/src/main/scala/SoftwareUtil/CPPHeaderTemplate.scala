@@ -22,6 +22,8 @@ object CppHeaderTemplate {
          |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToClosureBaseAddress;
          |    std::map<uint64_t, std::vector<std::pair<uint64_t, int>>> mapServerAddressToMallocBaseAddress;
          |
+         |    uint64_t allocatorSlabBytes = 0; // zero preserves legacy closure allocation
+         |
          |    int getNumServers(const std::string& sideType) const {
          |        assert(sideType == "scheduler" || sideType == "allocator" || 
          |               sideType == "argumentNotifier" || sideType == "memoryAllocator");
@@ -70,7 +72,8 @@ object CppHeaderTemplate {
          |    ${td.numProcessingElements},
          |    ${td.widthTask},
          |    {${generateSideConfig(td.sidesConfigs)}},
-         |    ${generateMemSystemDescriptor(td.mgmtBaseAddresses)}
+         |    ${generateMemSystemDescriptor(td.mgmtBaseAddresses)},
+         |    {}, {}, ${td.allocatorSlabBytes}
          |}
          """.stripMargin
       }

@@ -28,6 +28,10 @@ object HardCilkEmitter extends App {
       val systemDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
 
 
+      val cpuProject = systemDescriptor.taskDescriptors.exists(_.fineGrainedCpu.nonEmpty)
+      if (cfg.project_aie_generation && cpuProject)
+        SoftwareUtil.cpu.ProjectGenerator.validate(systemDescriptor, cfg)
+
       if (!cfg.rtl_generation) {
         println("RTL generation not requested.")
       } else {
@@ -44,7 +48,8 @@ object HardCilkEmitter extends App {
         }
 
         // Call the generate RTL function
-        val numHbmPortExports = generateRTL(
+        if (cpuProject) CpuIntegration.RuntimeEmitter.emit(systemDescriptor, outputDirPathRTL)
+        else generateRTL(
           systemDescriptor = systemDescriptor,
           pathInputJsonFile = cfg.json_path,
           outputDirPathRTL = outputDirPathRTL,
@@ -135,7 +140,10 @@ object HardCilkEmitter extends App {
           })
 
       }
-      if (cfg.project_aie_generation) {
+      if (cfg.project_aie_generation && cpuProject) {
+        SoftwareUtil.cpu.ProjectGenerator.generate(systemDescriptor, cfg,
+          Paths.get(cfg.output_dir, outputDirName), jsonName)
+      } else if (cfg.project_aie_generation) {
         val outputDirPathAIE = s"${cfg.output_dir}/$outputDirName/software"
         println(s"Generating AIE project in: $outputDirPathAIE")
         // AIE relevant templates

@@ -44,6 +44,9 @@ object DescriptorJSON {
   implicit val sideConfigDecoder: Decoder[SideConfig] = deriveConfiguredDecoder[SideConfig]
   implicit val sideConfigEncoder: Encoder[SideConfig] = deriveConfiguredEncoder[SideConfig]
 
+  implicit val cpuDecoder: Decoder[FineGrainedCpuDescriptor] = deriveConfiguredDecoder[FineGrainedCpuDescriptor]
+  implicit val cpuEncoder: Encoder[FineGrainedCpuDescriptor] = deriveConfiguredEncoder[FineGrainedCpuDescriptor]
+
   implicit val taskDescriptorDecoder: Decoder[TaskDescriptor] = deriveConfiguredDecoder[TaskDescriptor]
   implicit val taskDescriptorEncoder: Encoder[TaskDescriptor] = deriveConfiguredEncoder[TaskDescriptor]
 

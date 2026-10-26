@@ -17,7 +17,9 @@ case class BuilderConfig(
   json_path: String = "",
   // additional small flags that the HardCilk constructor sometimes uses
   argumentNotifierCutCount: Int = 1,
-  addressTransformFlag: Boolean = false
+  addressTransformFlag: Boolean = false,
+  project_template: String = "",
+  cpu_repo: String = ""
 )
 
 object ArgParser {
@@ -60,7 +62,13 @@ object ArgParser {
         .text("Generates the C++ project for SystemC simulation"),
       opt[Unit]('k', "aie-project")
         .action((_, c) => c.copy(project_aie_generation = true))
-        .text("Generates the AIE project for SystemC simulation"),
+        .text("Generate an AIE/HLS or CPU project, selected by the descriptor"),
+      opt[String]("project-template")
+        .action((x, c) => c.copy(project_template = x))
+        .text("CPU application template directory (src/cpu, src/host/projects, optional tests/assets)"),
+      opt[String]("cpu-repo")
+        .action((x, c) => c.copy(cpu_repo = x))
+        .text("CPU RTL checkout; can also be supplied as CPU_REPO when building"),
       opt[Unit]('a', "all")
         .action((_, c) =>
           c.copy(

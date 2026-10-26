@@ -137,7 +137,19 @@ class HardCilk(
       println(s"[CleanHardCilk] Exporting ${portsToExport.length} ports for missing PEs...")
     }
 
-    for (port <- portsToExport) {
+    val cpuNames = fullSysGenDescriptor.taskDescriptors.filter(_.fineGrainedCpu.nonEmpty).map(_.name).toSet
+    val cpuFaults = CpuIntegration.PortAdapters.attach(fullSysGenDescriptor, portsToExport,
+      p => getPhysicalPort(p, scheds, allocs, notifiers, memAllocs, pes, spawnNextWBs, sendArgumentWBs).asInstanceOf[chext.amba.axi4s.Interface],
+      (name, cfg, fromCpu) => interfaceBuffer += hdlinfo.Interface(name,
+        if (fromCpu) hdlinfo.InterfaceRole.slave else hdlinfo.InterfaceRole.master,
+        hdlinfo.InterfaceKind("axi4s"), "clock", "reset", Map("config" -> hdlinfo.TypedObject(cfg))))
+    if (cpuNames.nonEmpty) {
+      val fault = IO(Output(Bool())).suggestName("cpuInterfaceFault")
+      fault := cpuFaults.foldLeft(false.B)(_ || _)
+      exportedPeHdlinfoPorts += hdlinfo.Port("cpuInterfaceFault", hdlinfo.PortDirection.output,
+        hdlinfo.PortKind.data, associatedClock = "clock")
+    }
+    for (port <- portsToExport if !cpuNames(port.pePortDescriptor.parentName)) {
       val subPortDesc = port.subsystemPortDescriptor
       val pePortDesc = port.pePortDescriptor
 

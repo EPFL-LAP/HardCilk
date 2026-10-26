@@ -129,6 +129,24 @@ trait HasHBMInterconnect extends Module {
 
     val interfacesRemoteMemAccess = remoteMemAccessMap.values.flatMap(v => Seq(v.io.m_axi_mem)).to(ArrayBuffer)
 
+    // Opt-in portable boundary for an external AXI interconnect or simulation.
+    // Preserve each master's full configuration, including response IDs.
+    if (fullSysGenDescriptor.directMemoryPorts) {
+      val ports = interfacesPE ++ interfacesScheduler ++ interfacesClosureAllocator ++
+        interfacesArgumentNotifier ++ interfacesMemoryAllocator ++ interfacesRemoteMemAccess
+      ports.zipWithIndex.foreach { case (port, i) =>
+        val name = f"m_axi_${i}%02d"
+        val out = IO(axi4.Master(port.cfg)).suggestName(name)
+        port :=> out.asFull
+        axiOuts += out
+        interfaceBuffer += hdlinfo.Interface(name, hdlinfo.InterfaceRole.master,
+          hdlinfo.InterfaceKind("axi4"), "clock", "reset",
+          Map("config" -> hdlinfo.TypedObject(port.cfg)))
+      }
+      numHbmPortExports = ports.size
+      return
+    }
+
     val numHBMPorts = reduceAxi
     val hbmSlaves =
       scala.collection.mutable.Map[Int, ArrayBuffer[axi4.full.Interface]]()
