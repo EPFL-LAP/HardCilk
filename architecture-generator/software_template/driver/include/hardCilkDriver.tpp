@@ -89,14 +89,23 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
             
             // Allocate memory for all the allocation servers
             for(auto base_address = taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.begin(); base_address != taskDescriptor.mgmtBaseAddresses.allocationServersBaseAddresses.end(); base_address++){
+                const uint64_t stride = taskDescriptor.allocatorSlabBytes ? taskDescriptor.allocatorSlabBytes : taskDescriptor.widthTask / 8;
+                const uint64_t alignment = taskDescriptor.allocatorSlabBytes ? stride : 512;
+                if (taskDescriptor.allocatorSlabBytes &&
+                    (fpgaId != 0 || taskDescriptor.getCapacityVirtualQueue("allocator") == 0 ||
+                     taskDescriptor.getCapacityVirtualQueue("allocator") % 16 != 0))
+                    throw std::runtime_error("CPU slabs require local addresses and whole allocator bursts");
                 // First allocate memory to carry the continuation tasks
-                uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8, 512);
+                uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * stride, alignment);
+                // CPU writes carry full 64-bit addresses; slabs need only alignment.
+                if (taskDescriptor.allocatorSlabBytes && continuation_tasks_holder_addr % stride)
+                    throw std::runtime_error("CPU slab pool must be slab-aligned");
                 uint64_t continuation_queue_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, 512);
                 
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
                 std::vector<uint64_t> addresses;
                 for(auto i = 0; i < taskDescriptor.getCapacityVirtualQueue("allocator"); i++){
-                    uint64_t addr = continuation_tasks_holder_addr + i * taskDescriptor.widthTask/8;
+                    uint64_t addr = continuation_tasks_holder_addr + i * stride;
                     addr = (addr & ~(0xFULL << 56)) | (static_cast<uint64_t>(fpgaId) << 56); // address space for the fpgaId
                     addresses.push_back(addr);
                 }
@@ -113,7 +122,7 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 // Log the successful initialization information of the allocation server with indentation
                 printf("        Initialized allocation server at address 0x%lx with length 0x%lx\n", *base_address, taskDescriptor.getCapacityVirtualQueue("allocator"));
                 // Log also the start and the end of the data address continuation_tasks_holder_addr and continuation_queue_addr
-                printf("        continuation_tasks_holder_addr address start: 0x%lx, end: 0x%lx\n", continuation_tasks_holder_addr, continuation_tasks_holder_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * taskDescriptor.widthTask/8);
+                printf("        continuation_tasks_holder_addr address start: 0x%lx, end: 0x%lx\n", continuation_tasks_holder_addr, continuation_tasks_holder_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * stride);
                 printf("        continuation_queue_addr address start: 0x%lx, end: 0x%lx\n", continuation_queue_addr, continuation_queue_addr + taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8);
             }
 

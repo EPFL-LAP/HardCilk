@@ -28,6 +28,7 @@ object HardCilkBuilder {
 class HardCilkBuilder(desc: FullSysGenDescriptor, debug: Boolean, argCutCount: Int) {
 
   import HardCilkBuilder.PortToExport
+  desc.validateCpuIntegration()
 
   case class SubsystemBlueprint(
       peFactories: Map[String, () => Seq[VitisWriteBufferModule]],

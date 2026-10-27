@@ -158,6 +158,14 @@ case class SideConfig(
   }
 }
 
+/** Opt-in external fine-grained CPU interface. Global task headers are whole
+  * beats containing a one-based index into spawnList (excluding self).
+  * For multiple argument destinations the high ceil(log2(N)) address bits
+  * select sendArgumentList; these bits are removed before notification.
+  */
+case class FineGrainedCpuDescriptor(streamWidth: Int = 64, slabPool: Option[String] = None,
+    numThreads: Int = 4, instructionMemoryWords: Int = 1024, taskQueueDepth: Int = 64)
+
 // --- TaskDescriptor with validation ---
 case class TaskDescriptor(
     name: String,
@@ -178,7 +186,9 @@ case class TaskDescriptor(
     generateSpawnNextWriteBuffer: Boolean = false,
     generateArgOutWriteBuffer: Boolean = false,
     argumentSizeList: List[Int] = List(),
-    taskId: Int = 0 // Defaulted
+    taskId: Int = 0, // Defaulted
+    fineGrainedCpu: Option[FineGrainedCpuDescriptor] = None,
+    allocatorSlabBytes: Int = 0
 ) {
   // Helper methods are fine to keep here
   def getNumServers(sideType: String): Int = { //
@@ -194,6 +204,18 @@ case class TaskDescriptor(
 
   def validate(): Unit = {
     sidesConfigs.foreach(_.validate())
+    require(allocatorSlabBytes == 0 || (allocatorSlabBytes >= 8 && isPow2(allocatorSlabBytes)),
+      s"Task '$name': allocatorSlabBytes must be zero (legacy closures) or a power of two")
+    fineGrainedCpu.foreach { cpu =>
+      require(cpu.numThreads >= 4 && cpu.instructionMemoryWords > 0 && isPow2(cpu.instructionMemoryWords) &&
+        cpu.instructionMemoryWords <= (0x10000 - 0x1000) / 4 &&
+        cpu.taskQueueDepth >= 2 && isPow2(cpu.taskQueueDepth), "Invalid CPU core configuration")
+      // ABI 2 CPUs exchange 64-bit beats; the 8/16/32-bit streams are retired.
+      require(cpu.streamWidth == 64 && widthTask % cpu.streamWidth == 0,
+        s"Task '$name': CPU streams are 64 bits and must divide the task width")
+      require(peHDLPath.isEmpty && !isAIE && !generateSpawnNextWriteBuffer && !generateArgOutWriteBuffer,
+        s"Task '$name': CPU ports require external RTL and use the CPU's own write buffers")
+    }
 
     require(numProcessingElements > 0, s"Task '$name': numProcessingElements must be > 0")
     require(isPow2(widthTask) && widthTask <= 1024, s"Task '$name': widthTask must be power of 2 and <= 1024")
@@ -252,7 +274,8 @@ case class FullSysGenDescriptor(
     transformAXI: Boolean = false,
     transformPattern: List[Int] = List(),
     widthAXIAddress: Int = 34,
-    fpgaCountSim: Int = 1
+    fpgaCountSim: Int = 1,
+    directMemoryPorts: Boolean = false
 ) {
   // --- All helper logic is kept here ---
   // Assign base addresses
@@ -321,11 +344,51 @@ case class FullSysGenDescriptor(
     }
   }
 
+  // A CPU receives slabs from one common pool, independently of which task
+  // types it allocates within those slabs. Legacy PEs retain spawnNextList.
+  def closureGrantList: Map[String, List[String]] = taskDescriptors.map { task =>
+    task.name -> task.fineGrainedCpu.map(_.slabPool.toList)
+      .getOrElse(spawnNextList.getOrElse(task.name, Nil))
+  }.toMap
+
+  def validateCpuIntegration(): Unit = {
+    for (task <- taskDescriptors; cpu <- task.fineGrainedCpu) {
+      require(widthAddress == 64 && !task.variableSpawn && !mFPGASynth && !mFPGASimulation,
+        "CPU integration currently uses ordinary 64-bit local notifications")
+      require(mallocList.getOrElse(task.name, Nil).isEmpty,
+        s"CPU '${task.name}' has no mallocIn endpoint")
+      for (name <- sendArgumentList.getOrElse(task.name, Nil)) {
+        val target = taskDescriptors.find(_.name == name).getOrElse(
+          throw new IllegalArgumentException(s"Unknown CPU notification destination '$name'"))
+        require(!target.variableSpawn,
+          s"CPU '${task.name}' cannot notify variable-spawn destination '$name'")
+      }
+      for (name <- spawnList.getOrElse(task.name, Nil)) {
+        val target = taskDescriptors.find(_.name == name).getOrElse(
+          throw new IllegalArgumentException(s"Unknown CPU spawn destination '$name'"))
+        require(target.widthTask % cpu.streamWidth == 0,
+          s"CPU '${task.name}' stream width must divide destination '$name' task width")
+      }
+      require(spawnNextList.getOrElse(task.name, Nil).isEmpty || cpu.slabPool.nonEmpty,
+        s"CPU '${task.name}' allocates closures but has no slabPool")
+      cpu.slabPool.foreach { name =>
+        val pool = taskDescriptors.find(_.name == name).getOrElse(
+          throw new IllegalArgumentException(s"Unknown CPU slab pool '$name'"))
+        require(pool.isCont && pool.allocatorSlabBytes > 0 && pool.getNumServers("allocator") > 0,
+          s"CPU slab pool '$name' needs allocator servers and allocatorSlabBytes")
+      }
+    }
+    for (pool <- taskDescriptors if pool.allocatorSlabBytes > 0;
+         consumer <- taskDescriptors if closureGrantList.getOrElse(consumer.name, Nil).contains(pool.name)) {
+      require(consumer.fineGrainedCpu.nonEmpty, "A slab allocator cannot also supply legacy closure consumers")
+    }
+  }
+
   def getPortCount(port_type: String, task_name: String): Int = {
     // Get the correct map based on the port_type
     val map = port_type match {
       case "spawn"        => spawnList
-      case "spawnNext"    => spawnNextList
+      case "spawnNext"    => closureGrantList
       case "sendArgument" => sendArgumentList
       case "mallocIn"     => mallocList
       case _              => throw new IllegalArgumentException(s"Invalid port type: $port_type")
@@ -358,7 +421,7 @@ case class FullSysGenDescriptor(
       val spawnedTasks = spawnList.getOrElse(task.name, List())
       val argumentTasks = sendArgumentList.getOrElse(task.name, List())
       val mallocTasks = mallocList.getOrElse(task.name, List())
-      val spawnNextTasks = spawnNextList.getOrElse(task.name, List())
+      val spawnNextTasks = closureGrantList.getOrElse(task.name, List())
 
       val taskConnections = (0 until task.numProcessingElements).map { i =>
         ConnectionDescriptor(
@@ -542,6 +605,7 @@ case class FullSysGenDescriptor(
   }
 
   def validate(): Unit = {
+    validateCpuIntegration()
     taskDescriptors.foreach(_.validate()) // Validate all sub-tasks
 
     require(isPow2(widthAddress) && widthAddress <= 64, "widthAddress must be power of 2 and <= 64")
