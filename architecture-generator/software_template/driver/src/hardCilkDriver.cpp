@@ -174,7 +174,7 @@ int hardCilkDriver::manageAllocationServer(uint64_t base_address, TaskDescriptor
         const uint64_t stride = taskDescriptor.allocatorSlabBytes;
         if (size <= 0 || size % 16) throw std::runtime_error("Invalid CPU slab refill size");
         const uint64_t base = memory_->allocateMemFPGA(uint64_t(size) * stride, stride);
-        if (base % stride || uint64_t(size) * stride > (1ULL << 32) || base > (1ULL << 32) - uint64_t(size) * stride)
+        if (base % stride || base > ~uint64_t(0) - uint64_t(size) * stride)
             throw std::runtime_error("CPU slab refill outside supported address space");
         for (int i = 0; i < size; ++i) addresses.push_back(base + uint64_t(i) * stride);
     } else {

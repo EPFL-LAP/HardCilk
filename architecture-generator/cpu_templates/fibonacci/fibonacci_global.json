@@ -63,7 +63,7 @@
       ],
       "taskId": 1,
       "fineGrainedCpu": {
-        "streamWidth": 32,
+        "streamWidth": 64,
         "slabPool": "fib_cont0"
       }
     },
@@ -96,7 +96,7 @@
       ],
       "taskId": 2,
       "fineGrainedCpu": {
-        "streamWidth": 32,
+        "streamWidth": 64,
         "slabPool": "fib_cont0"
       }
     },
@@ -142,7 +142,7 @@
       ],
       "generateSpawnNextWriteBuffer": false,
       "fineGrainedCpu": {
-        "streamWidth": 32
+        "streamWidth": 64
       },
       "allocatorSlabBytes": 4096
     }

@@ -163,7 +163,7 @@ case class SideConfig(
   * For multiple argument destinations the high ceil(log2(N)) address bits
   * select sendArgumentList; these bits are removed before notification.
   */
-case class FineGrainedCpuDescriptor(streamWidth: Int = 32, slabPool: Option[String] = None,
+case class FineGrainedCpuDescriptor(streamWidth: Int = 64, slabPool: Option[String] = None,
     numThreads: Int = 4, instructionMemoryWords: Int = 1024, taskQueueDepth: Int = 64)
 
 // --- TaskDescriptor with validation ---
@@ -210,7 +210,9 @@ case class TaskDescriptor(
       require(cpu.numThreads >= 4 && cpu.instructionMemoryWords > 0 && isPow2(cpu.instructionMemoryWords) &&
         cpu.instructionMemoryWords <= (0x10000 - 0x1000) / 4 &&
         cpu.taskQueueDepth >= 2 && isPow2(cpu.taskQueueDepth), "Invalid CPU core configuration")
-      require(Set(8, 16, 32).contains(cpu.streamWidth) && widthTask % cpu.streamWidth == 0)
+      // ABI 2 CPUs exchange 64-bit beats; the 8/16/32-bit streams are retired.
+      require(cpu.streamWidth == 64 && widthTask % cpu.streamWidth == 0,
+        s"Task '$name': CPU streams are 64 bits and must divide the task width")
       require(peHDLPath.isEmpty && !isAIE && !generateSpawnNextWriteBuffer && !generateArgOutWriteBuffer,
         s"Task '$name': CPU ports require external RTL and use the CPU's own write buffers")
     }

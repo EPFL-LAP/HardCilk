@@ -26,6 +26,7 @@ int main(int argc, char** argv) {
                 auto& control = sim.controls.at(cpu.control);
                 check(control.read32(0x10018) == 0 && control.read32(0x1002c) == 0, "CPU fault");
                 check(control.read32(0x10014) == cpu.threads, "Thread configuration mismatch");
+                check(control.read32(0x10004) == 2 && control.read32(0x1000c) == 64, "CPU is not the 64-bit ABI");
             }
             std::cout << "PASS fib(" << n << ")=" << a << " CPUs=" << sim.cpus.size()
                       << " cycles=" << sim.cycle-start << '\n';

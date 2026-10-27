@@ -5,16 +5,19 @@ its native PE streams, closure grants, external write buffers, and memory fabric
 
 ## JSON additions
 
-- Task `fineGrainedCpu`: `{ "streamWidth": 32, "slabPool": "continuation_task" }`.
-  Width may be 8, 16, or 32 and must divide the task width. `slabPool` is optional
+- Task `fineGrainedCpu`: `{ "streamWidth": 64, "slabPool": "continuation_task" }`.
+  CPUs use wrapper ABI 2: every task beat and MMIO register is 64 bits wide, so
+  `streamWidth` must be 64 (the default) and divide the task width and every
+  global destination's width. The former 8-, 16-, and 32-bit streams are
+  rejected. `slabPool` is optional
   for CPUs which do not allocate. Set `peHDLPath` empty and disable
   `generateSpawnNextWriteBuffer` and `generateArgOutWriteBuffer`: the CPU implements
   its own write ordering. These CPUs are external RTL modules.
 - Task `allocatorSlabBytes`: defaults to 0, preserving closure-sized grants. A
   positive power of two opts that continuation task's allocator into slab grants.
   CPU consumers of the pool must use the same slab size; legacy consumers cannot
-  use it. The generated host driver allocates aligned, exclusive slabs below
-  4 GiB and refills with fresh memory. Individual closure completion never frees
+  use it. The generated host driver allocates aligned, exclusive slabs anywhere in
+  the 64-bit local address space and refills with fresh memory. Individual closure completion never frees
   a slab. Reclamation requires globally quiescing and resetting all consumers.
 - System `directMemoryPorts`: defaults to false. When true, export each memory
   master directly as `m_axi_NN`, preserving widths and IDs, for an external memory

@@ -39,15 +39,19 @@ object DescriptorCheck extends App {
   val fib = cpu.taskDescriptors.head
   rejected(fib.copy(generateSpawnNextWriteBuffer=true).validate())
   rejected(fib.copy(fineGrainedCpu=Some(FineGrainedCpuDescriptor(24,Some("fib_cont0")))).validate())
+  // Legacy 32-bit CPU streams are rejected; 64 is the default.
+  rejected(fib.copy(fineGrainedCpu=Some(FineGrainedCpuDescriptor(32,Some("fib_cont0")))).validate())
+  assert(FineGrainedCpuDescriptor().streamWidth == 64)
+  rejected(fib.copy(widthTask=32).validate())
   rejected(cpu.copy(taskDescriptors=fib.copy(fineGrainedCpu=Some(FineGrainedCpuDescriptor())) :: cpu.taskDescriptors.tail).validate())
-  rejected(cpu.copy(taskDescriptors=fib.copy(fineGrainedCpu=Some(FineGrainedCpuDescriptor(32,Some("missing")))) :: cpu.taskDescriptors.tail).validate())
+  rejected(cpu.copy(taskDescriptors=fib.copy(fineGrainedCpu=Some(FineGrainedCpuDescriptor(64,Some("missing")))) :: cpu.taskDescriptors.tail).validate())
   rejected(cpu.copy(taskDescriptors=fib :: cpu.taskDescriptors.tail.map(_.copy(allocatorSlabBytes=0))).validate())
   rejected(cpu.copy(widthAddress=32).validate())
   rejected(cpu.copy(mallocList=Map("fib" -> List("fib_cont0"))).validate())
   rejected(cpu.copy(taskDescriptors=fib :: cpu.taskDescriptors.tail.map(_.copy(
     fineGrainedCpu=None, variableSpawn=true))).validate())
   rejected(cpu.copy(spawnList=Map("fib" -> List("fib_cont0")),
-    taskDescriptors=fib :: cpu.taskDescriptors.tail.map(_.copy(widthTask=16))).validate())
+    taskDescriptors=fib :: cpu.taskDescriptors.tail.map(_.copy(widthTask=32))).validate())
   println("PASS CPU descriptor validation and legacy defaults")
 }
 

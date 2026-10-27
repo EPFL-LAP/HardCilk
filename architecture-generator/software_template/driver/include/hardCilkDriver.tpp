@@ -93,14 +93,13 @@ template <typename T> int initSystem(std::vector<T> base_task_data, /** A boolea
                 const uint64_t alignment = taskDescriptor.allocatorSlabBytes ? stride : 512;
                 if (taskDescriptor.allocatorSlabBytes &&
                     (fpgaId != 0 || taskDescriptor.getCapacityVirtualQueue("allocator") == 0 ||
-                     taskDescriptor.getCapacityVirtualQueue("allocator") % 16 != 0 ||
-                     taskDescriptor.getCapacityVirtualQueue("allocator") * stride > (1ULL << 32)))
+                     taskDescriptor.getCapacityVirtualQueue("allocator") % 16 != 0))
                     throw std::runtime_error("CPU slabs require local addresses and whole allocator bursts");
                 // First allocate memory to carry the continuation tasks
                 uint64_t continuation_tasks_holder_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * stride, alignment);
-                if (taskDescriptor.allocatorSlabBytes &&
-                    (continuation_tasks_holder_addr % stride || continuation_tasks_holder_addr > (1ULL << 32) - taskDescriptor.getCapacityVirtualQueue("allocator") * stride))
-                    throw std::runtime_error("CPU slab pool must be aligned and below 4 GiB");
+                // CPU writes carry full 64-bit addresses; slabs need only alignment.
+                if (taskDescriptor.allocatorSlabBytes && continuation_tasks_holder_addr % stride)
+                    throw std::runtime_error("CPU slab pool must be slab-aligned");
                 uint64_t continuation_queue_addr = memory_->allocateMemFPGA(taskDescriptor.getCapacityVirtualQueue("allocator") * descriptor.widthAddress/8, 512);
                 
                 // Create an array of 64 bit addresses that has the addresses of the continuation tasks allocated in the previous step
