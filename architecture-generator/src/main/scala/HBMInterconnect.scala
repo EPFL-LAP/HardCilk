@@ -130,18 +130,29 @@ trait HasHBMInterconnect extends Module {
     val interfacesRemoteMemAccess = remoteMemAccessMap.values.flatMap(v => Seq(v.io.m_axi_mem)).to(ArrayBuffer)
 
     // Opt-in portable boundary for an external AXI interconnect or simulation.
-    // Preserve each master's full configuration, including response IDs.
+    // Scheduler queue bursts can cross 4 KiB, which AXI forbids, so every port
+    // is split at page boundaries as on the HBM path. The splitter serializes
+    // IDs, so the exported ports carry no ID signals.
     if (fullSysGenDescriptor.directMemoryPorts) {
       val ports = interfacesPE ++ interfacesScheduler ++ interfacesClosureAllocator ++
         interfacesArgumentNotifier ++ interfacesMemoryAllocator ++ interfacesRemoteMemAccess
       ports.zipWithIndex.foreach { case (port, i) =>
         val name = f"m_axi_${i}%02d"
-        val out = IO(axi4.Master(port.cfg)).suggestName(name)
-        port :=> out.asFull
+        val splitter = Module(new AxiPageBoundarySplitter_Basic(new AxiPageBoundarySplitter_Config(
+          addressWidth = port.cfg.wAddr,
+          dataWidth = port.cfg.wData,
+          alignmentBits = 12,
+          idWidth = port.cfg.wId,
+          numberOfOutstanding = 16
+        )))
+        // The buffer breaks a valid/ready combinational loop through the splitter.
+        axi4.full.SlaveBuffer(port, axi4.BufferConfig.all(2)) :=> splitter.s_axi.asFull
+        val out = IO(axi4.Master(splitter.m_axi.cfg)).suggestName(name)
+        splitter.m_axi.asFull :=> out.asFull
         axiOuts += out
         interfaceBuffer += hdlinfo.Interface(name, hdlinfo.InterfaceRole.master,
           hdlinfo.InterfaceKind("axi4"), "clock", "reset",
-          Map("config" -> hdlinfo.TypedObject(port.cfg)))
+          Map("config" -> hdlinfo.TypedObject(out.cfg)))
       }
       numHbmPortExports = ports.size
       return

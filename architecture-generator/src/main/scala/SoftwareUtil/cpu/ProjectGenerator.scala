@@ -67,15 +67,18 @@ object ProjectGenerator {
       val cpu = task.fineGrainedCpu.get
       val slabBytes = cpu.slabPool.map(n => desc.taskDescriptors.find(_.name == n).get.allocatorSlabBytes).getOrElse(4096)
       val closures = desc.spawnNextList.getOrElse(task.name, Nil)
+      val globals = desc.spawnList.getOrElse(task.name, Nil).filterNot(_ == task.name)
+      // Global route i + 1 targets globals(i); SPAWN tasks are padded to its width.
+      val routeTaskBeats = globals.map(n => desc.taskDescriptors.find(_.name == n).get.widthTask / cpu.streamWidth)
       val sizes = closures.map(n => desc.taskDescriptors.find(_.name == n).get.widthTask / 8)
       require(sizes.forall(n => n > 0 && n <= slabBytes), s"${task.name}: continuation does not fit CPU slab")
       val config = Json.obj("name" -> Json.fromString("HardCilkCpu"),
         "taskWidth" -> Json.fromInt(task.widthTask), "streamWidth" -> Json.fromInt(cpu.streamWidth),
         "slabBytes" -> Json.fromInt(slabBytes), "closureBytes" -> Json.arr((if (sizes.isEmpty) List(32) else sizes).map(Json.fromInt): _*),
         "numThreads" -> Json.fromInt(cpu.numThreads), "instructionMemoryWords" -> Json.fromInt(cpu.instructionMemoryWords),
-        "taskQueueDepth" -> Json.fromInt(cpu.taskQueueDepth), "memoryAddressWidth" -> Json.fromInt(64), "memoryDataWidth" -> Json.fromInt(256))
+        "taskQueueDepth" -> Json.fromInt(cpu.taskQueueDepth), "memoryAddressWidth" -> Json.fromInt(64), "memoryDataWidth" -> Json.fromInt(256),
+        "routeTaskBeats" -> Json.arr(routeTaskBeats.map(Json.fromInt): _*))
       write(root.resolve(s"config/cpu/${task.name}.json"), config.spaces2)
-      val globals = desc.spawnList.getOrElse(task.name, Nil).filterNot(_ == task.name)
       val arguments = desc.sendArgumentList.getOrElse(task.name, Nil)
       val defines = Seq(s"#define HC_TASK_BEATS ${task.widthTask / cpu.streamWidth}",
         s"#define HC_STREAM_BITS ${cpu.streamWidth}", s"#define HC_SLAB_BYTES $slabBytes", "#define HC_LOCAL_ROUTE 0") ++

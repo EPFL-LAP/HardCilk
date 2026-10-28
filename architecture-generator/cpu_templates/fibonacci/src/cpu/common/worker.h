@@ -4,52 +4,49 @@
 #include "hardcilk_task.h"
 #include <stddef.h>
 #define TASK_POP 0x80000000UL
-#define TASK_PUSH_LAST 0x80000008UL
-#define TASK_PUSH 0x80000010UL
-#define SPAWN_WRITE 0x80000020UL
-#define SEND_ARGUMENT 0x80000048UL
-#define ARGUMENT_WRITE 0x80000050UL
-#define CLOSURE_ALLOCATE 0x80000100UL
+#define TASK_PUSH_LAST 0x80000008UL     // pads a SPAWN task with zero beats
+#define TASK_POP_LAST 0x80000018UL      // pops a beat, discards the rest of the task
+#define ARG_OUT 0x80000048UL            // publish a counter address
+#define ARG_ADDR_DATA 0x80000050UL      // address argOutData writes to
+#define ARG_OUT_DATA 0x80000078UL       // 1/2/4/8-byte store, written at ARG_ADDR_DATA
+#define SPAWN(route) (0x80000080UL + 8 * (route))  // header for route, then beat 0
+#define CLOSURE_ALLOCATE 0x80000100UL   // also sets the write window base
+#define WRITE_WINDOW 0x80000400UL       // stores write window base + offset
 static inline void put(uintptr_t a, uint64_t v) { *(volatile uint64_t *)a = v; }
+static inline void put32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 static inline uint64_t get(uintptr_t a) { return *(volatile uint64_t *)a; }
-static inline void check_write(uint64_t status) { if (status) __asm__ volatile("ebreak"); }
-// Writes are doubleword-aligned; byte strobes select the bytes to update.
-static void memory_write(uintptr_t regs, uint64_t address, uint64_t value, uint64_t strobes) {
-    put(regs, address); put(regs + 8, value); put(regs + 16, strobes);
-    check_write(get(regs + 24));
-}
+// Write and argument faults are sticky and reported to the host.
 static void result(uint64_t continuation, uint32_t value) {
-    unsigned shift = (unsigned)(continuation & 7);
-    memory_write(ARGUMENT_WRITE, continuation & ~7ULL, (uint64_t)value << (8 * shift), 0x0fULL << shift);
-    put(SEND_ARGUMENT, continuation & ~31ULL);
+    put(ARG_ADDR_DATA, continuation);
+    put32(ARG_OUT_DATA, value);
+    put(ARG_OUT, continuation & ~31ULL);
 }
 #ifndef SUM_WORKER
-static void spawn(uint64_t continuation, uint32_t n, uint64_t route) {
-    put(TASK_PUSH, route);
-    put(TASK_PUSH, continuation);
-    put(TASK_PUSH, n);
-    put(TASK_PUSH, 0);
-    put(TASK_PUSH_LAST, 0);
+static void spawn(uint64_t continuation, uint64_t n, unsigned route) {
+    put(SPAWN(route), continuation);
+    put(TASK_PUSH_LAST, n);
 }
 #endif
 void worker(void) {
     for (;;) {
-        uint64_t task[HC_TASK_BEATS];
-        for (unsigned i = 0; i < HC_TASK_BEATS; ++i) task[i] = get(TASK_POP);
 #ifdef SUM_WORKER
         // fib_cont0: {counter, x} {continuation} {y} {padding}
-        result(task[1], (uint32_t)(task[0] >> 32) + (uint32_t)task[2]);
+        uint64_t x = get(TASK_POP) >> 32;
+        uint64_t continuation = get(TASK_POP);
+        uint64_t y = get(TASK_POP_LAST);
+        result(continuation, (uint32_t)x + (uint32_t)y);
 #else
         // fib: {continuation} {n} {padding} {padding}
-        uint64_t continuation = task[0];
-        uint32_t n = (uint32_t)task[1];
-        if (n < 2) { result(continuation, n); continue; }
+        uint64_t continuation = get(TASK_POP);
+        uint64_t n = get(TASK_POP_LAST);
+        if (n < 2) { result(continuation, (uint32_t)n); continue; }
         uint64_t closure = get(CLOSURE_ALLOCATE + 8 * HC_CLOSURE_TYPE_fib_cont0);
         // Counter 2 with x = 0, the continuation, then y = 0 and padding.
-        memory_write(SPAWN_WRITE, closure, 2, 0xff);
-        memory_write(SPAWN_WRITE, closure + 8, continuation, 0xff);
-        memory_write(SPAWN_WRITE, closure + 16, 0, 0xff);
-        memory_write(SPAWN_WRITE, closure + 24, 0, 0xff);
+        volatile uint64_t *window = (volatile uint64_t *)WRITE_WINDOW;
+        window[0] = 2;
+        window[1] = continuation;
+        window[2] = 0;
+        window[3] = 0;
         spawn(closure + 4, n - 1, 0);
 #if defined(HC_GLOBAL_ROUTE_fib_remote)
         spawn(closure + 16, n - 2, HC_GLOBAL_ROUTE_fib_remote);

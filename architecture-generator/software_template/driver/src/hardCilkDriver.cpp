@@ -1,4 +1,5 @@
 #include "hardCilkDriver.h"
+#include <algorithm>
 
 
 hardCilkDriver::hardCilkDriver(Memory *memory)
@@ -127,20 +128,29 @@ int hardCilkDriver::manageSchedulerServer(uint64_t base_address, TaskDescriptor 
     // Allocate double the maxLength of the scheduler server
     uint64_t new_addr = memory_->allocateMemFPGA(2 * maxLength * taskDescriptor.widthTask / 8, taskDescriptor.widthTask / 8);
 
-    // Read the data from the scheduler server to the cpu
-    void *data = malloc(maxLength * taskDescriptor.widthTask / 8);
-    memory_->copyFromDevice(reinterpret_cast<uint8_t *>(data), addr, maxLength * taskDescriptor.widthTask / 8);
-
-    // Write the data to the new address
-    memory_->copyToDevice(new_addr, reinterpret_cast<const uint8_t *>(data), maxLength * taskDescriptor.widthTask / 8);
+    // The server pauses once fewer than a burst of entries is free, so the
+    // circular FIFO need not be full: copy the currLen live entries starting
+    // at the head. Copying every slot would revive tasks already popped
+    // (slot 0 holds the root task, so the whole computation would repeat).
+    const uint64_t taskBytes = taskDescriptor.widthTask / 8;
+    const uint64_t head = memory_->readReg64(base_address + scheduler_server_fifoHeadReg_shift);
+    const uint64_t currLen = memory_->readReg64(base_address + scheduler_server_currLen_shift);
+    std::cout << "\tFIFO head " << head << ", tail " << memory_->readReg64(base_address + scheduler_server_fifoTailReg_shift)
+              << ", length " << currLen << std::endl;
+    if (head >= maxLength || currLen > maxLength)
+        throw std::runtime_error("Scheduler server FIFO registers are inconsistent");
+    std::vector<uint8_t> data(maxLength * taskBytes);
+    memory_->copyFromDevice(data.data(), addr, data.size());
+    std::rotate(data.begin(), data.begin() + head * taskBytes, data.end());
+    memory_->copyToDevice(new_addr, data.data(), currLen * taskBytes);
 
     // Write the new address to the rAddress register
     memory_->writeReg64(base_address + scheduler_server_raddr_shift, new_addr);
 
-    // Write the new head and tail registers
-    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, maxLength);
+    // Write the new head and tail registers; the length is unchanged
+    memory_->writeReg64(base_address + scheduler_server_fifoTailReg_shift, currLen);
     memory_->writeReg64(base_address + scheduler_server_fifoHeadReg_shift, 0x0);
-    memory_->writeReg64(base_address + scheduler_server_currLen_shift, maxLength);
+    memory_->writeReg64(base_address + scheduler_server_currLen_shift, currLen);
 
     // Write the new MaxLength
     memory_->writeReg64(base_address + scheduler_server_maxLength_shift, maxLength * 2);

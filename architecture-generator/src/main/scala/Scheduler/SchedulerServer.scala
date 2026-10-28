@@ -98,6 +98,17 @@ class SchedulerServer(
 
   val interruptCondition = (enableMfpgaSteal(63) =/= 0.U)
 
+  // The FIFO is circular, but a burst is linear: stop each burst at the end
+  // of the buffer. A partial push leaves the rest of its tasks buffered; they
+  // go out with the next push, which starts at slot 0.
+  private def burstBeats(pointer: UInt, available: UInt): UInt = {
+    val toEnd = maxLength - pointer
+    val limit = Mux(available < toEnd, available, toEnd)
+    Mux(limit < nBeats.U, limit, nBeats.U)(4, 0)
+  }
+  private val pushBeats = burstBeats(fifoTailReg, nBeats.U)
+  private val popBeats = burstBeats(fifoHeadReg, currLen)
+
   // queuesUtils register is only done for debugging small number of PEs to check the utilization of local BRAM queues per PE
   if (peCount <= 8) {
     val newQueuesUtil = Wire(UInt(64.W))
@@ -211,7 +222,7 @@ class SchedulerServer(
 
     when(io.write_address.ready) {
       stateReg := state.pushTaskMem
-      memDataCounter := nBeats.U
+      memDataCounter := pushBeats
     }
 
   }.elsewhen(stateReg === state.pushTaskMem) {
@@ -240,7 +251,7 @@ class SchedulerServer(
 
     when(io.read_address.ready) {
       stateReg := state.popTaskMem
-      memDataCounter := Mux(currLen < nBeats.U, currLen, nBeats.U)
+      memDataCounter := popBeats
     }
 
   }.elsewhen(stateReg === state.popTaskMem) {
@@ -347,7 +358,7 @@ class SchedulerServer(
 
     io.write_address.valid := true.B
     io.write_address.bits := (fifoTailReg << addrShift) + rAddr
-    io.write_burst_len := (nBeats - 1).U // equivalent to 16 values
+    io.write_burst_len := pushBeats - 1.U
 
   }.elsewhen(stateReg === state.pushTaskMem) {
 
@@ -361,7 +372,7 @@ class SchedulerServer(
 
     io.read_address.valid := true.B
     io.read_address.bits := (fifoHeadReg << addrShift) + rAddr
-    io.read_burst_len := Mux(currLen < nBeats.U, currLen - 1.U, (nBeats - 1).U)
+    io.read_burst_len := popBeats - 1.U
 
   }.elsewhen(stateReg === state.popTaskMem) {
 
