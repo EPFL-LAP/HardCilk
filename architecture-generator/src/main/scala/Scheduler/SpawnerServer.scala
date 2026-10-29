@@ -152,6 +152,17 @@ class SpawnerServer(
 
   val readAddressDone = RegInit(false.B)
 
+  // The FIFO is circular, but a burst is linear: stop each burst at the end
+  // of the buffer, as in SchedulerServer. Unwritten tasks stay in queue_write
+  // for the next burst, which starts at slot 0.
+  private def clampToEnd(pointer: UInt, count: UInt): UInt = {
+    val limited = Mux(count < queueDepth.U, count, queueDepth.U)
+    val toEnd = maxLength - pointer
+    Mux(limited < toEnd, limited, toEnd)
+  }
+  private val writeBurst = clampToEnd(fifoTailReg, queue_write.io.count)
+  private val readBurst = clampToEnd(fifoHeadReg, currLen)
+
   when(maxLength < (currLen + queueDepth.U)) {
     rPause := "hFFFFFFFFFFFFFFFF".U(64.W)
   }
@@ -164,15 +175,9 @@ class SpawnerServer(
       io.m_axi.asFull.aw.valid := true.B
       io.m_axi.asFull.aw.bits.addr := rAddr + (fifoTailReg << addrShift)
       
-      writeTasksCounterWriting := queue_write.io.count
-      writeTasksCounterBvalid := queue_write.io.count
-
-      io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
-      when(queue_write.io.count  < queueDepth.U){
-        io.m_axi.asFull.aw.bits.len := queue_write.io.count - 1.U
-      }.otherwise{
-        io.m_axi.asFull.aw.bits.len := (queueDepth.U) - 1.U
-      }
+      writeTasksCounterWriting := writeBurst
+      writeTasksCounterBvalid := writeBurst
+      io.m_axi.asFull.aw.bits.len := writeBurst - 1.U
 
       when(io.m_axi.asFull.aw.ready){
         writeAddressDone := true.B
@@ -208,15 +213,8 @@ class SpawnerServer(
     when(queue_read.io.count === 0.U && currLen > 0.U && !s_axis_slave.asLite.valid && !readAddressDone){
       io.m_axi.asFull.ar.valid := true.B
       io.m_axi.asFull.ar.bits.addr := rAddr + (fifoHeadReg << addrShift)
+      io.m_axi.asFull.ar.bits.len := readBurst - 1.U
 
-
-      when(currLen < queueDepth.U){
-        io.m_axi.asFull.ar.bits.len := currLen - 1.U
-      }.otherwise{
-        io.m_axi.asFull.ar.bits.len := (queueDepth.U) - 1.U
-      }
-
-      
       when(io.m_axi.asFull.ar.ready){
         readAddressDone := true.B
         queue_is_reading := true.B

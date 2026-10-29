@@ -17,6 +17,7 @@ src/host/runtime/                     generated AXI host and shared-memory simul
 src/host/driver/                      generated native HardCilk host driver
 src/rtl/<architecture>/               generated HardCilk RTL and interface metadata
 src/rtl/cpu/<task>/                   separately emitted CPU RTL
+src/rtl/reader/<task>/                separately emitted memory-reader RTL
 src/rtl/system/                       composed System.sv and external ports.json
 src/rtl/common/                       shared memory primitives
 scripts/                             generated build and composition utilities
@@ -70,8 +71,10 @@ workloads. It does not automatically recycle/refill slabs. Physical host code
 can use the generated `FullSysGenDescriptor.h` and `hardcilk_boot.hpp`; the
 simulation host executable is built against Verilator.
 
-Only all-CPU architectures with `directMemoryPorts=true` are supported by this
-project flow. The generated RTL exposes separate AXI memory masters and AXI-Lite
+Only architectures whose PEs are all CPUs or memory readers (`memoryReader`),
+with `directMemoryPorts=true`, are supported by this project flow. Readers
+(`rdK` in `System.sv`) have no firmware or control port; their AXI masters
+follow the CPUs'. CPUs with `floatingPoint` are built for `rv64if`. The generated RTL exposes separate AXI memory masters and AXI-Lite
 controls, with an active-high reset. Board-specific memory interconnect, control
 address decoding, clock/reset adaptation, and Vitis/XRT packaging remain external;
 this project does not claim to produce an xclbin. `ports.json` records the actual

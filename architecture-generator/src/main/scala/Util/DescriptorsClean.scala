@@ -164,7 +164,16 @@ case class SideConfig(
   * select sendArgumentList; these bits are removed before notification.
   */
 case class FineGrainedCpuDescriptor(streamWidth: Int = 64, slabPool: Option[String] = None,
-    numThreads: Int = 4, instructionMemoryWords: Int = 1024, taskQueueDepth: Int = 64)
+    numThreads: Int = 4, instructionMemoryWords: Int = 1024, taskQueueDepth: Int = 64,
+    floatingPoint: Boolean = false)
+
+/** Opt-in external decoupled memory reader (elastic-bugra HardCilkMemoryReader).
+  * It uses the CPU's 64-bit stream adapters: the last task beat is the read
+  * address, the others are forwarded, and the value replaces the address in a
+  * task of the same width for its only spawnList destination. With
+  * `variableSize`, address bits 63:62 give log2 of a 1, 2, 4 or 8-byte read.
+  */
+case class MemoryReaderDescriptor(variableSize: Boolean = false, maxOutstanding: Int = 32)
 
 // --- TaskDescriptor with validation ---
 case class TaskDescriptor(
@@ -188,8 +197,12 @@ case class TaskDescriptor(
     argumentSizeList: List[Int] = List(),
     taskId: Int = 0, // Defaulted
     fineGrainedCpu: Option[FineGrainedCpuDescriptor] = None,
-    allocatorSlabBytes: Int = 0
+    allocatorSlabBytes: Int = 0,
+    memoryReader: Option[MemoryReaderDescriptor] = None
 ) {
+  /** Tasks whose PEs are external RTL behind the 64-bit stream adapters. */
+  def hasStreamPe: Boolean = fineGrainedCpu.nonEmpty || memoryReader.nonEmpty
+
   // Helper methods are fine to keep here
   def getNumServers(sideType: String): Int = { //
     sidesConfigs.find(_.sideType == sideType).map(_.numVirtualServers).getOrElse(0)
@@ -215,6 +228,14 @@ case class TaskDescriptor(
         s"Task '$name': CPU streams are 64 bits and must divide the task width")
       require(peHDLPath.isEmpty && !isAIE && !generateSpawnNextWriteBuffer && !generateArgOutWriteBuffer,
         s"Task '$name': CPU ports require external RTL and use the CPU's own write buffers")
+    }
+    memoryReader.foreach { reader =>
+      require(fineGrainedCpu.isEmpty, s"Task '$name': a task is either a CPU or a memory reader")
+      require(reader.maxOutstanding > 0, s"Task '$name': memory reader needs maxOutstanding > 0")
+      require(widthTask % 64 == 0 && widthTask >= 128,
+        s"Task '$name': memory reader tasks are at least two 64-bit beats (payload and address)")
+      require(peHDLPath.isEmpty && !isAIE && !isCont && !generateSpawnNextWriteBuffer && !generateArgOutWriteBuffer,
+        s"Task '$name': memory readers are external RTL without continuations or write buffers")
     }
 
     require(numProcessingElements > 0, s"Task '$name': numProcessingElements must be > 0")
@@ -378,6 +399,18 @@ case class FullSysGenDescriptor(
           s"CPU slab pool '$name' needs allocator servers and allocatorSlabBytes")
       }
     }
+    for (task <- taskDescriptors; reader <- task.memoryReader) {
+      require(!mFPGASynth && !mFPGASimulation, "Memory readers are single-FPGA")
+      val targets = spawnList.getOrElse(task.name, Nil)
+      require(targets.size == 1 && targets.head != task.name,
+        s"Memory reader '${task.name}' needs exactly one spawnList destination other than itself")
+      val target = taskDescriptors.find(_.name == targets.head).getOrElse(
+        throw new IllegalArgumentException(s"Unknown memory reader destination '${targets.head}'"))
+      require(target.widthTask == task.widthTask,
+        s"Memory reader '${task.name}' forwards whole tasks: '${target.name}' must have the same width")
+      require(sendArgumentList.getOrElse(task.name, Nil).isEmpty && spawnNextList.getOrElse(task.name, Nil).isEmpty &&
+        mallocList.getOrElse(task.name, Nil).isEmpty, s"Memory reader '${task.name}' only reads and forwards")
+    }
     for (pool <- taskDescriptors if pool.allocatorSlabBytes > 0;
          consumer <- taskDescriptors if closureGrantList.getOrElse(consumer.name, Nil).contains(pool.name)) {
       require(consumer.fineGrainedCpu.nonEmpty, "A slab allocator cannot also supply legacy closure consumers")
@@ -416,6 +449,8 @@ case class FullSysGenDescriptor(
     val aggregatorMapSendArg = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapSpawnNext = mutable.Map[String, Int]().withDefaultValue(0)
     val aggregatorMapMalloc = mutable.Map[String, Int]().withDefaultValue(0)
+    // A destination's taskInGlobal ports are shared by every source task type.
+    val aggregatorMapSpawn = mutable.Map[String, Int]().withDefaultValue(0)
 
     val connections = taskDescriptors.flatMap { task =>
       val spawnedTasks = spawnList.getOrElse(task.name, List())
@@ -444,9 +479,10 @@ case class FullSysGenDescriptor(
       val spawnedConnections = spawnedTasks.filterNot(_ == task.name).zipWithIndex.flatMap { case (spawnedTask, j) =>
         val spawnedTaskDescriptor = taskDescriptors.find(_.name == spawnedTask).get
         (0 until task.numProcessingElements).map { i =>
+          aggregatorMapSpawn(spawnedTask) += 1
           ConnectionDescriptor(
             PortDescriptor(task.name, "PE", i, "taskOutGlobal", j),
-            PortDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal", i),
+            PortDescriptor(f"${spawnedTask}", "HardCilk", 0, "taskInGlobal", aggregatorMapSpawn(spawnedTask) - 1),
             spawnedTaskDescriptor.widthTask,
             "AXIS"
           )

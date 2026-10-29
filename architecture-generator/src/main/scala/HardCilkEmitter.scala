@@ -28,7 +28,7 @@ object HardCilkEmitter extends App {
       val systemDescriptor = parseJsonFile[FullSysGenDescriptor](cfg.json_path)
 
 
-      val cpuProject = systemDescriptor.taskDescriptors.exists(_.fineGrainedCpu.nonEmpty)
+      val cpuProject = systemDescriptor.taskDescriptors.exists(_.hasStreamPe)
       if (cfg.project_aie_generation && cpuProject)
         SoftwareUtil.cpu.ProjectGenerator.validate(systemDescriptor, cfg)
 

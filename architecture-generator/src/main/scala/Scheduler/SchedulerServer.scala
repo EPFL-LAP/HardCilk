@@ -20,6 +20,8 @@ class SchedulerServerIO(taskWidth: Int, regBlock: RegisterBlock, sysAddressWidth
   val write_burst_len = Output(UInt(4.W))
   val write_last = Output(UInt(1.W))
   val ntwDataUnitOccupancy = Input(Bool())
+  // A write burst has no response yet; the host must not copy the FIFO then.
+  val writesPending = Input(Bool())
   val paused = Output(Bool())
   val lengths_of_hardware_queues = Vec(peCount, Input(UInt(8.W)))
   val serveRemote = Output(Bool())         // A signal from the VSS to the RemoteTaskServer
@@ -181,8 +183,11 @@ class SchedulerServer(
       rPause := "hFFFFFFFFFFFFFFFF".U
     }.elsewhen((currLen === maxLength && networkCongested) || maxLength < (nBeats.U + currLen)) {
 
-      stateReg := state.extendFIFO
-      rPause := "hFFFFFFFFFFFFFFFF".U
+      // Pause only once the last push is in memory: the host copies the FIFO.
+      when(!io.writesPending) {
+        stateReg := state.extendFIFO
+        rPause := "hFFFFFFFFFFFFFFFF".U
+      }
 
     }.elsewhen(networkCongested && taskQueueBuffer.io.count === nBeats.U) {
 

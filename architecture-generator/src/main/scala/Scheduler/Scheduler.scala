@@ -218,6 +218,11 @@ class Scheduler(
     vssRvm(i).io.readBurst.get.len := schedulerServers(i).io.read_burst_len
     vssRvm(i).io.writeBurst.get.len := schedulerServers(i).io.write_burst_len
     vssRvm(i).io.writeBurst.get.last := schedulerServers(i).io.write_last
+    // Bursts whose write response has not arrived (at most two: the bridge
+    // holds the next burst's data until the previous response).
+    val writesInFlight = RegInit(0.U(2.W))
+    writesInFlight := writesInFlight + vssRvm(i).axi.aw.fire.asUInt - vssRvm(i).axi.b.fire.asUInt
+    schedulerServers(i).io.writesPending := writesInFlight =/= 0.U || vssRvm(i).axi.aw.fire
     schedulerServers(i).io.connNetwork <> stealNW_TQ.io.connVSS(i)
 
     // DEBUG

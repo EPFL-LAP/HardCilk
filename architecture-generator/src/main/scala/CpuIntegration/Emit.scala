@@ -29,7 +29,13 @@ object RuntimeEmitter {
         "slabPool" -> cpu.slabPool.map(Json.fromString).getOrElse(Json.Null),
         "slabBytes" -> Json.fromInt(cpu.slabPool.map(name => descriptor.taskDescriptors.find(_.name == name).get.allocatorSlabBytes).getOrElse(0)))
     } }
-    Files.writeString(Paths.get(output, "cpu-interfaces.json"), Json.arr(interfaces: _*).spaces2)
+    val readers = descriptor.taskDescriptors.flatMap { task => task.memoryReader.map { reader =>
+      Json.obj("task" -> Json.fromString(task.name), "kind" -> Json.fromString("memoryReader"),
+        "count" -> Json.fromInt(task.numProcessingElements), "streamWidth" -> Json.fromInt(64),
+        "taskBeats" -> Json.fromInt(task.widthTask / 64), "variableSize" -> Json.fromBoolean(reader.variableSize),
+        "target" -> Json.fromString(descriptor.spawnList(task.name).head))
+    } }
+    Files.writeString(Paths.get(output, "cpu-interfaces.json"), Json.arr(interfaces ++ readers: _*).spaces2)
   }
 }
 

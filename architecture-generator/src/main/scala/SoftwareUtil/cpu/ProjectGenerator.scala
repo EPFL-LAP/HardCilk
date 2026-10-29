@@ -16,8 +16,8 @@ object ProjectGenerator {
     desc.validate()
     require(desc.name.matches(identifier) && desc.taskDescriptors.forall(_.name.matches(identifier)),
       "CPU project architecture/task names must be C/RTL identifiers")
-    require(desc.taskDescriptors.forall(_.fineGrainedCpu.nonEmpty),
-      "CPU project generation currently requires all PEs to be fineGrainedCpu (mixed AIE/HLS projects are not supported)")
+    require(desc.taskDescriptors.forall(_.hasStreamPe),
+      "CPU project generation requires every PE to be a fineGrainedCpu or memoryReader (mixed AIE/HLS projects are not supported)")
     require(desc.directMemoryPorts, "CPU projects require directMemoryPorts=true for the portable external AXI boundary")
     require(!flags.project_sc_generation,
       "Use -k for the CPU project; the legacy -p/-a SystemC project flow is not compatible")
@@ -63,7 +63,15 @@ object ProjectGenerator {
         "Add application host sources under src/ and headers under include/. See ../../runtime/simulation.hpp.\n")
     }
     dumpJsonFile(root.resolve("architecture.json").toString, desc)
-    val tasks = desc.taskDescriptors.map { task =>
+    val readers = desc.taskDescriptors.filter(_.memoryReader.nonEmpty).map { task =>
+      val reader = task.memoryReader.get
+      write(root.resolve(s"config/reader/${task.name}.json"), Json.obj("name" -> Json.fromString("HardCilkMemoryReader"),
+        "taskWidth" -> Json.fromInt(task.widthTask), "variableSize" -> Json.fromBoolean(reader.variableSize),
+        "maxOutstanding" -> Json.fromInt(reader.maxOutstanding), "memoryDataWidth" -> Json.fromInt(256)).spaces2)
+      Json.obj("name" -> Json.fromString(task.name), "kind" -> Json.fromString("memoryReader"),
+        "count" -> Json.fromInt(task.numProcessingElements), "taskBeats" -> Json.fromInt(task.widthTask / 64))
+    }
+    val tasks = desc.taskDescriptors.filter(_.fineGrainedCpu.nonEmpty).map { task =>
       val cpu = task.fineGrainedCpu.get
       val slabBytes = cpu.slabPool.map(n => desc.taskDescriptors.find(_.name == n).get.allocatorSlabBytes).getOrElse(4096)
       val closures = desc.spawnNextList.getOrElse(task.name, Nil)
@@ -77,7 +85,8 @@ object ProjectGenerator {
         "slabBytes" -> Json.fromInt(slabBytes), "closureBytes" -> Json.arr((if (sizes.isEmpty) List(32) else sizes).map(Json.fromInt): _*),
         "numThreads" -> Json.fromInt(cpu.numThreads), "instructionMemoryWords" -> Json.fromInt(cpu.instructionMemoryWords),
         "taskQueueDepth" -> Json.fromInt(cpu.taskQueueDepth), "memoryAddressWidth" -> Json.fromInt(64), "memoryDataWidth" -> Json.fromInt(256),
-        "routeTaskBeats" -> Json.arr(routeTaskBeats.map(Json.fromInt): _*))
+        "routeTaskBeats" -> Json.arr(routeTaskBeats.map(Json.fromInt): _*),
+        "floatingPoint" -> Json.fromBoolean(cpu.floatingPoint))
       write(root.resolve(s"config/cpu/${task.name}.json"), config.spaces2)
       val arguments = desc.sendArgumentList.getOrElse(task.name, Nil)
       val defines = Seq(s"#define HC_TASK_BEATS ${task.widthTask / cpu.streamWidth}",
@@ -103,13 +112,14 @@ SECTIONS {
       Files.createDirectories(root.resolve(s"src/cpu/${task.name}"))
       Json.obj("name" -> Json.fromString(task.name), "count" -> Json.fromInt(task.numProcessingElements),
         "taskBeats" -> Json.fromInt(task.widthTask / cpu.streamWidth), "slabBytes" -> Json.fromInt(slabBytes),
-        "numThreads" -> Json.fromInt(cpu.numThreads))
+        "numThreads" -> Json.fromInt(cpu.numThreads), "kind" -> Json.fromString("cpu"),
+        "floatingPoint" -> Json.fromBoolean(cpu.floatingPoint))
     }
     val host = root.resolve("src/host/generated/include")
     Files.createDirectories(host)
     SoftwareUtil.CppHeaderTemplate.generateCppHeader(desc, host.toString, 1)
     write(root.resolve("project.json"), Json.obj("format" -> Json.fromInt(1),
-      "name" -> Json.fromString(desc.name), "tasks" -> Json.arr(tasks: _*),
+      "name" -> Json.fromString(desc.name), "tasks" -> Json.arr(tasks ++ readers: _*),
       "hardcilkRepo" -> Json.fromString(Paths.get("..").toAbsolutePath.normalize.toString),
       "cpuRepo" -> Json.fromString(if (flags.cpu_repo.isEmpty) "" else Paths.get(flags.cpu_repo).toAbsolutePath.normalize.toString),
       "applicationTemplate" -> Json.fromString(if (flags.project_template.isEmpty) "" else Paths.get(flags.project_template).toAbsolutePath.normalize.toString)).spaces2)

@@ -41,16 +41,19 @@ def sbt(cwd, main, args, name):
     command = 'runMain ' + main + ' ' + ' '.join(quote(a) for a in args)
     run([os.environ.get('SBT', 'sbt'), '-Dsbt.ivy.home=' + str(PREFIX / '.ivy2'), '-batch', command], name, cwd)
 
+def cpu_tasks():
+    return [t for t in PROJECT['tasks'] if t.get('kind', 'cpu') == 'cpu']
+
 def firmware():
     destination = BUILD / 'firmware'; destination.mkdir(parents=True, exist_ok=True)
-    for task in PROJECT['tasks']:
+    for task in cpu_tasks():
         name = task['name']; source = ROOT / 'src/cpu' / name
         sources = sorted(p for p in source.rglob('*') if p.suffix in ('.c', '.cpp', '.S'))
         if not sources:
             raise RuntimeError(f'No firmware in src/cpu/{name}; add a worker() implementation to your application template')
         elf = destination / (name + '.elf')
         run([os.environ.get('RISCV_CC', 'riscv64-unknown-linux-gnu-gcc'),
-             '-march=rv64i', '-mabi=lp64', '-Os', '-ffreestanding', '-fno-pic', '-fno-pie',
+             '-march=rv64if' if task.get('floatingPoint') else '-march=rv64i', '-mabi=lp64', '-Os', '-ffreestanding', '-fno-pic', '-fno-pie',
              '-fno-jump-tables', '-nostdlib', '-nostartfiles', '-msmall-data-limit=0',
              '-I' + str(ROOT / 'src/cpu/generated' / name), '-I' + str(source),
              '-Wl,-T,' + str(ROOT / 'config/cpu' / (name + '.ld')), '-Wl,--build-id=none',
@@ -72,21 +75,25 @@ def rtl(force=False):
     cpu_path = None
     shared = ROOT / 'src/rtl/common'
     known = {}
+    # Memory readers are emitted from the CPU checkout as well.
+    emitters = {'cpu': ('cpu', 'HardCilkCpu', 'cpu.finegrained.HardCilkCpuEmit'),
+                'memoryReader': ('reader', 'HardCilkMemoryReader', 'cpu.finegrained.HardCilkMemoryReaderEmit')}
     for task in PROJECT['tasks']:
-        name = task['name']; config = ROOT / 'config/cpu' / (name + '.json')
+        folder, module, main = emitters[task.get('kind', 'cpu')]
+        name = task['name']; config = ROOT / 'config' / folder / (name + '.json')
         key = hashlib.sha256(config.read_bytes()).hexdigest()
-        output = ROOT / 'src/rtl/cpu' / name
+        output = ROOT / 'src/rtl' / folder / name
         stamp = output / 'config.sha256'
-        cached = stamp.is_file() and stamp.read_text() == key and (output / 'HardCilkCpu.sv').is_file()
+        cached = stamp.is_file() and stamp.read_text() == key and (output / (module + '.sv')).is_file()
         if force or not cached:
-            if key in known:
-                shutil.copytree(known[key], output, dirs_exist_ok=True)
+            if (folder, key) in known:
+                shutil.copytree(known[(folder, key)], output, dirs_exist_ok=True)
             else:
                 if cpu_path is None:
                     cpu_path = repo('CPU_REPO', 'cpuRepo', 'src/main/scala/cpu/finegrained/HardCilkCpu.scala')
-                sbt(cpu_path, 'cpu.finegrained.HardCilkCpuEmit', [config, output], 'cpu-' + name)
+                sbt(cpu_path, main, [config, output], folder + '-' + name)
             stamp.write_text(key)
-        known[key] = output
+        known[(folder, key)] = output
     if cpu_path is not None or not (shared / 'DualPortBRAM_sim.v').is_file() or not (ROOT / 'src/host/generated/include/hardcilk_boot.hpp').is_file():
         if cpu_path is None:
             cpu_path = repo('CPU_REPO', 'cpuRepo', 'src/main/scala/cpu/finegrained/HardCilkCpu.scala')

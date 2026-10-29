@@ -13,7 +13,9 @@ object PortAdapters {
       resolve: PortDescriptor => axi4s.Interface,
       record: (String, axi4s.Config, Boolean) => Unit): Seq[Bool] = {
     val faults = scala.collection.mutable.ArrayBuffer.empty[Bool]
-    for (task <- desc.taskDescriptors; cpu <- task.fineGrainedCpu;
+    // Memory readers use the same 64-bit task streams as CPUs.
+    for (task <- desc.taskDescriptors if task.hasStreamPe;
+         streamWidth = task.fineGrainedCpu.map(_.streamWidth).getOrElse(64);
          pe <- 0 until task.numProcessingElements) {
       val selected = ports.filter(p => p.pePortDescriptor.parentName == task.name && p.pePortDescriptor.parentIndex == pe)
       def matching(kind: String) = selected.filter(_.pePortDescriptor.portType == kind).sortBy(_.pePortDescriptor.portIndex)
@@ -23,18 +25,18 @@ object PortAdapters {
           record(name, cfg, fromCpu)
           IO(if (fromCpu) axi4s.Slave(cfg) else axi4s.Master(cfg)).suggestName(name)
         }
-      val serializer = Module(new TaskSerializer(task.widthTask, cpu.streamWidth))
+      val serializer = Module(new TaskSerializer(task.widthTask, streamWidth))
       serializer.input <> resolve(matching("taskIn").head.subsystemPortDescriptor)
       external("taskIn", serializer.output.cfg, false) <> serializer.output
       matching("taskOut").foreach { p =>
-        val assembler = Module(new TaskAssembler(cpu.streamWidth, task.widthTask))
+        val assembler = Module(new TaskAssembler(streamWidth, task.widthTask))
         assembler.input <> external("taskOut", assembler.input.cfg, true)
         resolve(p.subsystemPortDescriptor) <> assembler.output
         faults += assembler.fault
       }
       val globals = matching("taskOutGlobal")
       if (globals.nonEmpty) {
-        val router = Module(new TaskRouter(cpu.streamWidth, globals.map(p => resolve(p.subsystemPortDescriptor).cfg.wData)))
+        val router = Module(new TaskRouter(streamWidth, globals.map(p => resolve(p.subsystemPortDescriptor).cfg.wData)))
         router.input <> external("taskOutGlobal", router.input.cfg, true)
         globals.zip(router.outputs).foreach { case (p, out) => resolve(p.subsystemPortDescriptor) <> out }
         faults += router.fault

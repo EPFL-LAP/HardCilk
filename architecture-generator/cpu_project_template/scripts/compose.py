@@ -31,15 +31,20 @@ def compose(root):
         if 'BindTo_PE_' in name: internal[name]=spec
         else: external[name]=spec
         hconn[name]=name
+    readers=[]
     for task in arch['taskDescriptors']:
-      taskname=task['name']; cputext=(root/'src/rtl/cpu'/taskname/'HardCilkCpu.sv').read_text()
-      cp=ports(cputext,'HardCilkCpu'); prefix='CpuRTL_'+taskname+'_'
+      taskname=task['name']; reader=bool(task.get('memoryReader'))
+      # Memory readers have no control port or firmware; they are rdK, CPUs cpuK.
+      folder,module,tag=('reader','HardCilkMemoryReader','ReaderRTL_') if reader else ('cpu','HardCilkCpu','CpuRTL_')
+      cputext=(root/'src/rtl'/folder/taskname/(module+'.sv')).read_text()
+      cp=ports(cputext,module); prefix=tag+taskname+'_'
       modules=re.findall(r'^module\s+(\w+)',cputext,re.M)
       for name in sorted(modules,key=len,reverse=True):
         cputext=re.sub(r'\b'+re.escape(name)+r'\b',prefix+name,cputext)
       (out/(taskname+'.sv')).write_text(cputext)
       for pe in range(task['numProcessingElements']):
-        idx=len(cpus); label=f'cpu{idx}'; conn={}; cpus.append((label,task,pe))
+        group=readers if reader else cpus
+        idx=len(group); label=f'rd{idx}' if reader else f'cpu{idx}'; conn={}; group.append((label,task,pe))
         for name,spec in cp.items():
             if name in ('clock','reset'): conn[name]=name
             elif name.startswith(('taskIn_','taskOut_','taskOutGlobal_','closureIn_','sendArgument_')):
@@ -54,7 +59,7 @@ def compose(root):
                 else: conn[name]=''
             else:
                 new=label+'_'+name; external[new]=spec;conn[name]=new
-        body.append(prefix+'HardCilkCpu '+label+'(\n'+',\n'.join(f'.{k}({v})' for k,v in conn.items())+'\n);')
+        body.append(prefix+module+' '+label+'(\n'+',\n'.join(f'.{k}({v})' for k,v in conn.items())+'\n);')
     body.append(hcname+' runtime(\n'+',\n'.join(f'.{k}({v})' for k,v in hconn.items())+'\n);')
     (out/'System.sv').write_text('module System(\n'+',\n'.join(decl(k,v) for k,v in external.items())+'\n);\n'+
         '\n'.join(decl(k,v,True)+';' for k,v in internal.items())+'\n'+'\n'.join(body)+'\nendmodule\n')
@@ -70,7 +75,7 @@ def compose(root):
         raise KeyError((prefix,field))
     bindings=['// Generated from the elaborated RTL, do not edit.']
     mems=sorted(set(re.match(r'(m_axi_\d+)_',x)[1] for x in external if re.match(r'm_axi_\d+_',x)))
-    mems += [c[0]+'_m_axi' for c in cpus]
+    mems += [c[0]+'_m_axi' for c in cpus+readers]
     for i,prefix in enumerate(mems):
         def s(f): return signal(prefix,f)
         width=external[s('WDATA')][1]; read=prefix+'_ARVALID' in external or prefix+'_ar_valid' in external
@@ -106,6 +111,7 @@ def compose(root):
     (out/'bindings.inc').write_text('\n'.join(bindings))
     checks=['if(dut.cpuInterfaceFault) throw std::runtime_error("HardCilk stream protocol fault");']
     checks += [f'if(dut.{c[0]}_fault) throw std::runtime_error("{c[0]} trapped");' for c in cpus]
+    checks += [f'if(dut.{c[0]}_fault) throw std::runtime_error("{c[0]} read error");' for c in readers]
     (out/'checks.inc').write_text('\n'.join(checks))
     descriptions=[]
     byname={task['name']:task for task in project['tasks']}
@@ -121,7 +127,7 @@ def compose(root):
     (out/'descriptors.inc').write_text('\n'.join(descriptions))
     # Machine-readable external port boundary for board-specific integration.
     (root/'src/rtl/system/ports.json').write_text(json.dumps(external,indent=2))
-    print(f'Composed {len(cpus)} CPUs and {hcname}, {len(mems)} AXI masters')
+    print(f'Composed {len(cpus)} CPUs, {len(readers)} memory readers and {hcname}, {len(mems)} AXI masters')
 
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('project',type=Path);compose(ap.parse_args().project)

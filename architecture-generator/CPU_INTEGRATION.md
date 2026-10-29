@@ -19,13 +19,25 @@ its native PE streams, closure grants, external write buffers, and memory fabric
   use it. The generated host driver allocates aligned, exclusive slabs anywhere in
   the 64-bit local address space and refills with fresh memory. Individual closure completion never frees
   a slab. Reclamation requires globally quiescing and resetting all consumers.
+- CPU `floatingPoint`: defaults to false. When true, the CPU is emitted with
+  its FP add/multiply/FMA unit and its firmware is built for `rv64if`.
+- Task `memoryReader`: `{ "variableSize": false, "maxOutstanding": 32 }`
+  makes the PEs of that task elastic-bugra's `HardCilkMemoryReader`, a
+  task-independent decoupled read. It uses the CPU stream adapters: the last
+  64-bit beat of a task is the address, the other beats are forwarded, and the
+  read value replaces the address in a task for the reader's only `spawnList`
+  destination, which must have the same width. With `variableSize`, address
+  bits 63:62 give log2 of a 1/2/4/8-byte read. Readers have no continuations,
+  arguments, firmware, or control port; a read error sets their `fault`.
 - System `directMemoryPorts`: defaults to false. When true, export each memory
   master directly as `m_axi_NN`, preserving widths and IDs, for an external memory
   fabric or shared-memory simulator. This bypasses the board-specific HBM fabric.
 
 Complete examples are `taskDescriptors/fibonacci_cpu.json` (two CPUs) and
 `taskDescriptors/fibonacci_cpu_global.json` (three CPUs with cross-type spawning).
-CPU integration currently rejects multi-FPGA, variable-spawn notification, and
+Several task types may spawn into one destination: their `taskInGlobal` ports
+are numbered across all source types (previously every source type started at
+0, which left ports undriven). CPU integration currently rejects multi-FPGA, variable-spawn notification, and
 CPU malloc-input configurations.
 Application code must use compatible task/continuation layouts and counter rules.
 
