@@ -165,7 +165,8 @@ case class SideConfig(
   */
 case class FineGrainedCpuDescriptor(streamWidth: Int = 64, slabPool: Option[String] = None,
     numThreads: Int = 4, instructionMemoryWords: Int = 1024, taskQueueDepth: Int = 64,
-    floatingPoint: Boolean = false)
+    floatingPoint: Boolean = false, memoryStream: Boolean = false, streamFifoDepth: Int = 16,
+    streamOutstanding: Int = 64)
 
 /** Opt-in external decoupled memory reader (elastic-bugra HardCilkMemoryReader).
   * It uses the CPU's 64-bit stream adapters: the last task beat is the read

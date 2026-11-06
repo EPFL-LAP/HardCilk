@@ -86,7 +86,10 @@ object ProjectGenerator {
         "numThreads" -> Json.fromInt(cpu.numThreads), "instructionMemoryWords" -> Json.fromInt(cpu.instructionMemoryWords),
         "taskQueueDepth" -> Json.fromInt(cpu.taskQueueDepth), "memoryAddressWidth" -> Json.fromInt(64), "memoryDataWidth" -> Json.fromInt(256),
         "routeTaskBeats" -> Json.arr(routeTaskBeats.map(Json.fromInt): _*),
-        "floatingPoint" -> Json.fromBoolean(cpu.floatingPoint))
+        "floatingPoint" -> Json.fromBoolean(cpu.floatingPoint),
+        "memoryStream" -> Json.fromBoolean(cpu.memoryStream),
+        "streamFifoDepth" -> Json.fromInt(cpu.streamFifoDepth),
+        "streamOutstanding" -> Json.fromInt(cpu.streamOutstanding))
       write(root.resolve(s"config/cpu/${task.name}.json"), config.spaces2)
       val arguments = desc.sendArgumentList.getOrElse(task.name, Nil)
       val defines = Seq(s"#define HC_TASK_BEATS ${task.widthTask / cpu.streamWidth}",
