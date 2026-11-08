@@ -51,6 +51,29 @@ trait HasHBMInterconnect extends Module {
    * This method is now part of the trait. It contains the exact logic
    * moved from CleanHardCilk.scala.
    */
+  /** Merge AXI masters of any width/ID into one cfgAxi4HBM-shaped master, as
+    * the HBM path does for AIE subPE modules (protocol converter, widen, mux).
+    */
+  def muxToMemoryPort(slaves: Seq[axi4.full.Interface]): axi4.full.Interface = {
+    val mux = Module(new axi4.full.components.Mux(new axi4.full.components.MuxConfig(
+      axiSlaveCfg = cfgAxi4HBM.copy(axi3Compat = false, wId = 2), numSlaves = slaves.length)))
+    mux.s_axi.zip(slaves).foreach { case (muxPort, slavePort) =>
+      val protocolConverter = Module(new axi4.full.components.ProtocolConverter(
+        new axi4.full.components.ProtocolConverterConfig(
+          axiSlaveCfg = slavePort.cfg.copy(wUserAR = 0, wUserR = 0, wUserAW = 0, wUserW = 0, wUserB = 0),
+          axiMasterCfg = muxPort.cfg)))
+      axi4.full.SlaveBuffer(AxiUserYanker(slavePort), axi4.BufferConfig.all(8)) :=> protocolConverter.s_axi
+      if (slavePort.cfg.wData < muxPort.cfg.wData) {
+        val widen = Module(new chext.amba.axi4.full.components.Widen(chext.amba.axi4.full.components.WidenConfig(muxPort.cfg)))
+        protocolConverter.m_axi :=> widen.s_axi
+        widen.m_axi :=> muxPort
+      } else {
+        protocolConverter.m_axi :=> muxPort
+      }
+    }
+    mux.m_axi
+  }
+
   def buildAndConnectHBM(
       peMap: Map[String, Seq[VitisWriteBufferModule]],
       schedulerMap: Map[String, Scheduler],
@@ -80,12 +103,19 @@ trait HasHBMInterconnect extends Module {
     // for all tasks that do not have hdlpath for their PEs
     // we create and export pe_io interfaces associated with the task if they exist
     val aiePEs = fullSysGenDescriptor.taskDescriptors.filter(_.peHDLPath.isEmpty);
+    // CPU subPE masters, merged into shared memory ports below.
+    val interfacesSubPe = new ArrayBuffer[(axi4.full.Interface, Int)]()
     for (task <- aiePEs) {
       val subPEs = fullSysGenDescriptor.subPEList.filter(_._2.peName == task.name)
       if (subPEs.nonEmpty) {
-        val peIO = Module(new PeIO(subPEs, task.numProcessingElements))
-        peIO.axiMasters.foreach { port =>
-          interfacesPE.addOne(port)
+        // A CPU PE carries subPeLanes copies of the subPE modules.
+        val lanes = task.fineGrainedCpu.map(_.subPeLanes).getOrElse(1)
+        val peIO = Module(new PeIO(subPEs, task.numProcessingElements * lanes))
+        task.fineGrainedCpu match {
+          case Some(cpu) => peIO.axiMasters.foreach(port => interfacesSubPe.addOne((port, cpu.subPeMemoryGroup)))
+          case None => peIO.axiMasters.foreach { port =>
+            interfacesPE.addOne(port)
+          }
         }
         peIO.rwPorts.foreach { rwPort =>
           println(s"[HBMInterconnect] Adding PE IO ports for task ${rwPort.subPEName}_${rwPort.index}")
@@ -134,6 +164,11 @@ trait HasHBMInterconnect extends Module {
     // is split at page boundaries as on the HBM path. The splitter serializes
     // IDs, so the exported ports carry no ID signals.
     if (fullSysGenDescriptor.directMemoryPorts) {
+      // CPU subPE masters: groups of subPeMemoryGroup share one port.
+      val group = if (interfacesSubPe.isEmpty) 1 else interfacesSubPe.map(_._2).min
+      interfacesSubPe.map(_._1).grouped(math.max(1, group)).foreach { slaves =>
+        interfacesPE.addOne(muxToMemoryPort(slaves.toSeq))
+      }
       val ports = interfacesPE ++ interfacesScheduler ++ interfacesClosureAllocator ++
         interfacesArgumentNotifier ++ interfacesMemoryAllocator ++ interfacesRemoteMemAccess
       ports.zipWithIndex.foreach { case (port, i) =>

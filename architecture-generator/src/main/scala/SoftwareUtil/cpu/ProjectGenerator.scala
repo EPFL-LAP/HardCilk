@@ -73,6 +73,27 @@ object ProjectGenerator {
     }
     val tasks = desc.taskDescriptors.filter(_.fineGrainedCpu.nonEmpty).map { task =>
       val cpu = task.fineGrainedCpu.get
+      // Stream ports per lane, in PeIO order (subPE names sorted): every subPE
+      // has a request (out) port; reads also have a result (in) port.
+      val subPEs = desc.subPEList.filter(_._2.peName == task.name).toSeq.sortBy(_._1)
+        .flatMap { case (name, sub) => sub.rwRequest.map(name -> _) }
+      def padded(bits: Int) = (bits + 63) / 64 * 64
+      val outPorts = subPEs.map { case (name, req) => name -> ((req.`type`, req.mode) match {
+        case ("read", "single") => 64
+        case ("read", "stream") => 128
+        case _ => padded(64 + req.portWidth)
+      }) }
+      val inPorts = subPEs.filter(_._2.`type` == "read").map { case (name, req) => name -> req.portWidth }
+      val lanes = if (subPEs.isEmpty) 0 else cpu.subPeLanes
+      val streamPorts = Json.obj(
+        "out" -> Json.arr(Seq.fill(lanes)(outPorts.map(p => Json.fromInt(p._2))).flatten: _*),
+        "in" -> Json.arr(Seq.fill(lanes)(inPorts.map(p => Json.fromInt(p._2))).flatten: _*),
+        "channels" -> Json.fromInt(cpu.streamChannels))
+      val portDefines = (if (lanes == 0 && cpu.streamChannels == 0) Nil else
+        Seq(s"#define HC_SUBPE_LANES $lanes", s"#define HC_STREAM_OUT_PER_LANE ${outPorts.size}",
+          s"#define HC_STREAM_IN_PER_LANE ${inPorts.size}", s"#define HC_STREAM_CHANNELS ${cpu.streamChannels}")) ++
+        outPorts.zipWithIndex.map { case ((name, _), j) => s"#define HC_STREAM_OUT_${name} $j" } ++
+        inPorts.zipWithIndex.map { case ((name, _), j) => s"#define HC_STREAM_IN_${name} $j" }
       val slabBytes = cpu.slabPool.map(n => desc.taskDescriptors.find(_.name == n).get.allocatorSlabBytes).getOrElse(4096)
       val closures = desc.spawnNextList.getOrElse(task.name, Nil)
       val globals = desc.spawnList.getOrElse(task.name, Nil).filterNot(_ == task.name)
@@ -89,7 +110,8 @@ object ProjectGenerator {
         "floatingPoint" -> Json.fromBoolean(cpu.floatingPoint),
         "memoryStream" -> Json.fromBoolean(cpu.memoryStream),
         "streamFifoDepth" -> Json.fromInt(cpu.streamFifoDepth),
-        "streamOutstanding" -> Json.fromInt(cpu.streamOutstanding))
+        "streamOutstanding" -> Json.fromInt(cpu.streamOutstanding),
+        "streamPorts" -> streamPorts)
       write(root.resolve(s"config/cpu/${task.name}.json"), config.spaces2)
       val arguments = desc.sendArgumentList.getOrElse(task.name, Nil)
       val defines = Seq(s"#define HC_TASK_BEATS ${task.widthTask / cpu.streamWidth}",
@@ -97,7 +119,7 @@ object ProjectGenerator {
         globals.zipWithIndex.map { case (n, i) => s"#define HC_GLOBAL_ROUTE_${n} ${i + 1}" } ++
         arguments.zipWithIndex.map { case (n, i) => s"#define HC_ARGUMENT_ROUTE_${n} $i" } ++
         Seq(s"#define HC_ARGUMENT_ROUTE_BITS ${chisel3.util.log2Ceil(math.max(1, arguments.size))}") ++
-        closures.zipWithIndex.map { case (n, i) => s"#define HC_CLOSURE_TYPE_${n} $i" }
+        closures.zipWithIndex.map { case (n, i) => s"#define HC_CLOSURE_TYPE_${n} $i" } ++ portDefines
       write(root.resolve(s"src/cpu/generated/${task.name}/hardcilk_task.h"), "#pragma once\n" + defines.mkString("\n") + "\n")
       val imageBytes = cpu.instructionMemoryWords * 4
       write(root.resolve(s"config/cpu/${task.name}.ld"), s"""ENTRY(_start)

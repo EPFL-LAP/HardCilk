@@ -163,10 +163,17 @@ case class SideConfig(
   * For multiple argument destinations the high ceil(log2(N)) address bits
   * select sendArgumentList; these bits are removed before notification.
   */
+/** `subPeLanes`: with a subPEList for this task, every CPU gets this many
+  * copies of the subPE memory modules (ReadSingle/ReadStream/WriteSingle), each
+  * wired to CPU stream ports (elastic-bugra StreamPorts.scala) instead of AIE
+  * PLIO; `streamChannels` adds inter-thread FIFOs. `subPeMemoryGroup` subPE
+  * masters share one exported memory port (protocol converter, widen, mux, as
+  * the AIE interconnect does).
+  */
 case class FineGrainedCpuDescriptor(streamWidth: Int = 64, slabPool: Option[String] = None,
     numThreads: Int = 4, instructionMemoryWords: Int = 1024, taskQueueDepth: Int = 64,
     floatingPoint: Boolean = false, memoryStream: Boolean = false, streamFifoDepth: Int = 16,
-    streamOutstanding: Int = 64)
+    streamOutstanding: Int = 64, subPeLanes: Int = 1, streamChannels: Int = 0, subPeMemoryGroup: Int = 8)
 
 /** Opt-in external decoupled memory reader (elastic-bugra HardCilkMemoryReader).
   * It uses the CPU's 64-bit stream adapters: the last task beat is the read

@@ -27,10 +27,19 @@ def compose(root):
     hcname=arch['name']; out=root/'src/rtl/system';out.mkdir(parents=True,exist_ok=True)
     hctext=(hcdir/(hcname+'.sv')).read_text();hp=ports(hctext,hcname)
     external={'clock':('input',1),'reset':('input',1)}; internal={};body=[]; hconn={}; cpus=[]
+    # CPU subPE modules (ReadSingle/ReadStream/WriteSingle) stay inside: their
+    # request/result streams connect to the CPU stream ports below.
+    subpe=re.compile(r'\w+_\d+_(sourceTask|sinkResult)_T\w+')
     for name,spec in hp.items():
-        if 'BindTo_PE_' in name: internal[name]=spec
+        if 'BindTo_PE_' in name or subpe.fullmatch(name): internal[name]=spec
         else: external[name]=spec
         hconn[name]=name
+    def stream_ports(task):
+        # Per lane, in PeIO order (sorted subPE names): every subPE takes a
+        # request (CPU out port); reads return results (CPU in port).
+        subs=sorted((n,s['rwRequest']) for n,s in arch.get('subPEList',{}).items()
+                    if s['peName']==task['name'] and s.get('rwRequest'))
+        return [n for n,_ in subs],[n for n,r in subs if r['type']=='read']
     readers=[]
     for task in arch['taskDescriptors']:
       taskname=task['name']; reader=bool(task.get('memoryReader'))
@@ -45,7 +54,18 @@ def compose(root):
       for pe in range(task['numProcessingElements']):
         group=readers if reader else cpus
         idx=len(group); label=f'rd{idx}' if reader else f'cpu{idx}'; conn={}; group.append((label,task,pe))
+        outs,ins=stream_ports(task) if not reader else ([],[])
+        lanes=(task.get('fineGrainedCpu') or {}).get('subPeLanes',1)
         for name,spec in cp.items():
+            m=re.fullmatch(r'stream(Out|In)_(\d+)_(T\w+)',name)
+            if m:
+                group=outs if m[1]=='Out' else ins; k=int(m[2])
+                if not group or k>=lanes*len(group): raise ValueError(f'{label}: unmapped CPU stream port {name}')
+                target=f'{group[k%len(group)]}_{pe*lanes+k//len(group)}_{"sourceTask" if m[1]=="Out" else "sinkResult"}_{m[3]}'
+                if target not in hp or hp[target][1]!=spec[1] or hp[target][0]==spec[0]:
+                    raise ValueError(f'Incompatible stream port {name} -> {target}: {spec}, {hp.get(target)}')
+                conn[name]=target
+                continue
             if name in ('clock','reset'): conn[name]=name
             elif name.startswith(('taskIn_','taskOut_','taskOutGlobal_','closureIn_','sendArgument_')):
                 target=f'BindTo_PE_{taskname}_{pe}_{name}'
