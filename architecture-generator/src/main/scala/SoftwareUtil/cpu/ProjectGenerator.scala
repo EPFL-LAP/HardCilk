@@ -109,6 +109,7 @@ object ProjectGenerator {
         "routeTaskBeats" -> Json.arr(routeTaskBeats.map(Json.fromInt): _*),
         "floatingPoint" -> Json.fromBoolean(cpu.floatingPoint),
         "memoryStream" -> Json.fromBoolean(cpu.memoryStream),
+        "directMemory" -> Json.fromBoolean(cpu.directMemory),
         "streamFifoDepth" -> Json.fromInt(cpu.streamFifoDepth),
         "streamOutstanding" -> Json.fromInt(cpu.streamOutstanding),
         "streamPorts" -> streamPorts)

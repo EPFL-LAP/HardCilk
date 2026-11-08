@@ -168,12 +168,14 @@ case class SideConfig(
   * wired to CPU stream ports (elastic-bugra StreamPorts.scala) instead of AIE
   * PLIO; `streamChannels` adds inter-thread FIFOs. `subPeMemoryGroup` subPE
   * masters share one exported memory port (protocol converter, widen, mux, as
-  * the AIE interconnect does).
+  * the AIE interconnect does). `directMemory` gives the CPU blocking main-memory
+  * loads and stores (elastic-bugra DirectMemory.scala) instead of memory streams.
   */
 case class FineGrainedCpuDescriptor(streamWidth: Int = 64, slabPool: Option[String] = None,
     numThreads: Int = 4, instructionMemoryWords: Int = 1024, taskQueueDepth: Int = 64,
     floatingPoint: Boolean = false, memoryStream: Boolean = false, streamFifoDepth: Int = 16,
-    streamOutstanding: Int = 64, subPeLanes: Int = 1, streamChannels: Int = 0, subPeMemoryGroup: Int = 8)
+    streamOutstanding: Int = 64, subPeLanes: Int = 1, streamChannels: Int = 0, subPeMemoryGroup: Int = 8,
+    directMemory: Boolean = false)
 
 /** Opt-in external decoupled memory reader (elastic-bugra HardCilkMemoryReader).
   * It uses the CPU's 64-bit stream adapters: the last task beat is the read
