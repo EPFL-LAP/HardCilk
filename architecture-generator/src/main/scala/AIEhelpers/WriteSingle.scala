@@ -47,7 +47,7 @@ class WriteSingle_Basic(cfg: WriteSingle_Config) extends Module {
     new ldst.Store(
       ldst.StoreConfig(
         axiCfg,
-        numOutstandingTasks = 64
+        numOutstandingTasks = 16
       )
     )
   )
@@ -65,8 +65,8 @@ class WriteSingle_Basic(cfg: WriteSingle_Config) extends Module {
   rd.sinkResult.deq()
 
   val writeBufferCfg = WriteBufferConfig(
-    bufLengthW = 256,
-    bufLengthAW = 32
+    bufLengthW = 64,
+    bufLengthAW = 16
   )
   val wb = WriteBuffer(rd.m_axi, m_axi.asFull, writeBufferCfg)
 

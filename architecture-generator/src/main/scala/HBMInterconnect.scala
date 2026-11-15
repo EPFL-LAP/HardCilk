@@ -270,7 +270,7 @@ trait HasHBMInterconnect extends Module {
             dataWidth = hbmSlave.head.cfg.wData,
             alignmentBits = 12, // 4 KB alignment
             idWidth = hbmSlave.head.cfg.wId,
-            numberOfOutstanding = 16
+            numberOfOutstanding = 32
           )))
           axpbs.s_axi :=> hbmSlave.head
           axiOut.asFull :=> axpbs.m_axi.asFull
@@ -326,7 +326,7 @@ trait HasHBMInterconnect extends Module {
               dataWidth = axiOut.cfg.wData,
               alignmentBits = 12, // 4 KB alignment
               idWidth = axiOut.cfg.wId,
-              numberOfOutstanding = 16
+              numberOfOutstanding = 32
             )))
             mux.m_axi :=> addressTransform.s_axi
             addressTransform.m_axi :=> axpbs.s_axi.asFull
@@ -337,7 +337,7 @@ trait HasHBMInterconnect extends Module {
               dataWidth = axiOut.cfg.wData,
               alignmentBits = 12, // 4 KB alignment
               idWidth = axiOut.cfg.wId,
-              numberOfOutstanding = 16
+              numberOfOutstanding = 32
             )))
             mux.m_axi :=> axpbs.s_axi.asFull
             axpbs.m_axi :=> axiOut.asFull
@@ -377,7 +377,7 @@ trait HasHBMInterconnect extends Module {
               dataWidth = axiOut.cfg.wData,
               alignmentBits = 12, // 4 KB alignment
               idWidth = axiOut.cfg.wId,
-              numberOfOutstanding = 16
+              numberOfOutstanding = 32
             )))
             protocolConverter.m_axi :=> addressTransform.s_axi
             addressTransform.m_axi :=> axpbs.s_axi.asFull
@@ -391,7 +391,7 @@ trait HasHBMInterconnect extends Module {
                 dataWidth = axiOut.cfg.wData,
                 alignmentBits = 12, // 4 KB alignment
                 idWidth = axiOut.cfg.wId,
-                numberOfOutstanding = 16
+                numberOfOutstanding = 32
               )))
               protocolConverter.m_axi :=> widen_mod.s_axi
               widen_mod.m_axi :=> axpbs.s_axi.asFull
@@ -402,7 +402,7 @@ trait HasHBMInterconnect extends Module {
                 dataWidth = axiOut.cfg.wData,
                 alignmentBits = 12, // 4 KB alignment
                 idWidth = axiOut.cfg.wId,
-                numberOfOutstanding = 16
+                numberOfOutstanding = 32
               )))
               protocolConverter.m_axi :=> axpbs.s_axi.asFull
               axpbs.m_axi :=> axiOut.asFull

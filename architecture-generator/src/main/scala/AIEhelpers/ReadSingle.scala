@@ -49,17 +49,17 @@ class ReadSingle_Basic(cfg: ReadSingle_Config) extends Module {
     new ldst.Load(
       ldst.LoadConfig(
         axiCfg,
-        numOutstandingTasks = 64
+        numOutstandingTasks = 16
       )
     )
   )
 
-  val srcAxisTransform = new e.Transform(sourceTask.asLite, e.SinkBuffer(rd.sourceTask, 512)) {
+  val srcAxisTransform = new e.Transform(sourceTask.asLite, e.SinkBuffer(rd.sourceTask, 16)) {
     out.address := in(addressWidth - 1, 0)
     out.user := 0.U
   }
 
-  val sinkAxisTransform = new e.Transform(rd.sinkResult, e.SinkBuffer(sinkResult.asFull, 512)) {
+  val sinkAxisTransform = new e.Transform(rd.sinkResult, e.SinkBuffer(sinkResult.asFull, 16)) {
     // out := in.data
     out.last := true.B
     out.data := in.data
@@ -69,7 +69,7 @@ class ReadSingle_Basic(cfg: ReadSingle_Config) extends Module {
 
   val respBufferCfg = ResponseBufferConfig(
     axiCfg = axiCfg,
-    bufLengthR = 256
+    bufLengthR = 16
   )
   val respBuffer = Module(new ResponseBuffer(respBufferCfg))
   rd.m_axi :=> respBuffer.s_axi

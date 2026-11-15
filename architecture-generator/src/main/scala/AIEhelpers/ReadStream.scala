@@ -61,7 +61,7 @@ class ReadStream_Basic(cfg: ReadStream_Config) extends Module {
       stream.ReadConfig(
         axiCfg,
         resultMode = stream.ReadResultMode.DropEmpty,
-        numOutstandingTasks = 64
+        numOutstandingTasks = 16
       )
     )
   )
