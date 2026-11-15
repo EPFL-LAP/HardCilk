@@ -10,7 +10,8 @@
 #define ARG_ADDR_DATA 0x80000050UL      // address argOutData writes to
 #define ARG_OUT_DATA 0x80000078UL       // 1/2/4/8-byte store, written at ARG_ADDR_DATA
 #define SPAWN(route) (0x80000080UL + 8 * (route))  // header for route, then beat 0
-#define CLOSURE_ALLOCATE 0x80000100UL   // also sets the write window base
+#define WINDOW_BASE 0x80000020UL        // SD sets the write window base
+#define SLAB_POP 0x80000100UL           // blocking LD: the next granted slab
 #define WRITE_WINDOW 0x80000400UL       // stores write window base + offset
 static inline void put(uintptr_t a, uint64_t v) { *(volatile uint64_t *)a = v; }
 static inline void put32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
@@ -28,6 +29,11 @@ static void spawn(uint64_t continuation, uint64_t n, unsigned route) {
 }
 #endif
 void worker(void) {
+#ifndef SUM_WORKER
+    // Closures are carved from slabs in software. Locals are per thread
+    // (private scratchpads, own registers), so no locking is needed.
+    uint64_t slab_next = 0, slab_left = 0;
+#endif
     for (;;) {
 #ifdef SUM_WORKER
         // fib_cont0: {counter, x} {continuation} {y} {padding}
@@ -40,7 +46,14 @@ void worker(void) {
         uint64_t continuation = get(TASK_POP);
         uint64_t n = get(TASK_POP_LAST);
         if (n < 2) { result(continuation, (uint32_t)n); continue; }
-        uint64_t closure = get(CLOSURE_ALLOCATE + 8 * HC_CLOSURE_TYPE_fib_cont0);
+        if (slab_left < HC_CLOSURE_BYTES_fib_cont0) {
+            slab_next = get(SLAB_POP);
+            slab_left = HC_SLAB_BYTES;
+        }
+        uint64_t closure = slab_next;
+        slab_next += HC_CLOSURE_BYTES_fib_cont0;
+        slab_left -= HC_CLOSURE_BYTES_fib_cont0;
+        put(WINDOW_BASE, closure);
         // Counter 2 with x = 0, the continuation, then y = 0 and padding.
         volatile uint64_t *window = (volatile uint64_t *)WRITE_WINDOW;
         window[0] = 2;

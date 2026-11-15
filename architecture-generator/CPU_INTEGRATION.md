@@ -58,7 +58,8 @@ CPU exports `BindTo_PE_<task>_<index>_<kind>` for its used streams:
   For N>1, its high ceil(log2(N)) bits are a zero-based route tag and are cleared
   before forwarding. For N=1 no tag is needed.
 - `closureIn`: one 64-bit slab address per grant from the selected common pool.
-  The CPU subdivides it according to its own closure-size table. This replaces
+  CPU firmware pops it with one blocking `LD` at `0x80000100` and carves it
+  into closures in software (elastic-bugra `docs/closure-allocation.md`). This replaces
   the legacy per-continuation-type closure grant wiring for that CPU only.
 
 Malformed framing, masks, or route IDs set sticky `cpuInterfaceFault`; the
@@ -113,7 +114,10 @@ routing constants, host drivers and boot support, a composed RTL system, and
 Make/CMake entry points. CPU RTL is emitted separately per task configuration;
 PE counts determine the number of instances and boot records. `fineGrainedCpu`
 can additionally set `numThreads`, `instructionMemoryWords`, and `taskQueueDepth`.
-Closure sizes/type indices derive from `spawnNextList` in declaration order.
+Closure type indices derive from `spawnNextList` in declaration order;
+`hardcilk_task.h` also defines `HC_SLAB_BYTES` and `HC_CLOSURE_BYTES_<task>`
+(the closure size rounded up to 8 bytes) for carving. `closureBytes` is still
+written to the CPU configuration for CPU checkouts older than software carving.
 
 `-k` alone creates the project; its first build emits missing RTL. `-k -g` also
 emits runtime RTL and places it in the project. `--project-template` is optional:

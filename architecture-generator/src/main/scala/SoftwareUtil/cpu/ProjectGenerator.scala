@@ -120,7 +120,9 @@ object ProjectGenerator {
         globals.zipWithIndex.map { case (n, i) => s"#define HC_GLOBAL_ROUTE_${n} ${i + 1}" } ++
         arguments.zipWithIndex.map { case (n, i) => s"#define HC_ARGUMENT_ROUTE_${n} $i" } ++
         Seq(s"#define HC_ARGUMENT_ROUTE_BITS ${chisel3.util.log2Ceil(math.max(1, arguments.size))}") ++
-        closures.zipWithIndex.map { case (n, i) => s"#define HC_CLOSURE_TYPE_${n} $i" } ++ portDefines
+        closures.zipWithIndex.map { case (n, i) => s"#define HC_CLOSURE_TYPE_${n} $i" } ++
+        // Firmware carves closures from slabs; slots are rounded up to 8 bytes.
+        closures.zip(sizes).map { case (n, b) => s"#define HC_CLOSURE_BYTES_${n} ${(b + 7) / 8 * 8}" } ++ portDefines
       write(root.resolve(s"src/cpu/generated/${task.name}/hardcilk_task.h"), "#pragma once\n" + defines.mkString("\n") + "\n")
       val imageBytes = cpu.instructionMemoryWords * 4
       write(root.resolve(s"config/cpu/${task.name}.ld"), s"""ENTRY(_start)
